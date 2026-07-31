@@ -53,6 +53,10 @@ jobs:
       # Pinned to a version with published binaries; --disable-strategies
       # compile makes a missing binary a loud failure instead of a slow build.
       - name: Install trunk
+        env:
+          # Unauthenticated GitHub API calls get rate-limited on shared
+          # runners, and binstall then cannot resolve any release artifact.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo binstall -y --disable-strategies compile trunk@0.21.14
 
       # `app/web` is its own workspace with its own target dir, so both are

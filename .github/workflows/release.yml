@@ -54,6 +54,10 @@ jobs:
       # to a from-source build (tauri-cli's CSS dependencies do not compile
       # with a floating registry resolution).
       - name: Install trunk and tauri-cli
+        env:
+          # Unauthenticated GitHub API calls get rate-limited on shared
+          # runners, and binstall then cannot resolve any release artifact.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo binstall -y --disable-strategies compile trunk@0.21.14 tauri-cli@2.11.4
 
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
