@@ -1,0 +1,45 @@
+# Pocket Skynet
+
+A standalone, blockchain-authenticated **messenger + wallet + AI assistant** —
+Rust end to end, in one self-hosted shell.
+
+No passwords and no accounts: you log in by signing a challenge with an
+Ethereum wallet. Rooms can be end-to-end encrypted, and the server never sees
+plaintext messages or symmetric keys.
+
+- **Messenger** — rooms, invitations, reactions, E2EE, realtime over
+  WebSocket/SSE, all on one SQLite file.
+- **Wallet** — send native CRO/TCRO and USDC on Cronos (mainnet 25 /
+  testnet 338); transactions are signed in the browser, the server never
+  sees a key.
+- **AI assistant** — Grok, OpenAI, Anthropic and Gemini behind one dialog:
+  draft, reply-in-context, and image generation. Bring your own keys; they
+  stay in your browser.
+
+Built as an axum + SQLite server, a Yew/WebAssembly web client, and a Tauri
+desktop app, sharing one `core` crate for wallet, EIP-191, and E2EE crypto.
+
+## Quick start
+
+```bash
+cd app
+make          # show every target
+make build    # release build: server + WASM client
+make start    # run the server from the terminal
+make https    # the same, over TLS — for joining from a phone or tablet
+make gui      # run the desktop app
+```
+
+Everything lives under [`app/`](app/) — see [`app/README.md`](app/README.md)
+for the full guide (running, TLS/QR onboarding, storage, deployment, packaging)
+and [`app/docs/`](app/docs/) for the API, crypto, and realtime specs.
+
+## Requirements
+
+- Rust 1.82+ with the `wasm32-unknown-unknown` target
+- [`trunk`](https://trunkrs.dev) — `cargo install trunk`
+- For the desktop app: `cargo install tauri-cli --version '^2'`
+
+## License
+
+[MIT](LICENSE)
