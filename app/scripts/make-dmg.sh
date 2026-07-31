@@ -64,5 +64,23 @@ if command -v codesign >/dev/null 2>&1; then
         || echo "  note: could not sign the disk image (continuing)"
 fi
 
+# Notarizing the .app is not enough: the disk image is what the user downloads,
+# so it carries the quarantine flag and is what Gatekeeper judges first. An
+# unnotarized image is refused even when the app inside it is stapled. Needs a
+# real identity — Apple will not notarize an ad-hoc signature.
+if [[ "$IDENTITY" != "-" && -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+    echo "  notarizing $(basename "$OUT")"
+    xcrun notarytool submit "$OUT" \
+        --apple-id "$APPLE_ID" \
+        --password "$APPLE_PASSWORD" \
+        --team-id "$APPLE_TEAM_ID" \
+        --wait --timeout 30m
+    # Stapling attaches the ticket to the image itself, so it verifies without
+    # a round trip to Apple — the difference between working and not working
+    # on a machine that is offline or behind a filtering proxy.
+    xcrun stapler staple "$OUT"
+    xcrun stapler validate "$OUT"
+fi
+
 SIZE=$(du -h "$OUT" | cut -f1 | tr -d ' ')
 echo "  built $OUT ($SIZE)"
