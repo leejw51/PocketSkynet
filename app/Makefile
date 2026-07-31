@@ -160,7 +160,9 @@ package: web ## Bundle the desktop app
 	@$(CARGO) tauri --version >/dev/null 2>&1 \
 		|| { echo "ERROR: tauri CLI not found. Install with: cargo install tauri-cli --version '^2'"; exit 1; }
 	@echo "==> bundling PocketSkynet $(VERSION)"
-	cd gui && $(CARGO) tauri build --bundles app
+	@# Ad-hoc signing unless the caller provides a real identity (CI exports
+	@# APPLE_SIGNING_IDENTITY plus the notarization credentials).
+	cd gui && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" $(CARGO) tauri build --bundles app
 	@$(MAKE) --no-print-directory package-installer
 	@echo ""
 	@echo "  built:"

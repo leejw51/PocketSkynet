@@ -30,7 +30,6 @@
     "shortDescription": "Blockchain-authenticated encrypted messenger",
     "longDescription": "PocketSkynet is an end-to-end encrypted messenger that signs you in with an Ethereum wallet instead of a password. The desktop app runs its own server on loopback, so it works without configuring anything.",
     "macOS": {
-      "signingIdentity": "-",
       "minimumSystemVersion": "10.15"
     },
     "linux": {
