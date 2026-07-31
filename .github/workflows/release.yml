@@ -1,14 +1,13 @@
-# Release — build the desktop installers and attach them to a GitHub release.
+# Release — build the macOS installer and attach it to a GitHub release.
 #
 # Triggered by pushing a tag like `v1.0.0` (which must match the workspace
 # version in app/Cargo.toml), or manually via workflow_dispatch for a dry run
-# that uploads artifacts without creating a release.
+# that uploads the artifact without creating a release.
 #
-#   macos-latest  → PocketSkynet_<version>_arm64.dmg
-#   ubuntu-22.04  → .deb + .AppImage
+#   macos-latest → PocketSkynet_<version>_arm64.dmg
 #
 # `make package` drives everything: trunk builds the WASM client, tauri
-# bundles the app, and scripts/make-dmg.sh wraps the macOS bundle with plain
+# bundles the app, and scripts/make-dmg.sh wraps the bundle with plain
 # hdiutil so it works headless.
 
 name: Release
@@ -30,24 +29,11 @@ defaults:
 
 jobs:
   package:
-    name: Package (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-22.04]
-    runs-on: ${{ matrix.os }}
+    name: Package (macOS)
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Install Tauri system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-            libfuse2 patchelf
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -79,18 +65,17 @@ jobs:
       - name: Package
         run: make package
 
-      - name: Collect installers
+      - name: Collect installer
         run: |
           mkdir -p "$GITHUB_WORKSPACE/installers"
-          find target/release/bundle -maxdepth 3 \
-            \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
+          find target/release/bundle -maxdepth 3 -name '*.dmg' \
             -not -name 'rw.*' \
             -exec cp {} "$GITHUB_WORKSPACE/installers/" \;
           ls -l "$GITHUB_WORKSPACE/installers"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pocketskynet-${{ runner.os }}
+          name: pocketskynet-macos
           path: installers/*
           if-no-files-found: error
 
