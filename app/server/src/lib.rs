@@ -848,6 +848,15 @@ mod test_support {
     /// A state with rate limiting **off**: the suite drives many wallets from
     /// one address and would otherwise trip the per-IP budget.
     pub fn state(tag: &str) -> AppState {
+        // The paid routes refuse every request without an operator wallet, and
+        // this is environment-only configuration — a developer's shell (or a
+        // bare CI runner) must not decide whether those tests pass. The
+        // missing-wallet path is covered by the integration suite, whose
+        // harness scrubs the child server's environment.
+        std::env::set_var(
+            "VITE_FRUITNATION_WALLET",
+            "0x2222222222222222222222222222222222222222",
+        );
         let dir = tempdir(tag);
         let cfg = Config {
             host: "127.0.0.1".parse().unwrap(),
