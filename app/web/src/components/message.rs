@@ -344,13 +344,11 @@ fn youtube_id(url: &str) -> Option<String> {
                 .split('&')
                 .find_map(|kv| kv.strip_prefix("v="))?
                 .to_owned()
-        } else if let Some(rest) = path
-            .strip_prefix("/embed/")
-            .or_else(|| path.strip_prefix("/shorts/"))
-        {
-            rest.split('/').next()?.to_owned()
         } else {
-            return None;
+            let rest = path
+                .strip_prefix("/embed/")
+                .or_else(|| path.strip_prefix("/shorts/"))?;
+            rest.split('/').next()?.to_owned()
         }
     } else {
         return None;
