@@ -1,0 +1,65 @@
+# CI — everything `make verify` covers: formatting, clippy (host and wasm32),
+# unit + web + integration tests, and a wasm type-check of the client.
+#
+# The web bundle is built first because `web/dist` is gitignored and the gui
+# crate's `tauri::generate_context!` requires it to exist even under `clippy`.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  verify:
+    name: Verify (fmt, clippy, tests, wasm)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The gui crate links against webkit2gtk even when only type-checked.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: cargo-bins/cargo-binstall@23ee8ab6b7397851bc11705bcdf46f2519ea0285 # v1.9.0
+
+      - name: Install trunk
+        run: cargo binstall -y trunk
+
+      # `app/web` is its own workspace with its own target dir, so both are
+      # cached explicitly.
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          workspaces: |
+            app
+            app/web
+
+      - name: Build web bundle
+        run: make web
+
+      - name: Verify
+        run: make verify

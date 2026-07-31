@@ -1,0 +1,111 @@
+# Release — build the desktop installers and attach them to a GitHub release.
+#
+# Triggered by pushing a tag like `v1.0.0` (which must match the workspace
+# version in app/Cargo.toml), or manually via workflow_dispatch for a dry run
+# that uploads artifacts without creating a release.
+#
+#   macos-latest  → PocketSkynet_<version>_arm64.dmg
+#   ubuntu-22.04  → .deb + .AppImage
+#
+# `make package` drives everything: trunk builds the WASM client, tauri
+# bundles the app, and scripts/make-dmg.sh wraps the macOS bundle with plain
+# hdiutil so it works headless.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  package:
+    name: Package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Tauri system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libfuse2 patchelf
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: cargo-bins/cargo-binstall@23ee8ab6b7397851bc11705bcdf46f2519ea0285 # v1.9.0
+
+      - name: Install trunk and tauri-cli
+        run: cargo binstall -y trunk tauri-cli
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          workspaces: |
+            app
+            app/web
+
+      - name: Check tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "${TAG#v}" != "$ver" ]; then
+            echo "tag $TAG does not match Cargo.toml version $ver" >&2
+            exit 1
+          fi
+
+      - name: Package
+        run: make package
+
+      - name: Collect installers
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/installers"
+          find target/release/bundle -maxdepth 3 \
+            \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
+            -not -name 'rw.*' \
+            -exec cp {} "$GITHUB_WORKSPACE/installers/" \;
+          ls -l "$GITHUB_WORKSPACE/installers"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketskynet-${{ runner.os }}
+          path: installers/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: installers
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: installers/*
+          generate_release_notes: true
