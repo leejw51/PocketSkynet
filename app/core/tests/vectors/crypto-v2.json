@@ -1,0 +1,133 @@
+{
+  "formatVersion": 2,
+  "description": "FruitNation v2 encryption test vectors. Canonical implementation: client/src/lib/encryption.ts. Spec: CRYPTO.md.",
+  "labels": {
+    "messageEnc": "FruitNation/v2/message/enc",
+    "messageMac": "FruitNation/v2/message/mac",
+    "roomKeyEnc": "FruitNation/v2/roomkey/enc",
+    "roomKeyMac": "FruitNation/v2/roomkey/mac"
+  },
+  "macInputLayouts": {
+    "message": "FNv2|message|{roomId}|{ivHex}|{ciphertextBase64}",
+    "roomKey": "FNv2|roomkey|{roomId}|{ephemeralPublicKeyHex}|{ivHex}|{ciphertextBase64}"
+  },
+  "subkeyDerivation": "HMAC-SHA256(key = raw key bytes, message = ASCII label) -> 32-byte subkey",
+  "subkeys": [
+    {
+      "keyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "label": "FruitNation/v2/message/enc",
+      "subkeyHex": "1391162eeeeb69860c140af5cd201691ff07bfb4822f01c6d59e954846ecdcc9"
+    },
+    {
+      "keyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "label": "FruitNation/v2/message/mac",
+      "subkeyHex": "3f49d718c2c07fca9155deeb689715f55af143a95b3b5f18acfb3a20d9594088"
+    },
+    {
+      "keyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "label": "FruitNation/v2/roomkey/enc",
+      "subkeyHex": "78cb5ef8ddb7232c7f6d0287b9608ca38a446fb33a7819236527b24946023644"
+    },
+    {
+      "keyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "label": "FruitNation/v2/roomkey/mac",
+      "subkeyHex": "601bc6fb7ef7c5779c154ead210251cb5c38aedbda04f5d5e75ed77c5d4ecc1b"
+    },
+    {
+      "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "label": "FruitNation/v2/message/enc",
+      "subkeyHex": "0615fce531895ef6a62e4dbb8352bca0b992927db98c013a2710c7608f1d9ecb"
+    },
+    {
+      "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "label": "FruitNation/v2/message/mac",
+      "subkeyHex": "95ea78f04d63373b907cd7e6dc2bf56b100fd7d64b626c2747ddb1b8149a38fc"
+    },
+    {
+      "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "label": "FruitNation/v2/roomkey/enc",
+      "subkeyHex": "7c64755ea076c1706e55f8586c64b5140f2067aacb67d507c2cd1cea0197595d"
+    },
+    {
+      "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "label": "FruitNation/v2/roomkey/mac",
+      "subkeyHex": "1f8a7be6d1f1c8206eda29d3955e31220a8409bd252544a321ca418ef62b3c8a"
+    }
+  ],
+  "messages": [
+    {
+      "name": "ascii",
+      "symmetricKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "roomId": "room-vector-0001",
+      "plaintextUtf8": "attack at dawn",
+      "ivHex": "000102030405060708090a0b0c0d0e0f",
+      "ciphertextBase64": "3nP4XMnquk7mpaDFxNxnZA==",
+      "hmacHex": "403a7ba221a2769b6503b298de98ae0e82010a0fadb07a8aeb234aa7322bf4a7",
+      "msgHashHex": "62a40b0ecaa574014eaf4c19c518bb596ed502b4c5e55c01e3e647e7b3f9e3a9"
+    },
+    {
+      "name": "quotes-and-percent",
+      "symmetricKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "roomId": "room-vector-0001",
+      "plaintextUtf8": "I'm 50% sure — \"ok\"",
+      "ivHex": "0f0e0d0c0b0a09080706050403020100",
+      "ciphertextBase64": "jLykKspwGTDA6abyS7HrIsSbcL6kRO4RixQVgE+VlJk=",
+      "hmacHex": "21fcc30a571e39540f7d3277fb7bcbe9e1ba2cbc3ce3fec01825aa60ded7ce5e",
+      "msgHashHex": "cfb37d96881cc09c28e71882fd1db8597cb842997edd0e12ca0561ddef2b5994"
+    },
+    {
+      "name": "unicode-emoji",
+      "symmetricKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "roomId": "room-vector-0001",
+      "plaintextUtf8": "한글 메시지 🍓🍊",
+      "ivHex": "101112131415161718191a1b1c1d1e1f",
+      "ciphertextBase64": "AeHMd1L87BW8NOlkHslfgN7D7U3yQPnhvrm9X20aeh8=",
+      "hmacHex": "e8b2ec13ca3124ef7736d5096b604c7b665292a89297c3cde8ab403dc6e6efe0",
+      "msgHashHex": "5b75ba267ea223ed430e57b0aea603fbb1439c8b6123614ed4990088b4aea7ad"
+    },
+    {
+      "name": "single-char",
+      "symmetricKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "roomId": "room-vector-0001",
+      "plaintextUtf8": "a",
+      "ivHex": "202122232425262728292a2b2c2d2e2f",
+      "ciphertextBase64": "JndrHohFMVfj9jxv6h0ZkA==",
+      "hmacHex": "f2c627df7c4d921efe20d95802035adc17432216e249e64a2c0646df077db250",
+      "msgHashHex": "aee6a4fcab6794dd7bcbd7293a3fd7c54aec6c919f57f16a18250aee86e12308"
+    },
+    {
+      "name": "multi-block",
+      "symmetricKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "roomId": "room-vector-0001",
+      "plaintextUtf8": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ivHex": "303132333435363738393a3b3c3d3e3f",
+      "ciphertextBase64": "ktKcOahOdVuWe4rkP/lv//pxnglyIYDuZSteFUhcraufCsOEl9IeDZowi3T4u4vRv/CZ2RP3snVnBsbl7bF5v6E/Nfkizv7W8QfXLXoHFg6g6mgGmpz8sw0u7YSHE/q+U/ySnoCY06ekfQSaB2wB9YQFu3vbLuSNAd3HA8VDZ019ndTk/PHz7KimPi+Mgi/z",
+      "hmacHex": "85a43ec3fcb24cc248649696c2464492dcfd1795f3072968859b98b88aa85b24",
+      "msgHashHex": "c8d463c0b4e2a9d6e30dc994891861449b341793aab154e5c3c6c2f29d89c368"
+    },
+    {
+      "name": "second-key",
+      "symmetricKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "roomId": "room-vector-0001",
+      "plaintextUtf8": "same format, different key",
+      "ivHex": "404142434445464748494a4b4c4d4e4f",
+      "ciphertextBase64": "8vxniDJFJnsBlZK8WSJtSwRARGBcTclQ/e4WEkeCtnM=",
+      "hmacHex": "006687a964033b86bb4ae390e71a85623171385362a59925f0379ff88087e60b",
+      "msgHashHex": "ea0ae8d472d8dd4d88d0cefabeccaa4f439de2e75be0e9a987eab81b0dd7d257"
+    }
+  ],
+  "roomKeyWraps": [
+    {
+      "name": "wrap-1",
+      "roomSymmetricKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "roomId": "room-vector-0001",
+      "recipientPrivateKeyHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "recipientPublicKeyHex": "044646ae5047316b4230d0086c8acec687f00b1cd9d1dc634f6cb358ac0a9a8ffffe77b4dd0a4bfb95851f3b7355c781dd60f8418fc8a65d14907aff47c903a559",
+      "ephemeralPrivateKeyHex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "ephemeralPublicKeyHex": "04466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f276728176c3c6431f8eeda4538dc37c865e2784f3a9e77d044f33e407797e1278a",
+      "ivHex": "505152535455565758595a5b5c5d5e5f",
+      "encryptedSymmetricKeyBase64": "TS/2g90wOFyPTYukrttp7IEboZROacO4J1Dbz5x4uGxpJ8VRN/2vBQVnNrbxj0ToDDTcACGiGnwmG8WEmahxpGwWu5AWIBBEyO0TD0t+woI=",
+      "hmacHex": "02b3df9450f08183c29408e8042d4b612e85ec7cbb5dad7c2a79c347c8a66ea1"
+    }
+  ]
+}

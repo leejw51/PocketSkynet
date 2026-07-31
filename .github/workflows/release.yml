@@ -50,8 +50,11 @@ jobs:
 
       - uses: cargo-bins/cargo-binstall@23ee8ab6b7397851bc11705bcdf46f2519ea0285 # v1.9.0
 
+      # Pinned versions with published binaries, so binstall never falls back
+      # to a from-source build (tauri-cli's CSS dependencies do not compile
+      # with a floating registry resolution).
       - name: Install trunk and tauri-cli
-        run: cargo binstall -y trunk tauri-cli
+        run: cargo binstall -y --disable-strategies compile trunk@0.21.14 tauri-cli@2.11.4
 
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:

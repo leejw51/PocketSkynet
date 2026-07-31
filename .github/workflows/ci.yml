@@ -50,8 +50,10 @@ jobs:
 
       - uses: cargo-bins/cargo-binstall@23ee8ab6b7397851bc11705bcdf46f2519ea0285 # v1.9.0
 
+      # Pinned to a version with published binaries; --disable-strategies
+      # compile makes a missing binary a loud failure instead of a slow build.
       - name: Install trunk
-        run: cargo binstall -y trunk
+        run: cargo binstall -y --disable-strategies compile trunk@0.21.14
 
       # `app/web` is its own workspace with its own target dir, so both are
       # cached explicitly.

@@ -88,15 +88,16 @@ struct WrapVector {
 
 /// Locate the canonical vector file.
 ///
-/// Defaults to the FruitNation checkout that sits alongside this repo, relative
-/// to `CARGO_MANIFEST_DIR` so it works from any working directory and under any
-/// CI layout. `FN_CRYPTO_VECTORS` overrides it for checkouts arranged
-/// differently.
+/// Defaults to the copy vendored under `tests/vectors/`, taken verbatim from
+/// the FruitNation server repo (`server/test/vectors/crypto-v2.json`) — the
+/// reference implementation both clients must agree with. `FN_CRYPTO_VECTORS`
+/// overrides it, e.g. to point at a live FruitNation checkout when refreshing
+/// the vendored copy.
 fn vectors_path() -> PathBuf {
     if let Ok(explicit) = std::env::var("FN_CRYPTO_VECTORS") {
         return PathBuf::from(explicit);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../server/test/vectors/crypto-v2.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/crypto-v2.json")
 }
 
 fn load() -> Vectors {
@@ -104,9 +105,9 @@ fn load() -> Vectors {
     let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "canonical crypto vectors not found at {} ({e}).\n\
-             This test must never be skipped. Check out the FruitNation server repo \
-             next to PocketSkynet, or set FN_CRYPTO_VECTORS to the path of \
-             server/test/vectors/crypto-v2.json.",
+             This test must never be skipped. Restore the vendored copy at \
+             core/tests/vectors/crypto-v2.json, or set FN_CRYPTO_VECTORS to a \
+             FruitNation checkout's server/test/vectors/crypto-v2.json.",
             path.display()
         )
     });
