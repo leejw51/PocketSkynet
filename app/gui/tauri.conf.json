@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PocketSkynet",
+  "version": "1.0.0",
+  "identifier": "app.pocketskynet.desktop",
+  "build": {
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "deb", "appimage", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../web/dist": "web"
+    },
+    "category": "SocialNetworking",
+    "shortDescription": "Blockchain-authenticated encrypted messenger",
+    "longDescription": "PocketSkynet is an end-to-end encrypted messenger that signs you in with an Ethereum wallet instead of a password. The desktop app runs its own server on loopback, so it works without configuring anything.",
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": { "depends": [] }
+    }
+  },
+  "plugins": {}
+}

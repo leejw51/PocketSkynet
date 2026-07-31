@@ -1,0 +1,24 @@
+[build]
+target = "index.html"
+dist = "dist"
+# The server mounts the bundle at /, so assets resolve from the site root.
+public_url = "/"
+
+# `minify` is deliberately off. Trunk's JS minifier cannot parse wasm-bindgen's
+# output and warns on every build, and brotli already recovers nearly all of the
+# difference — 452 KB on the wire from a 1.2 MB bundle.
+#
+# `pattern_preload` is also unset: it is accepted by the config parser but emits
+# nothing in this Trunk version. The WASM preload hint is sent by the server as
+# a `Link:` response header instead, which works regardless of bundler and knows
+# the content-hashed filename at runtime. See `server/src/routes/mod.rs`.
+
+[watch]
+watch = ["src", "index.html", "static", "../core/src"]
+ignore = ["dist"]
+
+[serve]
+# `trunk serve` is only used standalone; `make dev` runs `trunk watch` next to
+# the real server instead, so the API and the bundle share one origin.
+port = 9098
+open = false

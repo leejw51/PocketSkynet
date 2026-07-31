@@ -1,0 +1,32 @@
+[package]
+name = "pocketskynet-core"
+description = "Shared wallet, E2EE crypto, and wire types for PocketSkynet (native + wasm32)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+base64.workspace = true
+
+k256.workspace = true
+elliptic-curve.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+hmac.workspace = true
+aes.workspace = true
+cbc.workspace = true
+bip39.workspace = true
+rand.workspace = true
+subtle.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser has no /dev/urandom; route getrandom at crypto.getRandomValues.
+getrandom = { workspace = true, features = ["js"] }
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,0 +1,47 @@
+[workspace]
+members = ["core", "gui", "server"]
+resolver = "2"
+
+# `web/` is deliberately NOT a member: it only ever builds for
+# wasm32-unknown-unknown, and keeping it out means a plain `cargo build` at the
+# repo root never tries to compile browser-only code for the host target.
+exclude = ["web"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+[workspace.dependencies]
+pocketskynet-core = { path = "core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+hex = "0.4"
+base64 = "0.22"
+
+# Crypto — all pure Rust so the same code compiles for wasm32.
+k256 = { version = "0.13", default-features = false, features = [
+    "ecdsa",
+    "arithmetic",
+    "ecdh",
+    "alloc",
+] }
+elliptic-curve = { version = "0.13", features = ["sec1"] }
+sha2 = "0.10"
+sha3 = "0.10"
+hmac = "0.12"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+bip39 = "2"
+rand = "0.8"
+getrandom = "0.2"
+subtle = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

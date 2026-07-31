@@ -1,0 +1,28 @@
+[package]
+name = "pocketskynet-gui"
+description = "PocketSkynet desktop app: the web client and the server in one window"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pocketskynet-gui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The server runs *inside* the app rather than beside it, so there is no port to
+# configure, no second process to supervise, and the web client stays same-origin.
+pocketskynet-server = { path = "../server" }
+
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+# Tauri's own convention: enabled by the bundler for release builds.
+custom-protocol = ["tauri/custom-protocol"]

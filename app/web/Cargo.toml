@@ -1,0 +1,113 @@
+[package]
+name = "pocketskynet-web"
+description = "PocketSkynet web client: Yew + WebAssembly, styled with Topcoat"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+# Its own workspace root on purpose — see the root Cargo.toml. This crate only
+# ever builds for wasm32-unknown-unknown.
+[workspace]
+
+[dependencies]
+pocketskynet-core = { path = "../core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+base64 = "0.22"
+thiserror = "1"
+
+yew = { version = "0.21", features = ["csr"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+gloo-net = { version = "0.6", features = ["http", "websocket"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+gloo-storage = "0.3"
+gloo-events = "0.2"
+futures = "0.3"
+getrandom = { version = "0.2", features = ["js"] }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "Window",
+    # `Window::match_media`, for the boot sequence's reduced-motion check.
+    "MediaQueryList",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlSelectElement",
+    "HtmlTextAreaElement",
+    "Location",
+    "EventSource",
+    "MessageEvent",
+    "Storage",
+    "ScrollToOptions",
+    "ScrollIntoViewOptions",
+    "ScrollLogicalPosition",
+    "ScrollBehavior",
+    "DomRect",
+    "Navigator",
+    "Clipboard",
+    # --- added by the client implementation -------------------------------
+    # History/PopStateEvent: real-path routing per DESIGN.md §4, rather than
+    # hash fragments, so `/rooms/:id` is a shareable URL.
+    "History",
+    "PopStateEvent",
+    # Node/NodeList/DomTokenList: the modal focus trap walks the panel's
+    # focusable descendants and the backdrop click test reads a class list.
+    "Node",
+    "NodeList",
+    "DomTokenList",
+    # Blob/Url/HtmlAnchorElement: "Download backup" writes the wallet file
+    # entirely client-side — the mnemonic must never reach a server.
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+    "HtmlAnchorElement",
+    # WebGL2 for the sign-in backdrop (components/backdrop.rs). Raw GL rather
+    # than a scene-graph library: the whole scene is one fullscreen quad, so a
+    # renderer would be 600KB to draw two triangles, and this way the shader is
+    # driven from Rust with no JS shim to keep in step.
+    "HtmlCanvasElement",
+    "HtmlImageElement",
+    # 2D canvas for the portrait spotlight's particle trails
+    # (components/spotlight.rs) — same reasoning as the GL backdrop: a
+    # scene-graph library would be 600KB to orbit a hundred sparks.
+    "CanvasRenderingContext2d",
+    "WebGl2RenderingContext",
+    "WebGlProgram",
+    "WebGlShader",
+    "WebGlTexture",
+    "WebGlBuffer",
+    "WebGlVertexArrayObject",
+    "WebGlUniformLocation",
+    "PointerEvent",
+    # File/FileList: the composer's attach button reads a picked file's bytes
+    # locally before POSTing them. `Blob::array_buffer` covers the read, so
+    # FileReader is deliberately absent — one fewer API, and no event plumbing.
+    "File",
+    "FileList",
+    # An attachment download is authenticated, so it cannot be a bare href: the
+    # bytes are fetched with the token and handed to the page as a blob URL.
+    # That needs Response/Headers from the fetch side.
+    "Response",
+    "Headers",
+    # `execCommand("copy")` lives on HtmlDocument. It is the only copy path that
+    # works on an insecure origin, which is every LAN address this app is meant
+    # to be opened on.
+    "HtmlDocument",
+]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

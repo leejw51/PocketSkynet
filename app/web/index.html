@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="PocketSkynet — a blockchain-authenticated, end-to-end encrypted messenger."
+    />
+    <title>PocketSkynet</title>
+
+    <!-- Everything under static/ is copied verbatim into dist/static/. -->
+    <link data-trunk rel="copy-dir" href="static" />
+
+    <!-- Declared explicitly so `wasm-opt -Oz` runs on release builds. The
+         bundle is the largest thing on the wire and the first thing that has to
+         parse before anything renders, so shrinking it buys both transfer time
+         and startup time. Trunk fetches wasm-opt itself; debug builds skip it. -->
+    <link data-trunk rel="rust" data-wasm-opt="z" />
+
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/static/img/favicon-180.png" />
+
+    <!-- Topcoat first, then our layer on top of it. Both are vendored: the app
+         must work on an air-gapped LAN, so nothing is fetched from a CDN.
+
+         Ours goes through Trunk (`rel="css"`) rather than being linked out of
+         copy-dir, so the emitted file carries a content hash. At a stable URL
+         a phone will keep painting a stale sheet — iOS Safari sits on cached
+         CSS across an ordinary reload even under `cache-control: no-cache`,
+         and the symptom is a layout fix that looks like it never shipped. A
+         hashed name makes a changed stylesheet a different URL, so there is
+         nothing stale to serve. Its `url(…)` refs are all root-absolute
+         (`/static/img/…`), so relocating the file does not disturb them.
+
+         Topcoat stays on copy-dir deliberately: it is vendored and frozen, so
+         it has no staleness to cause and no reason to be rehashed. -->
+    <link rel="stylesheet" href="/static/vendor/topcoat/css/topcoat-desktop-light.css" />
+    <link data-trunk rel="css" href="static/app.css" />
+  </head>
+  <body>
+    <div id="app-loading" class="ps-boot">
+      <img src="/static/img/logo.png" alt="" width="72" height="72" />
+      <p>Loading PocketSkynet…</p>
+      <noscript>PocketSkynet needs JavaScript and WebAssembly enabled.</noscript>
+    </div>
+  </body>
+</html>

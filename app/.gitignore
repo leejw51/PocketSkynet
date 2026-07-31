@@ -1,0 +1,31 @@
+/target
+/web/target
+/web/dist
+/dist
+/data
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+.DS_Store
+
+# Generated TLS material lives under /data, which is already ignored — this is
+# the backstop for a server run with --data-dir pointed somewhere inside the
+# tree. A committed private key is not a mistake worth being one `git add` away
+# from.
+*.key
+
+# Tauri's build script regenerates these permission schemas on every build;
+# they are derived from tauri.conf.json and the plugin set, not authored here.
+/gui/gen/schemas
+
+# Playwright MCP scratch output.
+.playwright-mcp/
+
+# Byte-compiled tools/ scripts.
+__pycache__/
+
+# Deployment settings. `.env.example` is the committed template; a real .env
+# names the chain this box runs on and may carry a wallet address, neither of
+# which belongs in the repository.
+/.env

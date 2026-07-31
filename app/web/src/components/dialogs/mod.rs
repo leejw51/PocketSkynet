@@ -1,0 +1,32 @@
+//! The dialog layer: Create room, Invite, Manage admins, Blocked people,
+//! Hidden rooms, Rename room, Delete message.
+//!
+//! One module per dialog, but they are grouped here because they share one
+//! shape — a `.fn-modal` with a `[secondary] [primary]` footer — and keeping
+//! them adjacent is what keeps the copy consistent, which is most of what makes
+//! a dialog trustworthy.
+//!
+//! Every destructive confirmation names the object and states the consequence,
+//! and its button is labelled with the verb. `window.confirm` appears nowhere.
+
+mod admins;
+mod assistant;
+mod blocked;
+mod create_room;
+mod delete_message;
+mod files;
+mod hidden;
+mod invite;
+mod rename;
+mod wallet;
+
+pub use admins::ManageAdmins;
+pub use assistant::{AiKeysEditor, Assistant};
+pub use blocked::Blocked;
+pub use create_room::CreateRoom;
+pub use delete_message::DeleteMessage;
+pub use files::Files;
+pub use hidden::HiddenRooms;
+pub use invite::Invite;
+pub use rename::RenameRoom;
+pub use wallet::Wallet;

@@ -1,0 +1,109 @@
+[package]
+name = "pocketskynet-server"
+description = "PocketSkynet messenger server: axum + SQLite + JSONL, REST/WebSocket/SSE"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pocketskynet"
+path = "src/main.rs"
+
+[dependencies]
+pocketskynet-core.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow = "1"
+hex.workspace = true
+base64.workspace = true
+rand.workspace = true
+sha2.workspace = true
+
+axum = { version = "0.8", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = [
+    "fs",
+    "cors",
+    "trace",
+    "set-header",
+    # The WASM bundle is the single largest thing this server ships; serving it
+    # uncompressed wastes ~75% of the transfer.
+    "compression-br",
+    "compression-gzip",
+] }
+tokio-util = "0.7"
+futures-util = "0.3"
+
+# Hub internals: sharded maps for the connection registry, and a lock-free
+# pointer swap so refreshing a user's room/block view never blocks delivery.
+dashmap = "6"
+arc-swap = "1"
+smallvec = "1"
+
+# `bundled` compiles SQLite from source: no system libsqlite3 needed, and the
+# same version is used on every machine that builds this.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+jsonwebtoken = "9"
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+# Enumerating local addresses so the server can print the URLs it is reachable
+# on. Doing this in Rust rather than a shell script means the packaged app and
+# the desktop app report them the same way.
+if-addrs = "0.15"
+
+# HTTPS. A phone or a tablet is the reason this exists: browsers there treat a
+# plain-HTTP page on a LAN address as insecure, and some of the platform is
+# simply unavailable outside a secure context.
+#
+# `axum-server` rather than a hand-rolled accept loop: it performs each TLS
+# handshake in the connection's own task, so one client stalling mid-handshake
+# cannot hold up everybody else's `accept`.
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+# Certificates are generated here rather than shelled out to `openssl`: the
+# whole point is that HTTPS works on a fresh checkout with nothing installed.
+# `x509-parser` is what lets an existing certificate be read back — to sign a
+# new leaf with the stored CA, and to notice one that is about to expire.
+rcgen = { version = "0.13", features = ["x509-parser"] }
+# The URL of a self-hosted server is long, and typing it into a tablet is the
+# most annoying part of joining one. A QR code in the terminal removes it.
+qrcode = { version = "0.14", default-features = false }
+# The one place this server talks to the outside world: verifying that a paid
+# feature's transaction really moved CRO to the operator's wallet, via the
+# configured chain's JSON-RPC. Kept minimal (json + rustls) and used by
+# `payment.rs` only — every other feature works with zero egress.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+# Unpacking a published site uploaded as a zip (routes/sites.rs). Deflate
+# only: that is what every "compress" menu produces, and each extra codec is
+# attack surface on a paid-but-public upload path.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+# rustls, not native-tls: keeps `cargo test` from needing a system OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "connect",
+    "handshake",
+    # `wss://` against the server's own CA — the realtime path a phone uses.
+    "rustls-tls-webpki-roots",
+] }
+eventsource-stream = "0.2"
+# Reading back the certificate the server generated, to assert what it names.
+rcgen = { version = "0.13", features = ["x509-parser"] }
+rustls-pemfile = "2"

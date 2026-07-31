@@ -1,0 +1,26 @@
+//! One module per screen, plus the shared primitives they all use.
+
+pub mod avatar;
+pub mod backdrop;
+pub mod bank;
+pub mod banker;
+pub mod boot;
+pub mod burst;
+pub mod chat;
+pub mod common;
+pub mod composer;
+pub mod dialogs;
+pub mod icons;
+pub mod invitations;
+pub mod knowledge;
+pub mod login;
+pub mod members;
+pub mod message;
+pub mod modal;
+pub mod publish;
+pub mod room_list;
+pub mod settings;
+pub mod shell;
+pub mod shout;
+pub mod spotlight;
+pub mod toast;
