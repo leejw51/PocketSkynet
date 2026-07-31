@@ -39,6 +39,12 @@ canonical crypto vectors, but none of the code: the backend is axum + SQLite
 instead of Express + PostgreSQL, and the frontend is Yew compiled to WebAssembly
 instead of React.
 
+## Demo
+
+[![Watch the PocketSkynet demo on YouTube](https://img.youtube.com/vi/jraQ8KFgQ74/sddefault.jpg)](https://youtu.be/jraQ8KFgQ74)
+
+▶ [Watch on YouTube](https://youtu.be/jraQ8KFgQ74)
+
 ## Quick start
 
 ```bash

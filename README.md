@@ -19,6 +19,12 @@ plaintext messages or symmetric keys.
 Built as an axum + SQLite server, a Yew/WebAssembly web client, and a Tauri
 desktop app, sharing one `core` crate for wallet, EIP-191, and E2EE crypto.
 
+## Demo
+
+[![Watch the PocketSkynet demo on YouTube](https://img.youtube.com/vi/jraQ8KFgQ74/sddefault.jpg)](https://youtu.be/jraQ8KFgQ74)
+
+▶ [Watch on YouTube](https://youtu.be/jraQ8KFgQ74)
+
 ## Quick start
 
 ```bash
