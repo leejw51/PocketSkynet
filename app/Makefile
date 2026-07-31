@@ -45,6 +45,16 @@ TLS         ?= 1
 TLS_ON      := $(filter-out 0,$(TLS))
 TLS_FLAG    := $(if $(TLS_ON),--tls,)
 
+# The deployment settings the server compiles in (see server/build.rs). The
+# desktop app is launched by Finder with no shell to source `.env`, so these
+# have to be present at *build* time or an installed app has no payment wallet
+# and every paid feature fails. Sourced here for the same reason `start` sources
+# it: `.env` decides, not whatever the surrounding shell happens to export —
+# otherwise a developer's exported VITE_CHAIN_ID silently ends up baked into a
+# release. In CI there is no `.env` and the values come from the environment
+# the workflow sets from repository secrets.
+BAKE_ENV := set -a; if [ -f "$(ENV_FILE)" ]; then . "./$(ENV_FILE)"; fi; set +a;
+
 VERSION     := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 TARGET      := $(shell rustc -vV | sed -n 's/^host: //p')
 BIN         := target/$(PROFILE)/pocketskynet
@@ -86,7 +96,7 @@ web: tools ## Compile the Yew client to WebAssembly into web/dist
 
 server: ## Compile the server binary
 	@echo "==> server ($(PROFILE))"
-	$(CARGO) build $(CARGO_PROFILE_FLAG) -p pocketskynet-server
+	@$(BAKE_ENV) $(CARGO) build $(CARGO_PROFILE_FLAG) -p pocketskynet-server
 
 tools: ## Check the wasm toolchain is present
 	@rustup target list --installed | grep -qx wasm32-unknown-unknown \
@@ -161,8 +171,10 @@ package: web ## Bundle the desktop app
 		|| { echo "ERROR: tauri CLI not found. Install with: cargo install tauri-cli --version '^2'"; exit 1; }
 	@echo "==> bundling PocketSkynet $(VERSION)"
 	@# Ad-hoc signing unless the caller provides a real identity (CI exports
-	@# APPLE_SIGNING_IDENTITY plus the notarization credentials).
-	cd gui && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" $(CARGO) tauri build --bundles app
+	@# APPLE_SIGNING_IDENTITY plus the notarization credentials). `BAKE_ENV`
+	@# supplies the deployment settings the server compiles in — this bundle is
+	@# the one build that cannot fall back to reading them at runtime.
+	@$(BAKE_ENV) cd gui && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" $(CARGO) tauri build --bundles app
 	@$(MAKE) --no-print-directory package-installer
 	@echo ""
 	@echo "  built:"

@@ -77,6 +77,21 @@ jobs:
             exit 1
           fi
 
+      # A release that ships without this is not visibly broken: it installs,
+      # launches and signs in, and only fails at the moment someone pays for a
+      # shout. Better to lose the build than to publish that.
+      - name: Check the deployment settings are present
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          WALLET: ${{ secrets.VITE_FRUITNATION_WALLET }}
+        run: |
+          if [ -z "${WALLET// }" ]; then
+            echo "VITE_FRUITNATION_WALLET is not set in repository secrets." >&2
+            echo "The packaged app compiles this in; without it every paid" >&2
+            echo "action fails with 'no payment wallet configured'." >&2
+            exit 1
+          fi
+
       # Imports the Developer ID certificate into a throwaway keychain and
       # exports APPLE_SIGNING_IDENTITY for the build. Falls back to ad-hoc
       # signing when the secret is absent (e.g. a fork's dry run).
@@ -122,6 +137,17 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.TEAM_ID }}
+          # Compiled into the server (see app/server/build.rs). The desktop app
+          # is launched by Finder with no shell to source `.env` and a bundle
+          # carries none, so these must be present at build time or an installed
+          # app reports "no payment wallet configured" for every paid action.
+          # None of them is a secret in the cryptographic sense — a receiving
+          # address and a public client id — but they are deployment
+          # configuration, so they live with the rest of it.
+          VITE_FRUITNATION_WALLET: ${{ secrets.VITE_FRUITNATION_WALLET }}
+          VITE_FRUITNATION_HASH_CRO: ${{ secrets.VITE_FRUITNATION_HASH_CRO }}
+          VITE_CHAIN_ID: ${{ secrets.VITE_CHAIN_ID }}
+          VITE_PRIVY_APPID: ${{ secrets.VITE_PRIVY_APPID }}
         run: |
           if [ "${APPLE_SIGNING_IDENTITY:--}" = "-" ]; then
             # An ad-hoc-signed app cannot be notarized.

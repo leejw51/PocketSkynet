@@ -53,13 +53,43 @@ async fn health(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
-/// Read a chain setting, falling back to an empty string.
+/// Read a deployment setting: the runtime environment first, then the value
+/// baked in when this binary was built.
+///
+/// Two delivery mechanisms, because there are two ways this server runs.
+/// `make start` sources `.env` and execs the binary, so the setting arrives
+/// through the environment. The desktop app embeds the server in its own
+/// process and is launched by Finder from `/Applications` — there is no shell
+/// to source anything, and a bundle carries no `.env`, so without a compiled-in
+/// value every paid feature fails on an installed app with "no payment wallet
+/// configured". The build supplies `baked` from the release environment
+/// (`build.rs` re-runs whenever one of these changes).
+///
+/// Runtime wins, so one build can still be pointed at another deployment
+/// without recompiling, and `.env` keeps meaning what it has always meant.
+fn setting_opt(key: &str, baked: Option<&'static str>) -> Option<String> {
+    // Blank counts as unconfigured on both sides: an exported-but-empty
+    // variable is how a shell says "I have no opinion", and letting it mask the
+    // compiled-in value would break the installed app in the one case the
+    // compiled-in value exists to cover.
+    fn present(v: &str) -> Option<String> {
+        let v = v.trim();
+        (!v.is_empty()).then(|| v.to_owned())
+    }
+    let runtime = std::env::var(key).ok();
+    runtime
+        .as_deref()
+        .and_then(present)
+        .or_else(|| baked.and_then(present))
+}
+
+/// The same lookup, flattened to an empty string.
 ///
 /// Empty rather than absent because clients index these fields directly; a
 /// missing key would be a `TypeError` in the browser while an empty string is
 /// merely an unconfigured chain.
-fn env_or_empty(key: &str) -> String {
-    std::env::var(key).unwrap_or_default()
+fn setting(key: &str, baked: Option<&'static str>) -> String {
+    setting_opt(key, baked).unwrap_or_default()
 }
 
 /// The Privy app id, or empty when Privy sign-in is not configured.
@@ -74,12 +104,24 @@ fn env_or_empty(key: &str) -> String {
 /// server-side counterpart is the app *secret*, which is not here and is not
 /// needed — this server never talks to Privy at all.
 pub fn privy_app_id() -> String {
-    env_or_empty("VITE_PRIVY_APPID")
+    setting("VITE_PRIVY_APPID", option_env!("VITE_PRIVY_APPID"))
 }
 
 /// The server wallet that on-chain message anchors must pay.
 pub fn server_wallet() -> String {
-    env_or_empty("VITE_FRUITNATION_WALLET")
+    setting(
+        "VITE_FRUITNATION_WALLET",
+        option_env!("VITE_FRUITNATION_WALLET"),
+    )
+}
+
+/// The CRO price of an on-chain anchor.
+pub fn hash_price_cro() -> String {
+    setting_opt(
+        "VITE_FRUITNATION_HASH_CRO",
+        option_env!("VITE_FRUITNATION_HASH_CRO"),
+    )
+    .unwrap_or_else(|| "1.2".to_owned())
 }
 
 /// The chain this deployment runs on.
@@ -93,10 +135,17 @@ pub fn server_wallet() -> String {
 /// mainnet, and an id that matches nothing falls back the same way rather than
 /// leaving the wallet with no RPC to talk to.
 pub fn configured_network() -> pocketskynet_core::chain::Network {
+    network_for(setting_opt("VITE_CHAIN_ID", option_env!("VITE_CHAIN_ID")).as_deref())
+}
+
+/// [`configured_network`] with the id supplied rather than read.
+///
+/// Split out so the fallback rules can be tested without touching process-wide
+/// environment state — which is shared by every test thread and, now that a
+/// value can also be compiled in, is not something a test can fully clear.
+fn network_for(id: Option<&str>) -> pocketskynet_core::chain::Network {
     let nets = pocketskynet_core::chain::builtin_networks();
-    let wanted: Option<u64> = std::env::var("VITE_CHAIN_ID")
-        .ok()
-        .and_then(|v| v.trim().parse().ok());
+    let wanted: Option<u64> = id.and_then(|v| v.trim().parse().ok());
     wanted
         .and_then(|id| nets.iter().find(|n| n.chain_id == Some(id)).cloned())
         .unwrap_or_else(|| {
@@ -128,7 +177,7 @@ pub fn configured_network() -> pocketskynet_core::chain::Network {
 /// else follows it, and a deployment that needs a private endpoint adds a
 /// network to the registry rather than half-editing this one.
 async fn blockchain_info(State(state): State<AppState>) -> Response {
-    let hash_cro = std::env::var("VITE_FRUITNATION_HASH_CRO").unwrap_or_else(|_| "1.2".to_owned());
+    let hash_cro = hash_price_cro();
     let net = configured_network();
 
     Json(serde_json::json!({
@@ -253,12 +302,15 @@ mod tests {
     // env-var access against the test that *sets* VITE_CHAIN_ID, and the
     // request it spans is in-process with no other awaiter of this mutex.
     #[allow(clippy::await_holding_lock)]
-    async fn networks_serves_only_the_configured_chain_defaulting_to_mainnet() {
-        // Held across the request: this asserts the *unset* default, so it must
-        // not overlap the test that sets the variable.
+    async fn networks_serves_only_the_configured_chain() {
+        // Held across the request: the variable is process-wide, so this must
+        // not overlap the test that sets it to something else.
         let _guard = CHAIN_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let prior = std::env::var("VITE_CHAIN_ID").ok();
-        std::env::remove_var("VITE_CHAIN_ID");
+        // Pinned rather than cleared. A build can now carry a compiled-in chain
+        // id, so "unset" no longer means "mainnet" — that fallback is asserted
+        // hermetically by `the_chain_id_selects_the_network_and_garbage_falls_back`.
+        std::env::set_var("VITE_CHAIN_ID", "25");
 
         let router = build(state("networks"));
         let response = send(&router, "GET", "/api/networks", None, None).await;
@@ -275,8 +327,14 @@ mod tests {
         assert_eq!(nets[0]["tokens"][0]["symbol"], "USDC");
         assert_eq!(nets[0]["tokens"][0]["decimals"], 6);
 
-        if let Some(v) = prior {
-            std::env::set_var("VITE_CHAIN_ID", v);
+        restore("VITE_CHAIN_ID", prior);
+    }
+
+    /// Put a process-wide variable back exactly as it was, absent included.
+    fn restore(key: &str, prior: Option<String>) {
+        match prior {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
         }
     }
 
@@ -286,43 +344,60 @@ mod tests {
     static CHAIN_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
-    fn the_chain_env_var_selects_the_network_and_garbage_falls_back() {
+    fn the_chain_id_selects_the_network_and_garbage_falls_back() {
+        assert_eq!(network_for(Some("338")).id, "cronos-testnet");
+        assert!(network_for(Some("338")).testnet);
+        assert_eq!(network_for(Some("25")).id, "cronos-mainnet");
+
+        // An id nobody serves, a value that is not a number at all, and no id
+        // whatsoever all land on mainnet rather than leaving the wallet without
+        // an RPC to talk to.
+        assert_eq!(network_for(Some("999999")).id, "cronos-mainnet");
+        assert_eq!(network_for(Some("not-a-number")).id, "cronos-mainnet");
+        assert_eq!(network_for(None).id, "cronos-mainnet");
+    }
+
+    #[test]
+    fn a_stale_label_never_survives_a_chain_change() {
+        // The exact shape of a live bug: an environment still exporting the
+        // testnet name while the id says mainnet. The name and the explorer
+        // follow the id and are not overridable.
         let _guard = CHAIN_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let prior = std::env::var("VITE_CHAIN_ID").ok();
 
-        std::env::set_var("VITE_CHAIN_ID", "338");
-        assert_eq!(configured_network().id, "cronos-testnet");
-        assert!(configured_network().testnet);
-
-        std::env::set_var("VITE_CHAIN_ID", "25");
-        assert_eq!(configured_network().id, "cronos-mainnet");
-
-        // An id nobody serves, and a value that is not a number at all, both
-        // land on mainnet rather than leaving the wallet without an RPC.
-        std::env::set_var("VITE_CHAIN_ID", "999999");
-        assert_eq!(configured_network().id, "cronos-mainnet");
-        std::env::set_var("VITE_CHAIN_ID", "not-a-number");
-        assert_eq!(configured_network().id, "cronos-mainnet");
-
-        std::env::remove_var("VITE_CHAIN_ID");
-        assert_eq!(configured_network().id, "cronos-mainnet");
-
-        // A stale label from an earlier configuration must never survive a
-        // chain change. This is the exact shape of a live bug: an environment
-        // still exporting the testnet name while the id says mainnet.
         std::env::set_var("VITE_CHAIN_ID", "25");
         std::env::set_var("VITE_CHAIN_NAME", "CRONOS EVM TESTNET");
         std::env::set_var("VITE_CHAIN_EXPLORER", "https://explorer.cronos.org/testnet");
         let net = configured_network();
         assert_eq!(net.name.to_uppercase(), "CRONOS MAINNET");
         assert_eq!(net.explorer_url, "https://explorer.cronos.org");
+
         std::env::remove_var("VITE_CHAIN_NAME");
         std::env::remove_var("VITE_CHAIN_EXPLORER");
+        restore("VITE_CHAIN_ID", prior);
+    }
 
-        std::env::remove_var("VITE_CHAIN_ID");
-        if let Some(v) = prior {
-            std::env::set_var("VITE_CHAIN_ID", v);
-        }
+    #[test]
+    fn a_compiled_in_default_applies_only_when_the_environment_is_silent() {
+        // This is what makes the installed desktop app work: it is launched by
+        // Finder with no shell to source `.env`, so the compiled-in value is
+        // the only configuration it will ever see.
+        let key = "PS_TEST_SETTING_PRECEDENCE";
+        std::env::remove_var(key);
+        assert_eq!(setting(key, Some("baked")), "baked");
+        assert_eq!(setting(key, None), "", "nothing configured either way");
+
+        // A real deployment setting still wins, so one build can be pointed at
+        // another deployment without recompiling.
+        std::env::set_var(key, "runtime");
+        assert_eq!(setting(key, Some("baked")), "runtime");
+
+        // An exported-but-blank variable is a shell with no opinion, not a
+        // value — it must not mask the compiled-in default.
+        std::env::set_var(key, "   ");
+        assert_eq!(setting(key, Some("baked")), "baked");
+
+        std::env::remove_var(key);
     }
 
     #[tokio::test]
