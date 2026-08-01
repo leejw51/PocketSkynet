@@ -48,7 +48,7 @@ jobs:
           toolchain: 1.95.0
           targets: wasm32-unknown-unknown
 
-      - uses: cargo-bins/cargo-binstall@23ee8ab6b7397851bc11705bcdf46f2519ea0285 # v1.9.0
+      - uses: cargo-bins/cargo-binstall@e00d2c94cc0067b77737821097a62d91c0301baa # v1.21.1
 
       # Pinned versions with published binaries, so binstall never falls back
       # to a from-source build (tauri-cli's CSS dependencies do not compile
