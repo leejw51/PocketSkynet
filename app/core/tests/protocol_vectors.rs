@@ -32,8 +32,9 @@ use pocketskynet_core::chain::{
     to_hex_quantity, LegacyTransaction,
 };
 use pocketskynet_core::crypto::{
-    decrypt_message_v1, decrypt_message_v2, encrypt_message_v2_with_iv, unwrap_room_key_v1,
-    unwrap_room_key_v2, uncompressed_public_key_hex, wrap_room_key_v2_with, WrappedRoomKey,
+    decrypt_message_v1, decrypt_message_v2, encrypt_message_v2_with_iv,
+    uncompressed_public_key_hex, unwrap_room_key_v1, unwrap_room_key_v2, wrap_room_key_v2_with,
+    WrappedRoomKey,
 };
 use pocketskynet_core::eip191;
 use pocketskynet_core::hash::{
@@ -70,7 +71,6 @@ const TEST_JUNK: &str = "test test test test test test test test test test test 
 /// K1 of the crypto vectors: sha256("test").
 const K1_HEX: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 const K2_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
-const ROOM: &str = "room-vector-0001";
 
 fn key32(hex_str: &str) -> [u8; 32] {
     let mut out = [0u8; 32];
@@ -313,7 +313,12 @@ fn build() -> Value {
     let recipient = secret(WALLET_B_KEY); // 0123…ef, same scalar as the crypto-v2 wrap
     let ephemeral = secret(&"22".repeat(32));
     let v1_wrap = {
-        let wrap = wrap_room_key_v1(&k1, &recipient, &ephemeral, &iv16("505152535455565758595a5b5c5d5e5f"));
+        let wrap = wrap_room_key_v1(
+            &k1,
+            &recipient,
+            &ephemeral,
+            &iv16("505152535455565758595a5b5c5d5e5f"),
+        );
         assert_eq!(
             unwrap_room_key_v1(&wrap, &recipient).unwrap(),
             k1,
@@ -485,7 +490,10 @@ fn build() -> Value {
         data: vec![],
         chain_id: 1,
     };
-    let cronos_tx = LegacyTransaction { chain_id: 25, ..eip155_tx.clone() };
+    let cronos_tx = LegacyTransaction {
+        chain_id: 25,
+        ..eip155_tx.clone()
+    };
     let usdc_transfer = LegacyTransaction {
         nonce: 7,
         gas_price: 5_000_000_000_000,
@@ -514,15 +522,24 @@ fn build() -> Value {
     .collect();
     let client_messages: Vec<Value> = [
         ClientMessage::Ping,
-        ClientMessage::Typing { room_id: room.clone() },
+        ClientMessage::Typing {
+            room_id: room.clone(),
+        },
     ]
     .iter()
     .map(|m| serde_json::to_value(m).unwrap())
     .collect();
     let targets: Vec<Value> = [
-        Target::Room { room_id: room.clone() },
-        Target::User { wallet: wallet_a.address().clone() },
-        Target::RoomExcept { room_id: room, except: wallet_a.address().clone() },
+        Target::Room {
+            room_id: room.clone(),
+        },
+        Target::User {
+            wallet: wallet_a.address().clone(),
+        },
+        Target::RoomExcept {
+            room_id: room,
+            except: wallet_a.address().clone(),
+        },
         Target::All,
     ]
     .iter()
@@ -589,41 +606,96 @@ fn build() -> Value {
         )
     };
 
-    let scenario_msg = |room_key: &[u8; 32], sender: &str, plaintext: &str, iv_hex: &str, key_version: u32| {
-        let enc =
-            encrypt_message_v2_with_iv(plaintext, room_key, scenario_room, &iv16(iv_hex)).unwrap();
-        assert_eq!(
-            decrypt_message_v2(&enc.content, &enc.iv, &enc.hmac, room_key, scenario_room).unwrap(),
-            plaintext,
-            "scenario message (epoch {key_version}) must decrypt"
-        );
-        (
-            enc.clone(),
-            json!({
-                "sender": sender,
-                "keyVersion": key_version,
-                "encVer": 2,
-                "isEncrypted": true,
-                "plaintextUtf8": plaintext,
-                "content": enc.content,
-                "iv": enc.iv,
-                "hmac": enc.hmac,
-                "msgHash": msg_hash_encrypted(&enc.content),
-            }),
-        )
-    };
+    let scenario_msg =
+        |room_key: &[u8; 32], sender: &str, plaintext: &str, iv_hex: &str, key_version: u32| {
+            let enc = encrypt_message_v2_with_iv(plaintext, room_key, scenario_room, &iv16(iv_hex))
+                .unwrap();
+            assert_eq!(
+                decrypt_message_v2(&enc.content, &enc.iv, &enc.hmac, room_key, scenario_room)
+                    .unwrap(),
+                plaintext,
+                "scenario message (epoch {key_version}) must decrypt"
+            );
+            (
+                enc.clone(),
+                json!({
+                    "sender": sender,
+                    "keyVersion": key_version,
+                    "encVer": 2,
+                    "isEncrypted": true,
+                    "plaintextUtf8": plaintext,
+                    "content": enc.content,
+                    "iv": enc.iv,
+                    "hmac": enc.hmac,
+                    "msgHash": msg_hash_encrypted(&enc.content),
+                }),
+            )
+        };
 
     // Epoch 1: everyone gets a wrap of K1; two messages are sent under it.
-    let (_, e1_alice) = scenario_wrap(&k1, &alice_kp, "alice", &"11".repeat(32), "606162636465666768696a6b6c6d6e6f", 1);
-    let (_, e1_bob) = scenario_wrap(&k1, &bob_kp, "bob", &"22".repeat(32), "707172737475767778797a7b7c7d7e7f", 1);
-    let (e1_carol_wrap, e1_carol) = scenario_wrap(&k1, &carol_kp, "carol", &"33".repeat(32), "808182838485868788898a8b8c8d8e8f", 1);
-    let (e1_msg1_enc, e1_msg1) = scenario_msg(&k1, "alice", "hello room — epoch one", "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf", 1);
-    let (_, e1_msg2) = scenario_msg(&k1, "bob", "한글 second message 🍓", "e0e1e2e3e4e5e6e7e8e9eaebecedeeef", 1);
+    let (_, e1_alice) = scenario_wrap(
+        &k1,
+        &alice_kp,
+        "alice",
+        &"11".repeat(32),
+        "606162636465666768696a6b6c6d6e6f",
+        1,
+    );
+    let (_, e1_bob) = scenario_wrap(
+        &k1,
+        &bob_kp,
+        "bob",
+        &"22".repeat(32),
+        "707172737475767778797a7b7c7d7e7f",
+        1,
+    );
+    let (e1_carol_wrap, e1_carol) = scenario_wrap(
+        &k1,
+        &carol_kp,
+        "carol",
+        &"33".repeat(32),
+        "808182838485868788898a8b8c8d8e8f",
+        1,
+    );
+    let (e1_msg1_enc, e1_msg1) = scenario_msg(
+        &k1,
+        "alice",
+        "hello room — epoch one",
+        "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+        1,
+    );
+    let (_, e1_msg2) = scenario_msg(
+        &k1,
+        "bob",
+        "한글 second message 🍓",
+        "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+        1,
+    );
 
     // Rotation: carol removed → epoch 2 wraps K2 to the survivors only.
-    let (e2_alice_wrap, e2_alice) = scenario_wrap(&k2, &alice_kp, "alice", &"44".repeat(32), "909192939495969798999a9b9c9d9e9f", 2);
-    let (_, e2_bob) = scenario_wrap(&k2, &bob_kp, "bob", &"55".repeat(32), "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", 2);
-    let (e2_msg_enc, e2_msg) = scenario_msg(&k2, "alice", "fresh epoch after rotation", "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff", 2);
+    let (e2_alice_wrap, e2_alice) = scenario_wrap(
+        &k2,
+        &alice_kp,
+        "alice",
+        &"44".repeat(32),
+        "909192939495969798999a9b9c9d9e9f",
+        2,
+    );
+    let (_, e2_bob) = scenario_wrap(
+        &k2,
+        &bob_kp,
+        "bob",
+        &"55".repeat(32),
+        "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        2,
+    );
+    let (e2_msg_enc, e2_msg) = scenario_msg(
+        &k2,
+        "alice",
+        "fresh epoch after rotation",
+        "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+        2,
+    );
 
     // Negative expectations — asserted here, to be mirrored by a port's tests.
     // Carol's key must not open an epoch-2 wrap (hers or a survivor's)…
@@ -638,11 +710,25 @@ fn build() -> Value {
     );
     // …and messages must not decrypt across epochs in either direction.
     assert!(
-        decrypt_message_v2(&e2_msg_enc.content, &e2_msg_enc.iv, &e2_msg_enc.hmac, &k1, scenario_room).is_err(),
+        decrypt_message_v2(
+            &e2_msg_enc.content,
+            &e2_msg_enc.iv,
+            &e2_msg_enc.hmac,
+            &k1,
+            scenario_room
+        )
+        .is_err(),
         "epoch-2 message must not decrypt under the epoch-1 key"
     );
     assert!(
-        decrypt_message_v2(&e1_msg1_enc.content, &e1_msg1_enc.iv, &e1_msg1_enc.hmac, &k2, scenario_room).is_err(),
+        decrypt_message_v2(
+            &e1_msg1_enc.content,
+            &e1_msg1_enc.iv,
+            &e1_msg1_enc.hmac,
+            &k2,
+            scenario_room
+        )
+        .is_err(),
         "epoch-1 message must not decrypt under the epoch-2 key"
     );
 
@@ -661,7 +747,14 @@ fn build() -> Value {
         k1,
         "legacy wrap must unwrap with the legacy key"
     );
-    let (_, healed) = scenario_wrap(&k1, &alice_kp, "alice", &"66".repeat(32), "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf", 1);
+    let (_, healed) = scenario_wrap(
+        &k1,
+        &alice_kp,
+        "alice",
+        &"66".repeat(32),
+        "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        1,
+    );
 
     let rotation_scenario = json!({
         "roomId": scenario_room,
