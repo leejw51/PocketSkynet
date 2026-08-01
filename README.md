@@ -25,6 +25,10 @@ desktop app, sharing one `core` crate for wallet, EIP-191, and E2EE crypto.
 
 ▶ [Watch on YouTube](https://youtu.be/jraQ8KFgQ74)
 
+[![Watch the PocketSkynet trailer on YouTube](https://img.youtube.com/vi/k7mj-rdx4IM/sddefault.jpg)](https://youtu.be/k7mj-rdx4IM)
+
+▶ [Watch the trailer on YouTube](https://youtu.be/k7mj-rdx4IM)
+
 ## Quick start
 
 ```bash
