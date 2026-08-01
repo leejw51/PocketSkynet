@@ -405,6 +405,8 @@ pub struct Bound {
     redirect: Option<(std::net::TcpListener, axum::Router)>,
     router: axum::Router,
     log: Arc<JsonlLog>,
+    /// Keeps the Bonjour advertisement registered for the server's lifetime.
+    mdns: Option<Advertiser>,
 }
 
 /// The listening socket, and whether it is wrapped in TLS.
@@ -504,6 +506,108 @@ impl Bound {
 /// WebSocket cannot keep the process alive indefinitely.
 const GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Advertise the server over Bonjour/mDNS as `_pocketskynet._tcp` so phones
+/// on the same network can discover it without typing an address.  Best
+/// effort: a machine with no multicast route still serves fine, so every
+/// failure is a warning, never a startup error.  (VPN-only reachability —
+/// e.g. Tailscale — does not carry multicast; those clients still enter the
+/// address by hand.)
+/// The live advertisement.  On macOS the system's own mDNSResponder holds
+/// port 5353 exclusively enough that a userspace responder's announcements
+/// are not reliably delivered even on the local network — so there the
+/// registration goes through `dns-sd -R` (mDNSResponder's front door), and
+/// the child process holds it.  Elsewhere the in-process responder serves.
+pub enum Advertiser {
+    System(std::process::Child),
+    InProcess(mdns_sd::ServiceDaemon),
+}
+
+impl Drop for Advertiser {
+    fn drop(&mut self) {
+        if let Advertiser::System(child) = self {
+            let _ = child.kill();
+        }
+    }
+}
+
+fn advertise_mdns(addr: std::net::SocketAddr, scheme: Scheme) -> Option<Advertiser> {
+    let scheme_prop = match scheme {
+        Scheme::Http => "scheme=http",
+        Scheme::Https => "scheme=https",
+    };
+    let instance = format!("PocketSkynet on {}", hostname());
+    if cfg!(target_os = "macos") {
+        match std::process::Command::new("dns-sd")
+            .args([
+                "-R", &instance, "_pocketskynet._tcp", ".",
+                &addr.port().to_string(), scheme_prop,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                tracing::info!(instance, port = addr.port(), "advertising over Bonjour (mDNSResponder)");
+                return Some(Advertiser::System(child));
+            }
+            Err(e) => tracing::warn!(error = %e, "dns-sd unavailable, falling back to in-process mDNS"),
+        }
+    }
+    advertise_in_process(addr, scheme_prop, &instance).map(Advertiser::InProcess)
+}
+
+fn advertise_in_process(
+    addr: std::net::SocketAddr,
+    scheme_prop: &str,
+    instance: &str,
+) -> Option<mdns_sd::ServiceDaemon> {
+    let daemon = match mdns_sd::ServiceDaemon::new() {
+        Ok(daemon) => daemon,
+        Err(e) => {
+            tracing::warn!(error = %e, "mDNS advertising unavailable");
+            return None;
+        }
+    };
+    let host = hostname();
+    let (key, value) = scheme_prop.split_once('=').unwrap_or(("scheme", "http"));
+    let props = [(key, value)];
+    let info = match mdns_sd::ServiceInfo::new(
+        "_pocketskynet._tcp.local.",
+        instance,
+        &format!("{host}.local."),
+        (),
+        addr.port(),
+        &props[..],
+    ) {
+        Ok(info) => info.enable_addr_auto(),
+        Err(e) => {
+            tracing::warn!(error = %e, "mDNS service info rejected");
+            return None;
+        }
+    };
+    match daemon.register(info) {
+        Ok(()) => {
+            tracing::info!(instance, port = addr.port(), "advertising over Bonjour");
+            Some(daemon)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "mDNS registration failed");
+            None
+        }
+    }
+}
+
+fn hostname() -> String {
+    std::process::Command::new("hostname")
+        .arg("-s")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|s| s.trim().replace(' ', "-"))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "pocketskynet".into())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BindError {
     #[error(transparent)]
@@ -602,6 +706,8 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
         );
     }
 
+    let mdns = advertise_mdns(bound_addr, scheme);
+
     Ok(Bound {
         addr: bound_addr,
         scheme,
@@ -615,6 +721,7 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
         redirect,
         router,
         log,
+        mdns,
     })
 }
 
