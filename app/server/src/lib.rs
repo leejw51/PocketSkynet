@@ -536,12 +536,29 @@ fn advertise_mdns(addr: std::net::SocketAddr, scheme: Scheme) -> Option<Advertis
         Scheme::Https => "scheme=https",
     };
     let instance = format!("PocketSkynet on {}", hostname());
+
+    // Multicast does not cross a mesh VPN, so a phone can only discover this
+    // server while it shares the LAN.  Publishing the VPN URL in the TXT
+    // record means that one discovery is enough: the client keeps the
+    // address that still works from anywhere.
+    let endpoints = connect_urls(addr, scheme);
+    let vpn_prop = endpoints
+        .iter()
+        .find(|e| e.reach == Reach::Vpn)
+        .map(|e| format!("vpn={}", e.url));
+    let lan_prop = endpoints
+        .iter()
+        .find(|e| e.reach == Reach::Lan)
+        .map(|e| format!("lan={}", e.url));
     if cfg!(target_os = "macos") {
+        let mut args = vec![
+            "-R".to_string(), instance.clone(), "_pocketskynet._tcp".to_string(),
+            ".".to_string(), addr.port().to_string(), scheme_prop.to_string(),
+        ];
+        args.extend(vpn_prop.clone());
+        args.extend(lan_prop.clone());
         match std::process::Command::new("dns-sd")
-            .args([
-                "-R", &instance, "_pocketskynet._tcp", ".",
-                &addr.port().to_string(), scheme_prop,
-            ])
+            .args(&args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -553,12 +570,15 @@ fn advertise_mdns(addr: std::net::SocketAddr, scheme: Scheme) -> Option<Advertis
             Err(e) => tracing::warn!(error = %e, "dns-sd unavailable, falling back to in-process mDNS"),
         }
     }
-    advertise_in_process(addr, scheme_prop, &instance).map(Advertiser::InProcess)
+    let mut props = vec![scheme_prop.to_string()];
+    props.extend(vpn_prop);
+    props.extend(lan_prop);
+    advertise_in_process(addr, &props, &instance).map(Advertiser::InProcess)
 }
 
 fn advertise_in_process(
     addr: std::net::SocketAddr,
-    scheme_prop: &str,
+    props: &[String],
     instance: &str,
 ) -> Option<mdns_sd::ServiceDaemon> {
     let daemon = match mdns_sd::ServiceDaemon::new() {
@@ -569,15 +589,17 @@ fn advertise_in_process(
         }
     };
     let host = hostname();
-    let (key, value) = scheme_prop.split_once('=').unwrap_or(("scheme", "http"));
-    let props = [(key, value)];
+    let pairs: Vec<(&str, &str)> = props
+        .iter()
+        .filter_map(|p| p.split_once('='))
+        .collect();
     let info = match mdns_sd::ServiceInfo::new(
         "_pocketskynet._tcp.local.",
         instance,
         &format!("{host}.local."),
         (),
         addr.port(),
-        &props[..],
+        &pairs[..],
     ) {
         Ok(info) => info.enable_addr_auto(),
         Err(e) => {
