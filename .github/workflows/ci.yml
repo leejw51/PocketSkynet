@@ -61,7 +61,7 @@ jobs:
 
       # `app/web` is its own workspace with its own target dir, so both are
       # cached explicitly.
-      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: |
             app
