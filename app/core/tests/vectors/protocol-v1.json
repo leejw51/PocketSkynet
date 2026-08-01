@@ -1,0 +1,997 @@
+{
+  "abi": {
+    "calls": [
+      {
+        "dataHex": "a9059cbb000000000000000000000000353535353535353535353535353535353535353500000000000000000000000000000000000000000000000000000000000f4240",
+        "name": "erc20Transfer(to=0x3535…, amount=1000000)"
+      },
+      {
+        "dataHex": "70a08231000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "name": "erc20BalanceOf(owner=0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266)"
+      },
+      {
+        "dataHex": "095ea7b3000000000000000000000000145863eb42cf62847a6ca784e6416c1682b1b2ae0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+        "name": "erc20Approve(spender=0x145863eb42cf62847a6ca784e6416c1682b1b2ae, amount=10^18)"
+      },
+      {
+        "dataHex": "dd62ed3e000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb92266000000000000000000000000145863eb42cf62847a6ca784e6416c1682b1b2ae",
+        "name": "erc20Allowance(owner=0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266, spender=0x145863eb42cf62847a6ca784e6416c1682b1b2ae)"
+      },
+      {
+        "dataHex": "d06ca61f00000000000000000000000000000000000000000000000000000000000f4240000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000020000000000000000000000005c7f8a570d578ed84e63fdfa7b1ee72deae1ae23000000000000000000000000c21223249ca28397b4b6541dffaecc539bff0c59",
+        "name": "getAmountsOut(amountIn=1000000, path=[WCRO,USDC])"
+      },
+      {
+        "dataHex": "7ff36ab500000000000000000000000000000000000000000000000000000000000026de0000000000000000000000000000000000000000000000000000000000000080000000000000000000000000fcad0b19bb29d4674531d6f115237e16afce377c00000000000000000000000000000000000000000000000000000000684ee18000000000000000000000000000000000000000000000000000000000000000020000000000000000000000005c7f8a570d578ed84e63fdfa7b1ee72deae1ae23000000000000000000000000c21223249ca28397b4b6541dffaecc539bff0c59",
+        "name": "swapExactETHForTokens(min=9950, path=[WCRO,USDC], to=0xfcad0b19bb29d4674531d6f115237e16afce377c, deadline=1750000000)"
+      },
+      {
+        "dataHex": "18cbafe500000000000000000000000000000000000000000000000000000000000f424000000000000000000000000000000000000000000000000000000000000026de00000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000fcad0b19bb29d4674531d6f115237e16afce377c00000000000000000000000000000000000000000000000000000000684ee1800000000000000000000000000000000000000000000000000000000000000002000000000000000000000000c21223249ca28397b4b6541dffaecc539bff0c590000000000000000000000005c7f8a570d578ed84e63fdfa7b1ee72deae1ae23",
+        "name": "swapExactTokensForETH(in=1000000, min=9950, path=[USDC,WCRO], to=0xfcad0b19bb29d4674531d6f115237e16afce377c, deadline=1750000000)"
+      },
+      {
+        "dataHex": "38ed173900000000000000000000000000000000000000000000000000000000000f424000000000000000000000000000000000000000000000000000000000000026de00000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000fcad0b19bb29d4674531d6f115237e16afce377c00000000000000000000000000000000000000000000000000000000684ee1800000000000000000000000000000000000000000000000000000000000000002000000000000000000000000c21223249ca28397b4b6541dffaecc539bff0c590000000000000000000000005c7f8a570d578ed84e63fdfa7b1ee72deae1ae23",
+        "name": "swapExactTokensForTokens(in=1000000, min=9950, path=[USDC,WCRO], to=0xfcad0b19bb29d4674531d6f115237e16afce377c, deadline=1750000000)"
+      },
+      {
+        "dataHex": "cfae3217",
+        "name": "greet()"
+      },
+      {
+        "dataHex": "8da5cb5b",
+        "name": "owner()"
+      },
+      {
+        "dataHex": "a41368620000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000568656c6c6f000000000000000000000000000000000000000000000000000000",
+        "name": "setGreeting(\"hello\")"
+      },
+      {
+        "dataHex": "a41368620000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000fec9588eb8595ed9598ec84b8ec9a940000000000000000000000000000000000",
+        "name": "setGreeting(\"안녕하세요\")"
+      },
+      {
+        "dataHex": "000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000001200000000000000000000000000000000000000000000003635c9adc5dea0000000000000000000000000000000000000000000000000000000000000000000084d7920546f6b656e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000034d544b0000000000000000000000000000000000000000000000000000000000",
+        "name": "erc20ConstructorArgs(\"My Token\", \"MTK\", 18, 1000·10^18)"
+      },
+      {
+        "dataHex": "0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000568656c6c6f000000000000000000000000000000000000000000000000000000",
+        "name": "greeterConstructorArgs(\"hello\")"
+      }
+    ],
+    "selectors": [
+      {
+        "selectorHex": "a9059cbb",
+        "signature": "transfer(address,uint256)"
+      },
+      {
+        "selectorHex": "70a08231",
+        "signature": "balanceOf(address)"
+      },
+      {
+        "selectorHex": "095ea7b3",
+        "signature": "approve(address,uint256)"
+      },
+      {
+        "selectorHex": "dd62ed3e",
+        "signature": "allowance(address,address)"
+      },
+      {
+        "selectorHex": "313ce567",
+        "signature": "decimals()"
+      },
+      {
+        "selectorHex": "95d89b41",
+        "signature": "symbol()"
+      },
+      {
+        "selectorHex": "06fdde03",
+        "signature": "name()"
+      },
+      {
+        "selectorHex": "18160ddd",
+        "signature": "totalSupply()"
+      },
+      {
+        "selectorHex": "8da5cb5b",
+        "signature": "owner()"
+      },
+      {
+        "selectorHex": "cfae3217",
+        "signature": "greet()"
+      },
+      {
+        "selectorHex": "a4136862",
+        "signature": "setGreeting(string)"
+      },
+      {
+        "selectorHex": "d0e30db0",
+        "signature": "deposit()"
+      },
+      {
+        "selectorHex": "2e1a7d4d",
+        "signature": "withdraw(uint256)"
+      },
+      {
+        "selectorHex": "d06ca61f",
+        "signature": "getAmountsOut(uint256,address[])"
+      },
+      {
+        "selectorHex": "7ff36ab5",
+        "signature": "swapExactETHForTokens(uint256,address[],address,uint256)"
+      },
+      {
+        "selectorHex": "18cbafe5",
+        "signature": "swapExactTokensForETH(uint256,uint256,address[],address,uint256)"
+      },
+      {
+        "selectorHex": "38ed1739",
+        "signature": "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)"
+      }
+    ]
+  },
+  "amounts": {
+    "format": [
+      {
+        "baseUnits": "1500000000000000000",
+        "decimals": 18,
+        "formatted": "1.5"
+      },
+      {
+        "baseUnits": "1500000",
+        "decimals": 6,
+        "formatted": "1.5"
+      },
+      {
+        "baseUnits": "1000000000000000000",
+        "decimals": 18,
+        "formatted": "1"
+      },
+      {
+        "baseUnits": "1",
+        "decimals": 6,
+        "formatted": "0.000001"
+      },
+      {
+        "baseUnits": "0",
+        "decimals": 18,
+        "formatted": "0"
+      }
+    ],
+    "hexQuantities": [
+      {
+        "decimal": "0",
+        "hex": "0x0"
+      },
+      {
+        "decimal": "436",
+        "hex": "0x1b4"
+      },
+      {
+        "decimal": "1000000000000000000",
+        "hex": "0xde0b6b3a7640000"
+      }
+    ],
+    "parse": [
+      {
+        "baseUnits": "1000000000000000000",
+        "decimals": 18,
+        "input": "1"
+      },
+      {
+        "baseUnits": "1500000000000000000",
+        "decimals": 18,
+        "input": "1.5"
+      },
+      {
+        "baseUnits": "1",
+        "decimals": 6,
+        "input": "0.000001"
+      },
+      {
+        "baseUnits": "50",
+        "decimals": 2,
+        "input": ".5"
+      },
+      {
+        "baseUnits": "200",
+        "decimals": 2,
+        "input": "2."
+      },
+      {
+        "baseUnits": "42",
+        "decimals": 0,
+        "input": "42"
+      }
+    ]
+  },
+  "description": "PocketSkynet cross-language protocol vectors. Generated by core/tests/protocol_vectors.rs — never edit by hand. Spec: PROTOCOL.md (repo root). E2EE v2 message/room-key vectors live in crypto-v2.json.",
+  "e2eeRotationScenario": {
+    "epochs": [
+      {
+        "keyVersion": 1,
+        "messages": [
+          {
+            "content": "XVmxKE+OzOZBRJbFCWP4mOt9UlvAToZNm6KJ9KFEgr4=",
+            "encVer": 2,
+            "hmac": "b65b8c200ff9c052f5f0d22023118ae84064efadeccfc091f99744d18cb6040a",
+            "isEncrypted": true,
+            "iv": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+            "keyVersion": 1,
+            "msgHash": "f22803d4aeb5fc84e10210af673d574e3419f4d5c41ffbfc17f56801ddb735c2",
+            "plaintextUtf8": "hello room — epoch one",
+            "sender": "alice"
+          },
+          {
+            "content": "W5XR7axhd93GRdvkUmbYhVF7RtYU6yWL6rJywZGKOGA=",
+            "encVer": 2,
+            "hmac": "37bf006b7a0a0427a748c5d23a457d66bfd0b07c21733cbb25cde0520c972748",
+            "isEncrypted": true,
+            "iv": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+            "keyVersion": 1,
+            "msgHash": "ebf75f5e4331adff6fa7cd592a945f70fff4b1f1d7194e59a84328dbef902eaa",
+            "plaintextUtf8": "한글 second message 🍓",
+            "sender": "bob"
+          }
+        ],
+        "roomKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "wraps": [
+          {
+            "encryptedSymmetricKey": "D7Dy0ig75HIZtokEe+14qE/U4U4sJ7sxIbO/N7RpuUH+6BiuDsadTdgGeGRUVf5oC018I2+Nrb49jn2MIvFfPpU9GF0k+WBICeHEjJN8V4E=",
+            "encryptionIV": "606162636465666768696a6b6c6d6e6f",
+            "ephemeralPrivateKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+            "ephemeralPublicKey": "044f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa385b6b1b8ead809ca67454d9683fcf2ba03456d6fe2c4abe2b07f0fbdbb2f1c1",
+            "hmac": "06b50e7de8a009cbfc672a8094e28e9d09b0e72a0c3f207a300f0297610946ce",
+            "keyVersion": 1,
+            "recipient": "alice"
+          },
+          {
+            "encryptedSymmetricKey": "BwPo54UXeLjV4+DGAZ2vNAn4DggyMXzKF+xyzImxFxI+GsiC1OGtZQ/35JHTGZ5l9QXwLO1EcUwfPNX2VgeZgM7m/zhHXluzeqMMz7gbXWA=",
+            "encryptionIV": "707172737475767778797a7b7c7d7e7f",
+            "ephemeralPrivateKeyHex": "2222222222222222222222222222222222222222222222222222222222222222",
+            "ephemeralPublicKey": "04466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f276728176c3c6431f8eeda4538dc37c865e2784f3a9e77d044f33e407797e1278a",
+            "hmac": "2bd9f57a51f51ae2d38b14d4d47df19248ee5aa27886d773dc29055f48fb89a6",
+            "keyVersion": 1,
+            "recipient": "bob"
+          },
+          {
+            "encryptedSymmetricKey": "Kn1D5yQig/MmbruRmApiCZYqsu/S3Q/OVTxqyJz/8WFfVCw0gV9lO4PkWgUW3E/EUo+Vb1ZGksGF+eBtYujixtHzpVg9su0QJu1Y9d1lZ0Y=",
+            "encryptionIV": "808182838485868788898a8b8c8d8e8f",
+            "ephemeralPrivateKeyHex": "3333333333333333333333333333333333333333333333333333333333333333",
+            "ephemeralPublicKey": "043c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b13b306b0fe085665d8fc1b28ae1676cd3ad6e08eaeda225fe38d0da4de55703e0",
+            "hmac": "212845749cdb2a7c9d6134df69a2b16aad68d1f677fd47d45728034afafaf94b",
+            "keyVersion": 1,
+            "recipient": "carol"
+          }
+        ]
+      },
+      {
+        "keyVersion": 2,
+        "messages": [
+          {
+            "content": "tTIQ7NpvfKD72kjF3Juhj1AThxUZ2PK5wmQEjUYCrjg=",
+            "encVer": 2,
+            "hmac": "20b551c91584901b1cb31a645016ca7869586a4bf55673b4f875e236d905e4ae",
+            "isEncrypted": true,
+            "iv": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+            "keyVersion": 2,
+            "msgHash": "18300b3e9cc6cd8e3f754a3738566be107dad9e27b35744ef1b9ececa5270853",
+            "plaintextUtf8": "fresh epoch after rotation",
+            "sender": "alice"
+          }
+        ],
+        "roomKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "rotationReason": "carol removed; server set keyRotationPending and any member re-keys (§11)",
+        "wraps": [
+          {
+            "encryptedSymmetricKey": "mzK4MG5tQWSEXzfFJ7DmLYZEIPgNl1RXc8kWYVTwoq09+etz25Wy268+dlhpfzMk3DAPyArcOT5kLjw6MHJeJocsqzxyXS28GiVyuwnz3LU=",
+            "encryptionIV": "909192939495969798999a9b9c9d9e9f",
+            "ephemeralPrivateKeyHex": "4444444444444444444444444444444444444444444444444444444444444444",
+            "ephemeralPublicKey": "042c0b7cf95324a07d05398b240174dc0c2be444d96b159aa6c7f7b1e668680991ae31a9c671a36543f46cea8fce6984608aa316aa0472a7eed08847440218cb2f",
+            "hmac": "22a009722ab26123ea36edf9eaab3d0432b2a23c6098b962429199df1e8d6a41",
+            "keyVersion": 2,
+            "recipient": "alice"
+          },
+          {
+            "encryptedSymmetricKey": "D01msWwQuUFgXtW9mzZhTRLoJHFvERkJCiUKh2oKyezPkHoHixpPzB8/TIme3GrL1+c2Lv6aEgzo9d4j8+HFfQmYW4MwKGeCG0OOhvvrg6o=",
+            "encryptionIV": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+            "ephemeralPrivateKeyHex": "5555555555555555555555555555555555555555555555555555555555555555",
+            "ephemeralPublicKey": "049ac20335eb38768d2052be1dbbc3c8f6178407458e51e6b4ad22f1d91758895baf102a603fa09b366705fd727757a5abd614410a6e3f802ab8da8dfe84289d64",
+            "hmac": "07b658afd2b1db3b4cb7060254be8c980263a04e76503ba081e9ebc7f9b5f04c",
+            "keyVersion": 2,
+            "recipient": "bob"
+          }
+        ]
+      }
+    ],
+    "expectations": [
+      "every wrap unwraps to its epoch's roomKeyHex with that recipient's encryption private key, and with no other key",
+      "carol's encryption private key must fail to unwrap every keyVersion-2 wrap (forward secrecy on removal)",
+      "keyVersion-1 messages decrypt only under the keyVersion-1 room key; keyVersion-2 only under keyVersion-2",
+      "encrypting always uses the highest epoch held and stamps its keyVersion; decrypting selects the key by the message's keyVersion (missing = 1)",
+      "before wrapping, each recipient's keyBindingSignatureHex must verify against templates.keyBinding rebuilt from their address and public key",
+      "the v1 wrap unwraps only via the LEGACY keypair (raw sharedX as AES key, ASCII-hex HMAC key); the healed wrap must unwrap via the v2 keypair"
+    ],
+    "healing": {
+      "healedV2Wrap": {
+        "encryptedSymmetricKey": "J+MDC9ccFYEpHmEEDfYJ80wwgoCk1EdN7hwWmaImtAVQKvNQIW0tTFhwBqpfA0EgC6XNnBrVK1UlCUr+I6DomvYlZXM9VIX+S+DvRXlJ7EU=",
+        "encryptionIV": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "ephemeralPrivateKeyHex": "6666666666666666666666666666666666666666666666666666666666666666",
+        "ephemeralPublicKey": "045ab4689e400a4a160cf01cd44730845a54768df8547dcdf073d964f109f18c30bd738ebc57eeebb91a058d8ae3cb6870ef0b2963ca22b54863d0e6cceb915795",
+        "hmac": "0e0e46e9d5979cf5c59c8e1aaf9e6b83832a12c19fd42351ec5739d6d92359b4",
+        "keyVersion": 1,
+        "recipient": "alice"
+      },
+      "legacyKeypair": {
+        "encryptionPrivateKeyHex": "0xdde7337c32273ab3ca7154efc8c49b2873d797900ec7b047533ed7291f93f7a3",
+        "encryptionPublicKeyHex": "04f35792987bfeeb9076b62b7e60c50fc81a87859b86388b10c9b651c5862a6cab08c4f425ad1ade24a688ce8666b0e5f2bea841e3388d64cad39a2f41846e7e9e"
+      },
+      "note": "epoch-1 key stranded in a v1 wrap to alice's legacy (unsalted) keypair; unwrap with the legacy key, re-wrap to her v2 key at the SAME keyVersion",
+      "v1Wrap": {
+        "encryptedSymmetricKey": "+emiEVG1jZ67BHBQyPP0DJQ15869pMR1vnu7kCefDLLYCughCrmoiUB4yCM97v/4v+O5Yqzv5fmwpIz0yqH1FyyfGxua35MEHQjoGoozogA=",
+        "encryptionIV": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+        "ephemeralPrivateKeyHex": "7777777777777777777777777777777777777777777777777777777777777777",
+        "ephemeralPublicKey": "047962d45b38e8bcf82fa8efa8432a01f20c9a53e24c7d3f11df197cb8e70926da7a3ef3ebafc756dc3b24b75292d4cc5d71b170e97044a9858353443a96baed23",
+        "hmac": "5da4317dd6218c57a94edd108f3a8112d09373f290fd6c7ec9dd8f52eb0e8a29",
+        "keyVersion": 1
+      }
+    },
+    "members": [
+      {
+        "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "encryptionPrivateKeyHex": "0x2172518d4a1f6443e9a180799d9b79f7e0eeb10ea0dae16be825524da85dee2f",
+        "encryptionPublicKeyHex": "046bf65a7e3865db841d35b1a01f4409eb5d25ad44605126e025252f1a8790e2a0e3a90ca82344834719f847c08729c777266b6c03701e75beebbbe63395f6aaf0",
+        "keyBindingSignatureHex": "0x81f5a3ca27cb7a3b7ffb0eab85391222d06ae48ab4f2c7f6b01393aca87b9344610031a8a35cab18a12a376b95829920892006de19d203c56957b75cf3812ce51b",
+        "name": "alice",
+        "saltHex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "walletPrivateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      },
+      {
+        "address": "0xfcad0b19bb29d4674531d6f115237e16afce377c",
+        "encryptionPrivateKeyHex": "0xda34bd0aaaf19ca9d100c7467ed7b1605b785a2267d45789f52fe929f1cb7c12",
+        "encryptionPublicKeyHex": "0468528ea0e3724ef91123ac0f6a9ef91797f9d3c10fb0ea18e6e4a909c2f7cd7dd33f8f49436854caf66d41a23916294e1b3d0d6e45ebd7657cf8e3af80df8771",
+        "keyBindingSignatureHex": "0x5cd9d2d3603624bfaf6d0210c40f41b72885d2077f83221417b918a4309f60755028ca524868c9327cc496f484adb1c09399a288b68b58da1afb2afa8b86e0451b",
+        "name": "bob",
+        "saltHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "walletPrivateKeyHex": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      {
+        "address": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        "encryptionPrivateKeyHex": "0x188377650be8c80b2811707e37d4dfb3b81c61f7f9d2490eaa205d291732c3bc",
+        "encryptionPublicKeyHex": "0460c7a6b2a449f0fd048c891843f3bdf036208764144bb5e6201cee28fc969c77c6af26308458799b25955ccae839e1f88cf84023bcd623024b903d81cf7bd86e",
+        "keyBindingSignatureHex": "0x3a89ce45442d06eaea7e0d55d21374cebdb78e9598cae39c1fccd302c3009c465064e8f6fcf205821428c856e07a1a7bf309fef3f0c4d469752a0483a8e89e581b",
+        "name": "carol",
+        "saltHex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "walletPrivateKeyHex": "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+      }
+    ],
+    "roomId": "room-rotation-0001"
+  },
+  "ecdh": [
+    {
+      "peerPublicKeyHex": "04466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f276728176c3c6431f8eeda4538dc37c865e2784f3a9e77d044f33e407797e1278a",
+      "privateKeyHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "sharedXHex": "862f2e40830f671dbe6c39599174d13c127fe11ee95738764a9a3f22d99dcc14"
+    }
+  ],
+  "eip191": [
+    {
+      "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "digestHex": "d9eba16ed0ecae432b71fe008c98cc872bb4cc214d3220a36f365326cf807d68",
+      "message": "hello world",
+      "messageUtf8Len": 11,
+      "name": "simple",
+      "privateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      "signatureHex": "0xa461f509887bd19e312c0c58467ce8ff8e300d3c1a90b608a760c5b80318eaf15fe57c96f9175d6cd4daad4663763baa7e78836e067d0163e9a2ccf2ff753f5b1b"
+    },
+    {
+      "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "digestHex": "b9afde5e3b1f8d8afc4b504e69449c163483186eb195cf99b32d683d90b927ea",
+      "message": "🍓 strawberry",
+      "messageUtf8Len": 15,
+      "name": "unicode-length-is-bytes",
+      "privateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      "signatureHex": "0x358e0857e7b9eb1ad11e7510bbfdf260da5a5ee0df02354d6fdae6fdb77bf42b60e9104e4441c2ce516d73a737102bc5ec140a7275bb20e394f8d928dc18d7891c"
+    },
+    {
+      "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "digestHex": "50da9eedfc742dd88128600e67d046124066add1cf9907a747837d823d9c7677",
+      "message": "FruitNation Encryption Key Derivation\n\nAddress: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\nPurpose: End-to-end encryption only",
+      "messageUtf8Len": 126,
+      "name": "legacy-derivation-a",
+      "privateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      "signatureHex": "0xe98d833febe631493b5589273c82b3a66df264a47ca2c02754c0f9dffaeceaa601306b1edf3328bfe7f46b747def4fd6b4f4b400dcc76955a6fb33a47ac6ba531b"
+    },
+    {
+      "address": "0xfcad0b19bb29d4674531d6f115237e16afce377c",
+      "digestHex": "0b5952bf49e3c5a95add0fa8c988a1a1ae34cd1ff2cc74c382cbb9ee91f3954f",
+      "message": "FruitNation Encryption Key Derivation\n\nAddress: 0xfcad0b19bb29d4674531d6f115237e16afce377c\nPurpose: End-to-end encryption only",
+      "messageUtf8Len": 126,
+      "name": "legacy-derivation-b",
+      "privateKeyHex": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "signatureHex": "0x41d928b05cdef74a60021241437fb7697f814cd8d4401ce892182a0c2ef0adbe670f7276e6fad3e125111887d22d391b08ec542ad4069fafca16c9e58da57a401b"
+    },
+    {
+      "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "digestHex": "6896f85af80a6b223e0b1dae3b3c285ffc2fa2b848cb6e2bd23a87dd26c4a241",
+      "message": "FruitNation Encryption Key Derivation v2\n\nAddress: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\nSalt: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\nPurpose: End-to-end encryption only",
+      "messageUtf8Len": 200,
+      "name": "salted-derivation-a",
+      "privateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      "signatureHex": "0xb2fe3aeec6e8d736a8fcd5b53684d10479c955d9e036b6580ebaaca7dd51b346228116bd5349ded182c6f5e3570c5290332c4357490878642391415451f44fa31c"
+    },
+    {
+      "address": "0xfcad0b19bb29d4674531d6f115237e16afce377c",
+      "digestHex": "1f56b7c57a4e2975035a1a627dc09f8346d5d41690ae041e3e3b53f6d0669da8",
+      "message": "FruitNation Encryption Key Derivation v2\n\nAddress: 0xfcad0b19bb29d4674531d6f115237e16afce377c\nSalt: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\nPurpose: End-to-end encryption only",
+      "messageUtf8Len": 200,
+      "name": "salted-derivation-b",
+      "privateKeyHex": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "signatureHex": "0x4f4ecd00b2ae0f7de622f282c6c1b298a8f12b8d57f70d0452caed2d8f8d98b8415daeb38cbae47fc90bf46481cc0134eb621ffe557883f4d2f9cf23a4dd662c1b"
+    },
+    {
+      "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "digestHex": "7483b8dc4ed5a2be1e123afef54d61ed45e845e7ce4a8416421e91e5d18b7c6f",
+      "message": "Welcome to FruitNation!\n\nClick to sign in and accept the FruitNation Terms of Service.\n\nThis request will not trigger a blockchain transaction or cost any gas fees.\n\nWallet address:\n0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\n\nNonce:\n000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "messageUtf8Len": 297,
+      "name": "login-challenge",
+      "privateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      "signatureHex": "0x1daa830830bb4d2ff8d1ef5d5573b02419fbca1a426c4e6ebeef740825f2ad8660afcb986b77827774b0c6b45d9aee4d3fefb371d16bdeac93a9af864d05c3951c"
+    }
+  ],
+  "encryptionKeyDerivation": {
+    "v1Legacy": [
+      {
+        "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "encryptionPrivateKeyHex": "0xdde7337c32273ab3ca7154efc8c49b2873d797900ec7b047533ed7291f93f7a3",
+        "encryptionPublicKeyHex": "04f35792987bfeeb9076b62b7e60c50fc81a87859b86388b10c9b651c5862a6cab08c4f425ad1ade24a688ce8666b0e5f2bea841e3388d64cad39a2f41846e7e9e",
+        "message": "FruitNation Encryption Key Derivation\n\nAddress: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\nPurpose: End-to-end encryption only",
+        "signatureHex": "0xe98d833febe631493b5589273c82b3a66df264a47ca2c02754c0f9dffaeceaa601306b1edf3328bfe7f46b747def4fd6b4f4b400dcc76955a6fb33a47ac6ba531b",
+        "walletPrivateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      },
+      {
+        "address": "0xfcad0b19bb29d4674531d6f115237e16afce377c",
+        "encryptionPrivateKeyHex": "0x53a19ea4568d269bc534f3ae57521fd2c43fa6a515f9c93389749749a8a050d3",
+        "encryptionPublicKeyHex": "04bfd164ac84846bc26874a3ec72187690790d156663fa69e5abad4ce1e33a53d790f954f4d93184cf36db975cb738907f64996dd18b269bf1393e0705dc956ce5",
+        "message": "FruitNation Encryption Key Derivation\n\nAddress: 0xfcad0b19bb29d4674531d6f115237e16afce377c\nPurpose: End-to-end encryption only",
+        "signatureHex": "0x41d928b05cdef74a60021241437fb7697f814cd8d4401ce892182a0c2ef0adbe670f7276e6fad3e125111887d22d391b08ec542ad4069fafca16c9e58da57a401b",
+        "walletPrivateKeyHex": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    ],
+    "v2": [
+      {
+        "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "encryptionPrivateKeyHex": "0x2172518d4a1f6443e9a180799d9b79f7e0eeb10ea0dae16be825524da85dee2f",
+        "encryptionPublicKeyHex": "046bf65a7e3865db841d35b1a01f4409eb5d25ad44605126e025252f1a8790e2a0e3a90ca82344834719f847c08729c777266b6c03701e75beebbbe63395f6aaf0",
+        "message": "FruitNation Encryption Key Derivation v2\n\nAddress: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\nSalt: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\nPurpose: End-to-end encryption only",
+        "saltHex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "signatureHex": "0xb2fe3aeec6e8d736a8fcd5b53684d10479c955d9e036b6580ebaaca7dd51b346228116bd5349ded182c6f5e3570c5290332c4357490878642391415451f44fa31c",
+        "walletPrivateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      },
+      {
+        "address": "0xfcad0b19bb29d4674531d6f115237e16afce377c",
+        "encryptionPrivateKeyHex": "0xa6fd87b69e1c83ba6bdd5f5a502a41b707dac3993350372886b6217e8f06e6ea",
+        "encryptionPublicKeyHex": "045031e83ea2f138541de6908c38da03c6af49cd4f356e64799d63f9125a92a7b13094127a2ad3089544d16ed59a59e60dc869ec91f55466871df67e09bc4920e1",
+        "message": "FruitNation Encryption Key Derivation v2\n\nAddress: 0xfcad0b19bb29d4674531d6f115237e16afce377c\nSalt: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\nPurpose: End-to-end encryption only",
+        "saltHex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "signatureHex": "0x4f4ecd00b2ae0f7de622f282c6c1b298a8f12b8d57f70d0452caed2d8f8d98b8415daeb38cbae47fc90bf46481cc0134eb621ffe557883f4d2f9cf23a4dd662c1b",
+        "walletPrivateKeyHex": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    ]
+  },
+  "formatVersion": 1,
+  "intrinsicGas": [
+    {
+      "dataHex": "",
+      "gas": 21000
+    },
+    {
+      "dataHex": "6f6b",
+      "gas": 21096
+    },
+    {
+      "dataHex": "68656c6c6f",
+      "gas": 21240
+    },
+    {
+      "dataHex": "deadbeef",
+      "gas": 21192
+    },
+    {
+      "dataHex": "0061",
+      "gas": 21060
+    },
+    {
+      "dataHex": "ed959c",
+      "gas": 21144
+    },
+    {
+      "dataHex": "abababababababababababababababababababababababababababababababab",
+      "gas": 22536
+    }
+  ],
+  "keyBindings": [
+    {
+      "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "encryptionPublicKeyHex": "046bf65a7e3865db841d35b1a01f4409eb5d25ad44605126e025252f1a8790e2a0e3a90ca82344834719f847c08729c777266b6c03701e75beebbbe63395f6aaf0",
+      "message": "FruitNation Public Key Binding\n\nAddress: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\nEncryption Public Key: 046bf65a7e3865db841d35b1a01f4409eb5d25ad44605126e025252f1a8790e2a0e3a90ca82344834719f847c08729c777266b6c03701e75beebbbe63395f6aaf0",
+      "signatureHex": "0x81f5a3ca27cb7a3b7ffb0eab85391222d06ae48ab4f2c7f6b01393aca87b9344610031a8a35cab18a12a376b95829920892006de19d203c56957b75cf3812ce51b"
+    },
+    {
+      "address": "0xfcad0b19bb29d4674531d6f115237e16afce377c",
+      "encryptionPublicKeyHex": "045031e83ea2f138541de6908c38da03c6af49cd4f356e64799d63f9125a92a7b13094127a2ad3089544d16ed59a59e60dc869ec91f55466871df67e09bc4920e1",
+      "message": "FruitNation Public Key Binding\n\nAddress: 0xfcad0b19bb29d4674531d6f115237e16afce377c\nEncryption Public Key: 045031e83ea2f138541de6908c38da03c6af49cd4f356e64799d63f9125a92a7b13094127a2ad3089544d16ed59a59e60dc869ec91f55466871df67e09bc4920e1",
+      "signatureHex": "0x119fd2e039b49088a5a6cc2222749a47da5e52b6013f53d17b87627f1fd7aed41c6f6682dc0b573ed490a5f2a0922ea14f782a0c7a1bce8807006065a86516621c"
+    }
+  ],
+  "legacyV1": {
+    "messages": [
+      {
+        "ciphertextBase64": "L/mApzuGAZvpOIqxuMaATg==",
+        "hmacHex": "98ffe503961ec8f1ae0f412db362936c79e0cae42e01bd1ac06c171ac4e0ec95",
+        "ivHex": "000102030405060708090a0b0c0d0e0f",
+        "plaintextUtf8": "attack at dawn",
+        "rejectedHmacRawKeyHex": "e3109563ee713e66836137cc097fbcabf24457e8ae6c73ca1c1b44055d171675",
+        "symmetricKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      },
+      {
+        "ciphertextBase64": "e6OkPgGRNO5JntNhrrL6Aa3TLKdzcGrd7LAzfXu6/1A=",
+        "hmacHex": "a5cafbaaca9d92195585b6787090f59dd1a034983a654b552849cd4fbcb0a24a",
+        "ivHex": "404142434445464748494a4b4c4d4e4f",
+        "plaintextUtf8": "legacy unicode 한글 🍊",
+        "rejectedHmacRawKeyHex": "975496e469ccadd61caaa040c4f6dcebf30078e50ad8b7040766860efcb8d14f",
+        "symmetricKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      }
+    ],
+    "note": "Decrypt-only. AES key = raw 32 key bytes; HMAC key = 64 ASCII bytes of the lowercase hex string; MAC input = base64 ciphertext alone. Never write encVer=1.",
+    "roomKeyWraps": [
+      {
+        "encryptedSymmetricKeyBase64": "yjZ7PrM80nU/P2b3fwOcgF3fETK1GZ2rSDltt8Hqiyu7zj3HhoM5+INZm5IQU7KEbsJDxeuZUUO3azKZ6fLHReBBJeCqyvqHlfxtXO8uxLg=",
+        "ephemeralPrivateKeyHex": "2222222222222222222222222222222222222222222222222222222222222222",
+        "ephemeralPublicKeyHex": "04466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f276728176c3c6431f8eeda4538dc37c865e2784f3a9e77d044f33e407797e1278a",
+        "hmacHex": "3548b320b6814c0931ea44d22bc1c0f6c64458c5a53c643f1e4a42b23f0b9fd8",
+        "ivHex": "505152535455565758595a5b5c5d5e5f",
+        "recipientPrivateKeyHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "recipientPublicKeyHex": "044646ae5047316b4230d0086c8acec687f00b1cd9d1dc634f6cb358ac0a9a8ffffe77b4dd0a4bfb95851f3b7355c781dd60f8418fc8a65d14907aff47c903a559",
+        "roomSymmetricKeyHex": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "sharedXHex": "862f2e40830f671dbe6c39599174d13c127fe11ee95738764a9a3f22d99dcc14"
+      }
+    ]
+  },
+  "msgHash": {
+    "delete": {
+      "msgHash": "",
+      "note": "server force-sets msgHash to the empty string; nothing is hashed"
+    },
+    "emoticon": [
+      {
+        "action": "add",
+        "emoticonCode": "🍓",
+        "eventData": "msg_1749652739650_304e0eaf:🍓:add:0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266:1749652739650",
+        "messageId": "msg_1749652739650_304e0eaf",
+        "msgHashHex": "67b1a8616d8fd474a40975ad6d127a249aae8080a80cc30b1166ea4cb9b2590b",
+        "senderAddress": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "timestampMs": 1749652739650
+      },
+      {
+        "action": "remove",
+        "emoticonCode": "🍓",
+        "eventData": "msg_1749652739650_304e0eaf:🍓:remove:0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266:1749652739650",
+        "messageId": "msg_1749652739650_304e0eaf",
+        "msgHashHex": "6f48d4c7141990ee6ce608141c9d4a0b6ac821a7c781f1b262d9af09d3022a04",
+        "senderAddress": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "timestampMs": 1749652739650
+      }
+    ],
+    "encrypted": [
+      {
+        "ciphertextBase64": "3nP4XMnquk7mpaDFxNxnZA==",
+        "msgHashHex": "62a40b0ecaa574014eaf4c19c518bb596ed502b4c5e55c01e3e647e7b3f9e3a9"
+      },
+      {
+        "ciphertextBase64": "jLykKspwGTDA6abyS7HrIsSbcL6kRO4RixQVgE+VlJk=",
+        "msgHashHex": "cfb37d96881cc09c28e71882fd1db8597cb842997edd0e12ca0561ddef2b5994"
+      },
+      {
+        "ciphertextBase64": "AeHMd1L87BW8NOlkHslfgN7D7U3yQPnhvrm9X20aeh8=",
+        "msgHashHex": "5b75ba267ea223ed430e57b0aea603fbb1439c8b6123614ed4990088b4aea7ad"
+      }
+    ],
+    "plaintext": [
+      {
+        "content": "abc",
+        "msgHashHex": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      },
+      {
+        "content": "  hello \n",
+        "msgHashHex": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        "trimmedTo": "hello"
+      },
+      {
+        "content": "한글 메시지 🍓🍊",
+        "msgHashHex": "90f15b87d2781befd4a1b6a91dea008417ad8b3f2e53d5cdaa82752db72009dd"
+      }
+    ]
+  },
+  "realtimeEvents": {
+    "client": [
+      {
+        "type": "ping"
+      },
+      {
+        "roomId": "room_1749652739650_304e0eaf",
+        "type": "typing"
+      }
+    ],
+    "server": [
+      {
+        "json": {
+          "msgSerial": 42,
+          "roomId": "room_1749652739650_304e0eaf",
+          "type": "new_message"
+        },
+        "name": "new_message",
+        "replayable": true
+      },
+      {
+        "json": {
+          "type": "rooms_updated"
+        },
+        "name": "rooms_updated",
+        "replayable": true
+      },
+      {
+        "json": {
+          "roomId": "room_1749652739650_304e0eaf",
+          "type": "member_removed"
+        },
+        "name": "member_removed",
+        "replayable": true
+      },
+      {
+        "json": {
+          "roomId": "room_1749652739650_304e0eaf",
+          "type": "invitation_received"
+        },
+        "name": "invitation_received",
+        "replayable": true
+      },
+      {
+        "json": {
+          "from": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+          "roomId": "room_1749652739650_304e0eaf",
+          "type": "typing"
+        },
+        "name": "typing",
+        "replayable": false
+      },
+      {
+        "json": {
+          "fromSeq": 10,
+          "reason": "lagged",
+          "toSeq": 99,
+          "type": "resync_required"
+        },
+        "name": "resync_required",
+        "replayable": true
+      },
+      {
+        "json": {
+          "reason": "token expired",
+          "type": "session_expired"
+        },
+        "name": "session_expired",
+        "replayable": true
+      },
+      {
+        "json": {
+          "shoutId": "shout_1",
+          "type": "shout"
+        },
+        "name": "shout",
+        "replayable": false
+      },
+      {
+        "json": {
+          "type": "pong"
+        },
+        "name": "pong",
+        "replayable": false
+      }
+    ],
+    "targets": [
+      {
+        "roomId": "room_1749652739650_304e0eaf",
+        "t": "room"
+      },
+      {
+        "t": "user",
+        "wallet": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+      },
+      {
+        "except": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "roomId": "room_1749652739650_304e0eaf",
+        "t": "room_except"
+      },
+      {
+        "t": "all"
+      }
+    ]
+  },
+  "rlp": [
+    {
+      "encodedHex": "80",
+      "inputHex": "",
+      "kind": "bytes"
+    },
+    {
+      "encodedHex": "00",
+      "inputHex": "00",
+      "kind": "bytes"
+    },
+    {
+      "encodedHex": "7f",
+      "inputHex": "7f",
+      "kind": "bytes"
+    },
+    {
+      "encodedHex": "8180",
+      "inputHex": "80",
+      "kind": "bytes"
+    },
+    {
+      "encodedHex": "83646f67",
+      "inputHex": "646f67",
+      "kind": "bytes"
+    },
+    {
+      "encodedHex": "b8386161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+      "inputHex": "6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161",
+      "kind": "bytes"
+    },
+    {
+      "encodedHex": "80",
+      "kind": "uint",
+      "value": "0"
+    },
+    {
+      "encodedHex": "0f",
+      "kind": "uint",
+      "value": "15"
+    },
+    {
+      "encodedHex": "820400",
+      "kind": "uint",
+      "value": "1024"
+    },
+    {
+      "encodedHex": "c0",
+      "kind": "emptyList"
+    }
+  ],
+  "roomNames": [
+    {
+      "entropyHex": "00000000000000000000000000000000",
+      "name": "Azure Pirate 8392"
+    },
+    {
+      "entropyHex": "01010101010101010101010101010101",
+      "name": "Ivory Hornet 8562"
+    },
+    {
+      "entropyHex": "deadbeef",
+      "name": "Ancient Phoenix 7170"
+    }
+  ],
+  "slippage": {
+    "apply": [
+      {
+        "amount": "10000",
+        "amountOutMin": "9950",
+        "bps": 50
+      },
+      {
+        "amount": "10000",
+        "amountOutMin": "10000",
+        "bps": 0
+      },
+      {
+        "amount": "10000",
+        "amountOutMin": "0",
+        "bps": 10000
+      }
+    ],
+    "parsePercent": [
+      {
+        "bps": 50,
+        "input": "0.5"
+      },
+      {
+        "bps": 5000,
+        "input": "50"
+      },
+      {
+        "bps": 5000,
+        "input": "99"
+      },
+      {
+        "bps": 10,
+        "input": "0"
+      },
+      {
+        "bps": 50,
+        "input": "nonsense"
+      }
+    ]
+  },
+  "templates": {
+    "emoticonEventData": "{messageId}:{emoticonCode}:{add|remove}:{senderWalletAddress}:{timestampMs}",
+    "encryptionKeyV1Legacy": "FruitNation Encryption Key Derivation\n\nAddress: {walletAddressLowercase}\nPurpose: End-to-end encryption only",
+    "encryptionKeyV2": "FruitNation Encryption Key Derivation v2\n\nAddress: {walletAddressLowercase}\nSalt: {saltHex}\nPurpose: End-to-end encryption only",
+    "keyBinding": "FruitNation Public Key Binding\n\nAddress: {walletAddressLowercase}\nEncryption Public Key: {encPubHex}",
+    "loginChallenge": "Welcome to FruitNation!\n\nClick to sign in and accept the FruitNation Terms of Service.\n\nThis request will not trigger a blockchain transaction or cost any gas fees.\n\nWallet address:\n{walletAddressLowercase}\n\nNonce:\n{nonce64hex}",
+    "messageMacInput": "FNv2|message|{roomId}|{ivHex}|{ciphertextBase64}",
+    "roomKeyMacInput": "FNv2|roomkey|{roomId}|{ephemeralPublicKeyHex}|{ivHex}|{ciphertextBase64}",
+    "subkeyLabels": {
+      "messageEnc": "FruitNation/v2/message/enc",
+      "messageMac": "FruitNation/v2/message/mac",
+      "roomKeyEnc": "FruitNation/v2/roomkey/enc",
+      "roomKeyMac": "FruitNation/v2/roomkey/mac"
+    }
+  },
+  "transactions": [
+    {
+      "chainId": 1,
+      "dataHex": "",
+      "gasLimit": "21000",
+      "gasPriceWei": "20000000000",
+      "name": "eip155-spec-example-chain-1",
+      "nonce": "9",
+      "privateKeyHex": "0x4646464646464646464646464646464646464646464646464646464646464646",
+      "rawHex": "0xf86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83",
+      "sighashHex": "daf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53",
+      "to": "0x3535353535353535353535353535353535353535",
+      "txHashHex": "0x33469b22e9f636356c4160a87eb19df52b7412e8eac32a4a55ffe88ea8350788",
+      "valueWei": "1000000000000000000"
+    },
+    {
+      "chainId": 25,
+      "dataHex": "",
+      "gasLimit": "21000",
+      "gasPriceWei": "20000000000",
+      "name": "same-tx-cronos-mainnet-25",
+      "nonce": "9",
+      "privateKeyHex": "0x4646464646464646464646464646464646464646464646464646464646464646",
+      "rawHex": "0xf86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008056a09aec8bfe89c7bbe1fb880062bf93d304539e1810a4814c21e156cd1fc28173b6a053eae98695ead0804a3037dd6b1ed19568fb46ad1ff541b8559da2e1cc714f21",
+      "sighashHex": "fe3daf4f8204b5b418b909e1d90627655d7bc56c085b8980458a593c1bd6f08b",
+      "to": "0x3535353535353535353535353535353535353535",
+      "txHashHex": "0xdeedf9cdc1585f5d6d9083802308e9c6f619336d45f9afad571abcded4ab86c2",
+      "valueWei": "1000000000000000000"
+    },
+    {
+      "chainId": 338,
+      "dataHex": "a9059cbb000000000000000000000000fcad0b19bb29d4674531d6f115237e16afce377c00000000000000000000000000000000000000000000000000000000000f4240",
+      "gasLimit": "100000",
+      "gasPriceWei": "5000000000000",
+      "name": "erc20-transfer-cronos-testnet-338",
+      "nonce": "7",
+      "privateKeyHex": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "rawHex": "0xf8ad0786048c27395000830186a094c21223249ca28397b4b6541dffaecc539bff0c5980b844a9059cbb000000000000000000000000fcad0b19bb29d4674531d6f115237e16afce377c00000000000000000000000000000000000000000000000000000000000f42408202c8a0ca4aab973cac7b4228223e4b32d3db63cf47babd1e96a13ece00c3619b5c43eca0407f372dc78ab6d8dfc4d0e0f3bcd47d38cf204058f45ca0d9c8c149e26b5856",
+      "sighashHex": "a4e82dd20b109aca007351b279c4905a0336fb527072cffdfd26f7b3daeebc6e",
+      "to": "0xc21223249ca28397b4b6541dffaecc539bff0c59",
+      "txHashHex": "0x840363213eef3b675cc5bb1b78abc97a6ddaead69221ffc9566ad04eea41f9a5",
+      "valueWei": "0"
+    }
+  ],
+  "usernames": [
+    {
+      "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "username": "OmegaMustang0198"
+    },
+    {
+      "address": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+      "username": "AmberLion9030"
+    },
+    {
+      "address": "0x9858effd232b4033e47d90003d41ec34ecaeda94",
+      "username": "AmberEnchanter2784"
+    },
+    {
+      "address": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      "username": "AmberRunner7074"
+    }
+  ],
+  "wallet": {
+    "accounts": [
+      {
+        "address": "0x9858effd232b4033e47d90003d41ec34ecaeda94",
+        "addressChecksummed": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+        "index": 0,
+        "path": "m/44'/60'/0'/0/0",
+        "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "privateKeyHex": "0x1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727"
+      },
+      {
+        "address": "0x6fac4d18c912343bf86fa7049364dd4e424ab9c0",
+        "addressChecksummed": "0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0",
+        "index": 1,
+        "path": "m/44'/60'/0'/0/1",
+        "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "privateKeyHex": "0x9a983cb3d832fbde5ab49d692b7a8bf5b5d232479c99333d0fc8e1d21f1b55b6"
+      },
+      {
+        "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "addressChecksummed": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        "index": 0,
+        "path": "m/44'/60'/0'/0/0",
+        "phrase": "test test test test test test test test test test test junk",
+        "privateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      },
+      {
+        "address": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+        "addressChecksummed": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        "index": 1,
+        "path": "m/44'/60'/0'/0/1",
+        "phrase": "test test test test test test test test test test test junk",
+        "privateKeyHex": "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+      }
+    ],
+    "bip39Seeds": [
+      {
+        "passphrase": "",
+        "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
+      },
+      {
+        "passphrase": "",
+        "phrase": "test test test test test test test test test test test junk",
+        "seedHex": "9dfc3c64c2f8bede1533b6a79f8570e5943e0b8fd1cf77107adf7b72cef42185d564a3aee24cab43f80e3c4538087d70fc824eabbad596a23c97b6ee8322ccc0"
+      }
+    ],
+    "eip55": [
+      {
+        "checksummed": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+        "lower": "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"
+      },
+      {
+        "checksummed": "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+        "lower": "0xfb6916095ca1df60bb79ce92ce3ea74c37c5d359"
+      },
+      {
+        "checksummed": "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+        "lower": "0xdbf03b407c01e7cd3cbea99509d93f8dddc8c6fb"
+      },
+      {
+        "checksummed": "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+        "lower": "0xd1220a0cf47c7b9be7a2e6ba89f429762e7b9adb"
+      },
+      {
+        "checksummed": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        "lower": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+      },
+      {
+        "checksummed": "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+        "lower": "0xfcad0b19bb29d4674531d6f115237e16afce377c"
+      }
+    ],
+    "privateKeyImports": [
+      {
+        "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "addressChecksummed": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        "privateKeyHex": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        "publicKeyUncompressedHex": "048318535b54105d4a7aae60c08fc45f9687181b4fdfc625bd1a753fa7397fed753547f11ca8696646f2f3acb08e31016afac23e630c5d11f59f61fef57b0d2aa5"
+      },
+      {
+        "address": "0xfcad0b19bb29d4674531d6f115237e16afce377c",
+        "addressChecksummed": "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+        "privateKeyHex": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "publicKeyUncompressedHex": "044646ae5047316b4230d0086c8acec687f00b1cd9d1dc634f6cb358ac0a9a8ffffe77b4dd0a4bfb95851f3b7355c781dd60f8418fc8a65d14907aff47c903a559"
+      },
+      {
+        "address": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "addressChecksummed": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+        "privateKeyHex": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "publicKeyUncompressedHex": "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
+      }
+    ]
+  }
+}

@@ -30,3 +30,12 @@ getrandom = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+# The protocol-vector generator (tests/protocol_vectors.rs) re-creates the
+# legacy v1 ciphertexts and MACs from primitives, so it needs direct access to
+# the same crypto crates the library uses internally.
+aes.workspace = true
+cbc.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
