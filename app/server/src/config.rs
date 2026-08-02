@@ -52,6 +52,29 @@ pub struct Cli {
     #[arg(long, env = "PS_HTTP_REDIRECT_PORT")]
     pub http_redirect_port: Option<u16>,
 
+    /// Also serve HTTP/3 over QUIC, on its own UDP port.
+    ///
+    /// The two listeners run together and speak the same API, so a client can
+    /// pick either — HTTP/3 wins on lossy and mobile networks (no transport
+    /// head-of-line blocking, one round trip to first byte, and a connection
+    /// that survives Wi-Fi→cellular), and loses on a clean local link, where
+    /// TCP's kernel and NIC offload is hard to beat from userspace.
+    ///
+    /// QUIC mandates TLS, so this implies certificate material: with `--tls`
+    /// the listeners share it, and without it a self-signed certificate is
+    /// generated for the QUIC port alone.
+    #[arg(long, env = "PS_HTTP3", default_value_t = false)]
+    pub http3: bool,
+
+    /// UDP port for the HTTP/3 listener. `0` disables it. Defaults to the main
+    /// port plus two, leaving the plus-one slot to the HTTPS redirect.
+    ///
+    /// Setting it equal to the HTTPS port is valid and is the conventional
+    /// deployment — TCP and UDP port numbers are separate namespaces, and a
+    /// browser expects `Alt-Svc` to point at the same number it already knows.
+    #[arg(long, env = "PS_HTTP3_PORT")]
+    pub http3_port: Option<u16>,
+
     /// Secret used to sign JWTs. Generated and persisted on first run if unset.
     #[arg(long, env = "PS_JWT_SECRET")]
     pub jwt_secret: Option<String>,
@@ -166,11 +189,29 @@ pub struct Config {
     pub tls: Tls,
     /// Plain-HTTP port that redirects to HTTPS, when TLS is on.
     pub http_redirect_port: Option<u16>,
+    /// UDP port for the HTTP/3 listener, when one was asked for.
+    pub http3_port: Option<u16>,
 }
 
 impl Config {
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("pocketskynet.db")
+    }
+
+    /// Whether this deployment generates its own CA into `tls_dir`.
+    ///
+    /// True for self-signed HTTPS, and *also* for plain HTTP with HTTP/3 on:
+    /// QUIC mandates TLS, so the QUIC listener gets generated material even
+    /// when the TCP listener is unencrypted. Both cases have a CA worth
+    /// serving from `/ca.crt`; a supplied certificate does not, because its
+    /// issuer is already trusted and publishing an unrelated CA would be
+    /// worse than publishing nothing.
+    pub fn generates_own_ca(&self) -> bool {
+        match self.tls {
+            Tls::SelfSigned => true,
+            Tls::Supplied { .. } => false,
+            Tls::Off => self.http3_port.is_some(),
+        }
     }
 
     /// Where generated certificate material lives. Under the data directory
@@ -320,6 +361,20 @@ impl Cli {
             (true, None) => self.port.checked_add(1),
         };
 
+        // Same rule as the redirect port: `0` is an explicit "don't". The
+        // default sits at plus-two so that `--tls --http3` on the default port
+        // lays out predictably as 9099/9100/9101 rather than colliding.
+        //
+        // A port is only reserved when HTTP/3 was actually asked for; passing
+        // `--http3-port` alone is a request for HTTP/3 too, because the only
+        // reason to name that port is to serve on it.
+        let http3_port = match (self.http3, self.http3_port) {
+            (_, Some(0)) => None,
+            (_, Some(port)) => Some(port),
+            (true, None) => self.port.checked_add(2),
+            (false, None) => None,
+        };
+
         let cfg = Config {
             host: self.host,
             port: self.port,
@@ -333,6 +388,7 @@ impl Cli {
             trust_proxy: self.trust_proxy,
             tls,
             http_redirect_port,
+            http3_port,
         };
         Ok((cfg, secret))
     }
@@ -410,6 +466,8 @@ mod tests {
             port: 0,
             data_dir: dir.to_path_buf(),
             static_dir: dir.to_path_buf(),
+            http3: false,
+            http3_port: None,
             jwt_secret: None,
             jwt_ttl_hours: 1,
             cors_origin: vec![],
@@ -572,6 +630,125 @@ mod tests {
         .resolve_as(false)
         .unwrap();
         assert_eq!(cfg.http_redirect_port, None, "0 means off, not ephemeral");
+    }
+
+    // --- HTTP/3 -----------------------------------------------------------
+
+    #[test]
+    fn http3_is_off_unless_asked_for() {
+        // QUIC opens a UDP socket and generates a certificate; neither should
+        // happen because someone ran the server with no flags.
+        let dir = tempdir();
+        let (cfg, _) = cli_at(&dir).resolve_as(false).unwrap();
+        assert_eq!(cfg.http3_port, None);
+        assert!(!cfg.generates_own_ca(), "and no certificate is written");
+    }
+
+    #[test]
+    fn http3_defaults_to_two_above_the_main_port() {
+        // Plus-two, not plus-one: the HTTPS redirect already owns plus-one, so
+        // `--tls --http3` on the default port lays out as 9099/9100/9101
+        // rather than having two features collide on the same number.
+        let dir = tempdir();
+        let (cfg, _) = Cli {
+            port: 9099,
+            http3: true,
+            ..cli_at(&dir)
+        }
+        .resolve_as(false)
+        .unwrap();
+        assert_eq!(cfg.http3_port, Some(9101));
+
+        let (with_tls, _) = Cli {
+            port: 9099,
+            tls: true,
+            http3: true,
+            ..cli_at(&dir)
+        }
+        .resolve_as(false)
+        .unwrap();
+        assert_eq!(with_tls.http_redirect_port, Some(9100));
+        assert_eq!(with_tls.http3_port, Some(9101), "no collision");
+    }
+
+    #[test]
+    fn naming_the_http3_port_is_itself_a_request_for_http3() {
+        // The only reason to pass `--http3-port` is to serve on it. Requiring
+        // `--http3` as well would make the flag silently do nothing, which is
+        // the worst possible outcome for a networking option.
+        let dir = tempdir();
+        let (cfg, _) = Cli {
+            http3_port: Some(4433),
+            ..cli_at(&dir)
+        }
+        .resolve_as(false)
+        .unwrap();
+        assert_eq!(cfg.http3_port, Some(4433));
+    }
+
+    #[test]
+    fn the_http3_listener_can_be_turned_off_explicitly() {
+        let dir = tempdir();
+        let (cfg, _) = Cli {
+            http3: true,
+            http3_port: Some(0),
+            ..cli_at(&dir)
+        }
+        .resolve_as(false)
+        .unwrap();
+        assert_eq!(cfg.http3_port, None, "0 means off, not ephemeral");
+    }
+
+    #[test]
+    fn http3_may_share_the_https_port_number() {
+        // TCP and UDP port numbers are separate namespaces, and pointing
+        // Alt-Svc at the number the client already knows is the conventional
+        // deployment — so this must be allowed, not "corrected".
+        let dir = tempdir();
+        let (cfg, _) = Cli {
+            port: 9099,
+            tls: true,
+            http3: true,
+            http3_port: Some(9099),
+            ..cli_at(&dir)
+        }
+        .resolve_as(false)
+        .unwrap();
+        assert_eq!(cfg.port, 9099);
+        assert_eq!(cfg.http3_port, Some(9099));
+    }
+
+    #[test]
+    fn plain_http_with_http3_still_generates_a_ca() {
+        // QUIC has no plaintext mode, so the UDP listener needs certificate
+        // material even when the TCP one is unencrypted — and that CA has to
+        // be downloadable, or nothing can ever trust the QUIC port.
+        let dir = tempdir();
+        let (cfg, _) = Cli {
+            http3: true,
+            ..cli_at(&dir)
+        }
+        .resolve_as(false)
+        .unwrap();
+        assert!(!cfg.tls.is_on(), "the TCP listener stays plain HTTP");
+        assert!(cfg.generates_own_ca());
+    }
+
+    #[test]
+    fn a_supplied_certificate_publishes_no_ca_even_with_http3() {
+        // The operator's chain is already trusted by whatever issued it;
+        // publishing an unrelated CA would be worse than publishing nothing.
+        let dir = tempdir();
+        let (cfg, _) = Cli {
+            tls_cert: Some(dir.join("cert.pem")),
+            tls_key: Some(dir.join("key.pem")),
+            http3: true,
+            ..cli_at(&dir)
+        }
+        .resolve_as(false)
+        .unwrap();
+        assert!(cfg.http3_port.is_some());
+        assert!(!cfg.generates_own_ca());
     }
 
     #[test]

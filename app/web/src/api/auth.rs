@@ -172,6 +172,14 @@ impl Client {
         self.send(Method::GET, "/api/blockchain/info").await
     }
 
+    /// Where this server is and which transport carried this call.
+    ///
+    /// Unauthenticated: the addresses are the ones printed on startup, and the
+    /// protocol is a property of the request the caller just made.
+    pub async fn server_info(&self) -> ApiResult<crate::api::ServerInfo> {
+        self.send(Method::GET, "/api/server/info").await
+    }
+
     /// The multi-chain registry for the wallet's network switcher. The wire
     /// type is `pocketskynet_core::chain::Network` itself — server and client
     /// deserialize the same struct, so the two cannot drift.

@@ -1701,6 +1701,29 @@ span.fn-conn { cursor: default; }
   letter-spacing: 0.04em;
   color: var(--fn-fg-muted);
 }
+/* The live transport badge. Present only while the page is actually on
+   QUIC — a browser upgrades itself once it has seen `Alt-Svc`, so this
+   appearing *is* the signal. Lit rather than muted, because unlike the
+   version beside it this is a state that changed. */
+.fn-topbar__h3 {
+  flex: 0 0 auto;
+  padding: 2px var(--fn-s2);
+  border: 1px solid var(--fn-primary-line);
+  border-radius: var(--fn-r-xs);
+  background: var(--fn-primary-soft);
+  font-family: var(--fn-font-mono);
+  font-size: var(--fn-t-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--fn-primary-text);
+  cursor: pointer;
+}
+.fn-topbar__h3:hover { background: var(--fn-primary-wash); }
+.fn-topbar__h3:focus-visible {
+  outline: 2px solid var(--fn-focus);
+  outline-offset: 2px;
+}
+
 .fn-topbar__actions {
   display: flex;
   align-items: center;
@@ -4872,6 +4895,9 @@ span.fn-conn { cursor: default; }
   /* At this width the account name is already fighting for pixels; the
      version number loses that fight. */
   .fn-topbar__version { display: none; }
+  /* Kept where the version is dropped: which transport you are on is worth
+     more than which build, and it is only ever present when notable. */
+  .fn-topbar__h3 { padding: 1px 5px; }
   .fn-topbar__actions { gap: 0; }
   .fn-topbar__actions .topcoat-icon-button--quiet { min-inline-size: 30px; }
 
@@ -7714,3 +7740,138 @@ span.fn-conn { cursor: default; }
   outline: 2px solid var(--fn-focus);
   outline-offset: 2px;
 }
+
+/* ------------------------------------------------------------------ §22 --
+   Server info dialog.
+
+   Where this deployment is, and which transport is carrying this session.
+   The protocol row is the reason the panel exists: a browser upgrades itself
+   to HTTP/3 once it has seen `Alt-Svc`, silently, so the page cannot know
+   without asking the end that terminated the connection.
+
+   Addresses are monospaced and selectable — the whole point of showing them
+   is that somebody copies one into another device. */
+
+.fn-serverinfo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fn-s5);
+}
+
+.fn-serverinfo__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fn-s2);
+}
+
+.fn-serverinfo__heading {
+  margin: 0;
+  font-family: var(--fn-font-mono);
+  font-size: var(--fn-t-xs);
+  letter-spacing: var(--fn-tr-caps);
+  text-transform: uppercase;
+  color: var(--fn-fg-muted);
+}
+
+.fn-serverinfo__rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fn-s2);
+  margin: 0;
+}
+
+.fn-serverinfo__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fn-s3);
+}
+
+.fn-serverinfo__row dt {
+  font-size: var(--fn-t-sm);
+  color: var(--fn-fg-muted);
+}
+
+.fn-serverinfo__row dd {
+  display: flex;
+  align-items: center;
+  gap: var(--fn-s2);
+  margin: 0;
+  font-size: var(--fn-t-sm);
+}
+
+/* The negotiated protocol. Neutral by default and lit only for HTTP/3, so
+   the badge is reporting a fact rather than decorating every state. */
+.fn-serverinfo__badge {
+  padding: 2px var(--fn-s2);
+  border: 1px solid var(--fn-border);
+  border-radius: var(--fn-r-xs);
+  font-family: var(--fn-font-mono);
+  font-size: var(--fn-t-xs);
+  font-weight: 700;
+  color: var(--fn-fg-muted);
+}
+
+.fn-serverinfo__badge--live {
+  border-color: var(--fn-primary-line);
+  background: var(--fn-primary-soft);
+  color: var(--fn-primary-text);
+}
+
+.fn-serverinfo__note {
+  font-size: var(--fn-t-xs);
+  color: var(--fn-fg-faint);
+}
+
+.fn-serverinfo__urls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fn-s1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fn-serverinfo__url {
+  display: flex;
+  align-items: baseline;
+  gap: var(--fn-s2);
+  min-inline-size: 0;
+}
+
+.fn-serverinfo__url code {
+  font-family: var(--fn-font-mono);
+  font-size: var(--fn-t-sm);
+  color: var(--fn-fg);
+  /* Long enough to overflow on a phone; scroll the address rather than the
+     dialog, and keep it selectable so it can be copied. */
+  overflow-x: auto;
+  user-select: all;
+}
+
+/* `local` / `network` / `vpn` — how far away a client has to be. Fixed width
+   so the addresses beside them line up into a column. */
+.fn-serverinfo__reach {
+  flex: none;
+  inline-size: 4.5rem;
+  font-family: var(--fn-font-mono);
+  font-size: var(--fn-t-xs);
+  letter-spacing: var(--fn-tr-caps);
+  text-transform: uppercase;
+  color: var(--fn-fg-faint);
+}
+
+.fn-modal__hint {
+  margin: 0;
+  font-size: var(--fn-t-sm);
+  line-height: var(--fn-lh-body);
+  color: var(--fn-fg-muted);
+}
+
+/* The "why am I not on HTTP/3" link. Inline in a hint paragraph, so it reads
+   as a link without the weight of a button. */
+.fn-modal__hint a {
+  color: var(--fn-primary-text);
+  text-underline-offset: 2px;
+}
+.fn-modal__hint a:hover { text-decoration-thickness: 2px; }

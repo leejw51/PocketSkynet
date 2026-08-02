@@ -90,6 +90,12 @@ reqwest = { version = "0.12", default-features = false, features = [
 # only: that is what every "compress" menu produces, and each extra codec is
 # attack surface on a paid-but-public upload path.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+bytes = "1.12.1"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls", "ring", "log"] }
+rustls-pemfile = "2"
+http = "1"
 
 [dev-dependencies]
 # rustls, not native-tls: keeps `cargo test` from needing a system OpenSSL.
@@ -108,3 +114,8 @@ eventsource-stream = "0.2"
 # Reading back the certificate the server generated, to assert what it names.
 rcgen = { version = "0.13", features = ["x509-parser"] }
 rustls-pemfile = "2"
+quinn = "0.11"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+bytes = "1.12.1"
+http = "1"

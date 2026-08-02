@@ -32,6 +32,26 @@ pub fn shell(p: &ShellProps) -> Html {
     let store = use_store();
     let lang = store.language;
 
+    // Which transport is actually carrying this session.
+    //
+    // Asked once per mount, and only ever *displayed* when the answer is
+    // HTTP/3 — a browser upgrades itself silently once it has seen `Alt-Svc`,
+    // so the interesting event is the upgrade, and a badge that also said
+    // "HTTP/2" on every ordinary page would be noise nobody reads.
+    let on_http3 = use_state(|| false);
+    {
+        let store = store.clone();
+        let on_http3 = on_http3.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(info) = store.client.server_info().await {
+                    on_http3.set(info.is_http3());
+                }
+            });
+            || ()
+        });
+    }
+
     // Tapping your own portrait raises the spotlight — the zoomed portrait
     // with the light swarm. The copy gesture this button used to be lives on
     // inside the stage as a labelled button, which is strictly clearer than
@@ -190,6 +210,27 @@ pub fn shell(p: &ShellProps) -> Html {
                     { concat!("v", env!("CARGO_PKG_VERSION")) }
                 </span>
 
+                // Only when it is true. The badge is a fact about this
+                // connection, not a feature advertisement — on HTTP/1.1 or
+                // HTTP/2 there is nothing to say here, and the Server dialog
+                // carries the full picture either way.
+                if *on_http3 {
+                    <button
+                        type="button"
+                        class="fn-topbar__h3"
+                        title={"Connected over HTTP/3 (QUIC). Open server info."}
+                        aria-label={"Connected over HTTP/3 over QUIC. Open server info."}
+                        onclick={{
+                            let store = store.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                store.dispatch(Action::OpenModal(crate::state::Modal::ServerInfo));
+                            })
+                        }}
+                    >
+                        { "HTTP/3" }
+                    </button>
+                }
+
                 <nav class="fn-topbar__actions" aria-label={t(lang, Key::nav_account)}>
                     <button
                         type="button"
@@ -207,6 +248,24 @@ pub fn shell(p: &ShellProps) -> Html {
                         }}
                     >
                         { icons::wallet(18) }
+                    </button>
+                    // Where this server is, and which transport is carrying
+                    // this session. The second half is the reason it exists:
+                    // a browser upgrades itself to HTTP/3 silently, so the
+                    // page cannot tell without asking the server.
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet fn-topbar__server"
+                        aria-label={"Server info"}
+                        title={"Server info"}
+                        onclick={{
+                            let store = store.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                store.dispatch(Action::OpenModal(crate::state::Modal::ServerInfo));
+                            })
+                        }}
+                    >
+                        { icons::server(18) }
                     </button>
                     <button
                         type="button"

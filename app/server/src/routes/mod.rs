@@ -58,13 +58,11 @@ pub fn has_more_header() -> HeaderName {
 /// operator's own chain is already trusted by whatever issued it), so the
 /// "trust this server" affordance only appears where it can actually help.
 fn ca_certificate_path(state: &AppState) -> Option<std::path::PathBuf> {
-    match state.cfg.tls {
-        crate::config::Tls::SelfSigned => {
-            let path = state.cfg.tls_dir().join("ca.crt");
-            path.exists().then_some(path)
-        }
-        _ => None,
+    if !state.cfg.generates_own_ca() {
+        return None;
     }
+    let path = state.cfg.tls_dir().join("ca.crt");
+    path.exists().then_some(path)
 }
 
 /// Build the complete application.

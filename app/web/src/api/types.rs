@@ -401,6 +401,85 @@ pub struct BlockchainInfo {
     pub publish_price_cro: String,
 }
 
+/// One address this server answers on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerEndpoint {
+    pub url: String,
+    /// `local`, `network` or `vpn` — how far away a client has to be.
+    pub reach: String,
+}
+
+/// The addresses, grouped by transport.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerEndpoints {
+    #[serde(default)]
+    pub tcp: Vec<ServerEndpoint>,
+    #[serde(default)]
+    pub http3: Vec<ServerEndpoint>,
+}
+
+/// `GET /api/server/info` — where this server is, and how you got here.
+///
+/// The `protocol` field is the point: a browser moves to HTTP/3 on its own
+/// once it has seen `Alt-Svc`, and the page has no way to know that from the
+/// inside. Only the end that terminated the connection can say.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerInfo {
+    /// What carried *this* request: `h3`, `h2`, `http/1.1`.
+    #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
+    pub scheme: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub http3_port: Option<u16>,
+    #[serde(default)]
+    pub http3_available: bool,
+    #[serde(default)]
+    pub endpoints: ServerEndpoints,
+    #[serde(default)]
+    pub uptime: u64,
+    /// Realtime lives only on TCP — there is no WebSocket over HTTP/3.
+    #[serde(default)]
+    pub websocket_transport: String,
+    /// There is a CA at `/ca.crt` to install. Relevant to HTTP/3 specifically:
+    /// a browser will not speak QUIC to a certificate it does not genuinely
+    /// trust, and unlike TLS-over-TCP there is no click-through.
+    #[serde(default)]
+    pub ca_cert_available: bool,
+}
+
+impl ServerInfo {
+    /// Whether this page is talking QUIC right now.
+    pub fn is_http3(&self) -> bool {
+        self.protocol.starts_with("h3")
+    }
+
+    /// HTTP/3 is being served but this page is not using it.
+    ///
+    /// The interesting state, and the one that needs explaining: the panel
+    /// lists QUIC endpoints the reader is demonstrably not on.
+    pub fn http3_offered_but_unused(&self) -> bool {
+        self.http3_available && !self.is_http3()
+    }
+
+    /// The protocol in the form people recognise.
+    pub fn protocol_label(&self) -> &str {
+        match self.protocol.as_str() {
+            "h3" => "HTTP/3",
+            "h2" => "HTTP/2",
+            "http/1.1" => "HTTP/1.1",
+            "http/1.0" => "HTTP/1.0",
+            other if other.is_empty() => "unknown",
+            other => other,
+        }
+    }
+}
+
 impl BlockchainInfo {
     /// The chain id as a number, or `None` when the server did not say.
     ///

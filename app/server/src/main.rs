@@ -29,7 +29,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // and a log filter should never be able to hide it.
     println!(
         "{}",
-        pocketskynet_server::connect_banner(bound.addr, bound.scheme, bound.redirect_port)
+        pocketskynet_server::connect_banner_with_http3(
+            bound.addr,
+            bound.scheme,
+            bound.redirect_port,
+            bound.http3_port,
+        )
     );
     println!("{storage}");
 

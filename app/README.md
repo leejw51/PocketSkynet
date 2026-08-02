@@ -126,6 +126,47 @@ once stays trusted. To use a real certificate instead, pass `--tls-cert` and
 a webview meets a self-signed certificate with a hard failure and no way to
 accept it.
 
+## HTTP/3
+
+`--http3` adds a QUIC listener beside the TCP one. Both run at once and serve
+the same API, so a client can pick either:
+
+```sh
+pocketskynet --tls --http3              # https on 9099/tcp, http/3 on 9101/udp
+pocketskynet --http3 --http3-port 4433  # plain http on 9099/tcp, http/3 on 4433/udp
+```
+
+The default is the main port plus two, leaving plus-one to the HTTPS redirect.
+Setting it *equal* to the HTTPS port is valid and conventional — TCP and UDP
+port numbers are separate namespaces, and a browser expects `Alt-Svc` to point
+at the number it already knows.
+
+Clients are told about it through an `Alt-Svc: h3=":<port>"` header on the TCP
+listener. That is the only discovery mechanism there is: QUIC on a closed UDP
+port is silence, not a refusal, so nothing can find HTTP/3 by probing for it.
+
+**What it buys.** No transport head-of-line blocking (one lost packet stalls
+one request instead of every request sharing the TCP connection), one round
+trip to first byte instead of three, and connection migration — a phone moving
+Wi-Fi→cellular keeps the same connection. All three matter on a bad or mobile
+network.
+
+**What it does not.** On loopback or a clean LAN, expect HTTP/2 to match or
+beat it: TCP is offloaded to the kernel and often the NIC, while QUIC does
+congestion control and packet assembly in userspace. Both listeners run
+together precisely so this can be measured rather than assumed.
+
+**Two limits worth knowing.** QUIC has no plaintext mode, so `--http3` without
+`--tls` still generates a certificate for the UDP listener alone — download it
+from `/ca.crt`. And there is no WebSocket over HTTP/3: RFC 9220 exists but
+nothing implements it, so the QUIC listener answers an upgrade attempt with a
+plain 501 rather than hanging, and realtime stays on the TCP listener. SSE is
+an ordinary streaming body and works over both.
+
+0-RTT is deliberately off. It is the headline latency number in every HTTP/3
+benchmark, and its data is replayable by design — a bad trade on a server whose
+POSTs move CRO.
+
 ## Two ways to run it
 
 |  | `make start` | `make gui` |

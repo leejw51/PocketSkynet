@@ -45,6 +45,24 @@ TLS         ?= 1
 TLS_ON      := $(filter-out 0,$(TLS))
 TLS_FLAG    := $(if $(TLS_ON),--tls,)
 
+# HTTP/3 over QUIC, on a UDP port beside the TCP one. On by default, like TLS:
+# both listeners serve the same API, a client picks whichever it can, and the
+# phone clients this project exists for are exactly the case QUIC helps — no
+# transport head-of-line blocking, one round trip to first byte, and a
+# connection that survives Wi-Fi→cellular.
+#
+# It shares the HTTPS port number: TCP and UDP are separate namespaces, and
+# pointing `Alt-Svc` at the number the client already knows is the conventional
+# deployment. `HTTP3_PORT=…` moves it; `make start HTTP3=0` turns it off.
+#
+# Worth knowing: a client can only *use* HTTP/3 over https, because QUIC has no
+# plaintext mode. `make http` (TLS=0) therefore brings the QUIC listener up on a
+# port nothing can reach — see the README.
+HTTP3       ?= 1
+HTTP3_ON    := $(filter-out 0,$(HTTP3))
+HTTP3_PORT  ?= $(PORT)
+HTTP3_FLAG  := $(if $(HTTP3_ON),--http3 --http3-port $(HTTP3_PORT),)
+
 # The deployment settings the server compiles in (see server/build.rs). The
 # desktop app is launched by Finder with no shell to source `.env`, so these
 # have to be present at *build* time or an installed app has no payment wallet
@@ -68,7 +86,7 @@ CARGO_PROFILE_FLAG :=
 TRUNK_PROFILE_FLAG :=
 endif
 
-.PHONY: help start https http stop restart build gui package test \
+.PHONY: help start https http http3 stop restart build gui package test \
         web server tools dev \
         test-unit test-web test-integration test-wasm \
         package-installer verify fmt format fmt-check lint clean distclean assets assets-force db-reset
@@ -111,7 +129,7 @@ tools: ## Check the wasm toolchain is present
 start: build ## Run in CLI mode — the server in this terminal (HTTPS)
 	@mkdir -p $(DATA_DIR)
 	@set -a; if [ -f "$(ENV_FILE)" ]; then . "./$(ENV_FILE)"; fi; set +a; \
-	 exec $(BIN) --host $(HOST) --port $(PORT) --data-dir $(DATA_DIR) --static-dir $(WEB_DIST) $(TLS_FLAG)
+	 exec $(BIN) --host $(HOST) --port $(PORT) --data-dir $(DATA_DIR) --static-dir $(WEB_DIST) $(TLS_FLAG) $(HTTP3_FLAG)
 
 # Kept as its own target because it is the name people reach for and look up,
 # and because it should still say HTTPS out loud even now that it is what
@@ -124,6 +142,12 @@ https: ## Run over HTTPS with a self-signed certificate (same as start)
 # self-signed cert would only cost a browser warning.
 http: ## Run over plain HTTP — localhost only, no wallet sign-in from a LAN address
 	@$(MAKE) --no-print-directory start TLS=0
+
+# Kept as its own target for the same reason `https` is: it is the name people
+# reach for, and it should still say HTTP/3 out loud now that it is what
+# `start` already does.
+http3: ## Run HTTPS + HTTP/3 together (same as start)
+	@$(MAKE) --no-print-directory start TLS=1 HTTP3=1
 
 # One process owns both the HTTPS port and the redirect port beside it, so
 # stopping it on the one the operator knows about releases both.

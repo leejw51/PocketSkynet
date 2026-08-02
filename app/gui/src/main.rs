@@ -109,6 +109,11 @@ fn main() {
                 // server is meant to be reached from a phone or a tablet.
                 tls: pocketskynet_server::config::Tls::Off,
                 http_redirect_port: None,
+                // No HTTP/3 either, for the same reason and one more: the
+                // window talks to the server over loopback, where QUIC's
+                // advantages (loss recovery, connection migration) do not
+                // exist and its userspace packet handling is pure overhead.
+                http3_port: None,
             };
 
             // Persisted next to the database: regenerating it on every launch

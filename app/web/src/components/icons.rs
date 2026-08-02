@@ -46,6 +46,9 @@ icons! {
     search => html! { <><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></> };
     book => html! { <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5Z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20"/></> };
     bank => html! { <><path d="M3 9.5 12 4l9 5.5"/><path d="M4.5 10v7"/><path d="M9.2 10v7"/><path d="M14.8 10v7"/><path d="M19.5 10v7"/><path d="M3 20h18"/></> };
+    // Two stacked rack units with an activity lamp on each — the shape people
+    // read as "a server", rather than a cloud, which reads as somebody else's.
+    server => html! { <><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01"/><path d="M7 16.5h.01"/></> };
     back => html! { <><path d="M15 5 8 12l7 7"/></> };
     close => html! { <><path d="M6 6l12 12"/><path d="M18 6 6 18"/></> };
     check => html! { <><path d="m5 13 4 4L19 7"/></> };

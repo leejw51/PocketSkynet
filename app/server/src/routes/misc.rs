@@ -1,7 +1,7 @@
-//! System endpoints: liveness and chain metadata.
+//! System endpoints: liveness, chain metadata, and how to reach this server.
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, Version};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/blockchain/info", get(blockchain_info))
         .route("/networks", get(networks))
+        .route("/server/info", get(server_info))
 }
 
 /// Liveness, including a real database probe.
@@ -51,6 +52,89 @@ async fn health(State(state): State<AppState>) -> Response {
         Json(serde_json::json!({ "status": "ok", "uptime": uptime })),
     )
         .into_response()
+}
+
+/// `GET /api/server/info` — where this server is, and how you got here.
+///
+/// Exists because the transport is otherwise invisible from inside a client.
+/// A browser will quietly move to HTTP/3 once it has seen `Alt-Svc`, and the
+/// only honest way for the page to say which one it is on is to be told by the
+/// end that actually terminated the connection.
+///
+/// Unauthenticated: everything here is already discoverable by connecting —
+/// the addresses are the ones the server prints on startup, and the protocol
+/// is a property of the request the caller just made.
+async fn server_info(State(state): State<AppState>, request: axum::extract::Request) -> Response {
+    // The version of *this* request. Over the QUIC listener the router is
+    // driven directly rather than through hyper, so the extension carries what
+    // the h3 bridge recorded; over TCP it is hyper's own.
+    let protocol = match request.version() {
+        Version::HTTP_3 => "h3",
+        Version::HTTP_2 => "h2",
+        Version::HTTP_11 => "http/1.1",
+        Version::HTTP_10 => "http/1.0",
+        _ => "unknown",
+    };
+
+    let scheme = if state.cfg.tls.is_on() { "https" } else { "http" };
+    let http3_port = state.cfg.http3_port;
+
+    Json(serde_json::json!({
+        // What carried this very request.
+        "protocol": protocol,
+        // The TCP listener.
+        "scheme": scheme,
+        "port": state.cfg.port,
+        // The QUIC listener, when there is one. `null` rather than absent so a
+        // client can branch on it without a key check.
+        "http3Port": http3_port,
+        "http3Available": http3_port.is_some(),
+        // Every address this deployment answers on, per transport, so a client
+        // can show them without re-deriving the host list itself.
+        "endpoints": endpoint_json(&state),
+        "uptime": state.started.elapsed().as_secs(),
+        // Realtime lives only on TCP: there is no WebSocket over HTTP/3, and a
+        // client that assumed otherwise would wait forever for an upgrade.
+        "websocketTransport": "tcp",
+        // Whether there is a CA at `/ca.crt` to install. The client needs it
+        // here as well as on `/api/blockchain/info` because it is the answer
+        // to "HTTP/3 is offered, so why am I not on it?" — a browser will not
+        // speak QUIC to a certificate it does not genuinely trust, and unlike
+        // TLS-over-TCP there is no click-through.
+        "caCertAvailable": ca_available(&state),
+    }))
+    .into_response()
+}
+
+/// The server's addresses, grouped by transport.
+///
+/// Empty when the configured port is `0` — the desktop app's ephemeral-port
+/// fallback. The bound port is not knowable from the config, and a URL ending
+/// in `:0` would be a lie; the client falls back to its own origin, exactly as
+/// it does for `share_base`.
+fn endpoint_json(state: &AppState) -> serde_json::Value {
+    if state.cfg.port == 0 {
+        return serde_json::json!({ "tcp": [], "http3": [] });
+    }
+    let addr = std::net::SocketAddr::new(state.cfg.host, state.cfg.port);
+    let scheme = if state.cfg.tls.is_on() {
+        crate::Scheme::Https
+    } else {
+        crate::Scheme::Http
+    };
+    let tcp = crate::connect_urls(addr, scheme);
+    let quic = state
+        .cfg
+        .http3_port
+        .map(|port| crate::http3_urls(&tcp, port))
+        .unwrap_or_default();
+
+    let render = |list: &[crate::Endpoint]| -> Vec<serde_json::Value> {
+        list.iter()
+            .map(|e| serde_json::json!({ "url": e.url, "reach": e.reach.label() }))
+            .collect()
+    };
+    serde_json::json!({ "tcp": render(&tcp), "http3": render(&quic) })
 }
 
 /// Read a deployment setting: the runtime environment first, then the value
@@ -215,8 +299,12 @@ async fn blockchain_info(State(state): State<AppState>) -> Response {
 /// with `--data-dir` would otherwise be asked about the wrong path and answer
 /// confidently that there is no certificate.
 fn ca_available(state: &AppState) -> bool {
-    matches!(state.cfg.tls, crate::config::Tls::SelfSigned)
-        && state.cfg.tls_dir().join("ca.crt").exists()
+    // `generates_own_ca()` rather than a `SelfSigned` match: with `--http3`
+    // and no `--tls` the server still writes a CA, because QUIC has no
+    // plaintext mode — and `/ca.crt` already serves it. Matching only on
+    // `SelfSigned` reported "nothing to trust" for a deployment whose QUIC
+    // listener could not be reached without trusting exactly that file.
+    state.cfg.generates_own_ca() && state.cfg.tls_dir().join("ca.crt").exists()
 }
 
 /// `GET /api/networks` — the chain the wallet operates on.

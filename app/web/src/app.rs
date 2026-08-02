@@ -668,6 +668,7 @@ fn render_modal(store: &Store, on_navigate: &Callback<Route>) -> Html {
         },
         Some(Modal::Wallet) => html! { <dialogs::Wallet on_close={close} /> },
         Some(Modal::Shout) => html! { <shout::ShoutDialog on_close={close} /> },
+        Some(Modal::ServerInfo) => html! { <dialogs::ServerInfoDialog on_close={close} /> },
         Some(Modal::Assistant(id)) => html! {
             <dialogs::Assistant room_id={id} on_close={close} />
         },

@@ -41,6 +41,8 @@ pub struct TestServer {
     pub port: u16,
     /// The plain-HTTP port beside an HTTPS server, when there is one.
     pub redirect_port: Option<u16>,
+    /// The UDP port serving HTTP/3, when this server was started with one.
+    pub http3_port: Option<u16>,
     pub data_dir: PathBuf,
     pub base_url: String,
 }
@@ -82,6 +84,64 @@ impl TestServer {
             }
         }
         panic!("could not start pocketskynet over TLS after 5 attempts: {last_err}");
+    }
+
+    /// Start a server with both listeners live: plain HTTP on the TCP port,
+    /// and HTTP/3 on a UDP port of its own.
+    ///
+    /// Deliberately *without* `--tls`, because that is the configuration worth
+    /// pinning: QUIC mandates TLS, so the server has to generate certificate
+    /// material for the UDP listener even though the TCP one is unencrypted.
+    /// The two ports then answer the same API over different transports and
+    /// different trust models, which is exactly the thing that could silently
+    /// break.
+    pub async fn start_http3() -> Self {
+        Self::start_http3_with(&[]).await
+    }
+
+    /// [`start_http3`](Self::start_http3), plus extra flags — `--tls` for the
+    /// both-encrypted case.
+    pub async fn start_http3_with(extra: &[&str]) -> Self {
+        let mut last_err = String::new();
+        for _ in 0..5 {
+            let quic = free_udp_port();
+            let quic_s = quic.to_string();
+            let mut args = vec!["--http3", "--http3-port", quic_s.as_str()];
+            args.extend_from_slice(extra);
+            match Self::try_start(&args, &[]).await {
+                Ok(mut s) => {
+                    s.http3_port = Some(quic);
+                    // The CA is written during startup but `/api/health`
+                    // answering does not prove the file is flushed, and a QUIC
+                    // client has nothing to trust without it.
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while !s.ca_path().is_file() && Instant::now() < deadline {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    return s;
+                }
+                Err(e) => last_err = e,
+            }
+        }
+        panic!("could not start pocketskynet with HTTP/3 after 5 attempts: {last_err}");
+    }
+
+    /// The QUIC endpoint's address. Panics unless the server was started with
+    /// [`start_http3`](Self::start_http3).
+    pub fn http3_addr(&self) -> std::net::SocketAddr {
+        let port = self
+            .http3_port
+            .expect("this server has no HTTP/3 listener");
+        std::net::SocketAddr::from(([127, 0, 0, 1], port))
+    }
+
+    /// The CA this server generated, whichever listener needed it.
+    ///
+    /// [`ca_pem`](Self::ca_pem) is scheme-driven and returns `None` for a
+    /// plain-HTTP server; with HTTP/3 on, a plain-HTTP server has a CA all the
+    /// same, because QUIC could not have started without one.
+    pub fn generated_ca(&self) -> Vec<u8> {
+        std::fs::read(self.ca_path()).expect("the server must have written its CA")
     }
 
     pub async fn start_with(extra: &[&str], env: &[(&str, &str)]) -> Self {
@@ -161,6 +221,8 @@ impl TestServer {
             "PS_TLS_CERT",
             "PS_TLS_KEY",
             "PS_HTTP_REDIRECT_PORT",
+            "PS_HTTP3",
+            "PS_HTTP3_PORT",
             "PS_LOG",
         ] {
             cmd.env_remove(key);
@@ -193,6 +255,7 @@ impl TestServer {
             child,
             port,
             redirect_port: None,
+            http3_port: None,
             data_dir,
             base_url: format!("{scheme}://127.0.0.1:{port}"),
         };
@@ -334,6 +397,16 @@ fn free_port() -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind ephemeral port");
     let port = listener.local_addr().expect("local_addr").port();
     drop(listener);
+    port
+}
+
+/// A free UDP port. Separate from [`free_port`] on purpose: TCP and UDP port
+/// numbers live in different namespaces, so probing one says nothing about the
+/// other and a QUIC listener handed a "free" TCP port can still collide.
+fn free_udp_port() -> u16 {
+    let socket = std::net::UdpSocket::bind(("127.0.0.1", 0)).expect("bind ephemeral UDP port");
+    let port = socket.local_addr().expect("local_addr").port();
+    drop(socket);
     port
 }
 

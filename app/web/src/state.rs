@@ -119,6 +119,8 @@ pub enum Modal {
     Wallet,
     /// Compose a paid broadcast (docs/API.md §16.1).
     Shout,
+    /// Where this server is and which transport is carrying this session.
+    ServerInfo,
     /// The AI assistant, scoped to the room it will draft for.
     Assistant(RoomId),
     /// The Files drawer for one room's attachments (docs/API.md §14).

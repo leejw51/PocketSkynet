@@ -18,6 +18,7 @@ mod files;
 mod hidden;
 mod invite;
 mod rename;
+mod server;
 mod wallet;
 
 pub use admins::ManageAdmins;
@@ -29,4 +30,5 @@ pub use files::Files;
 pub use hidden::HiddenRooms;
 pub use invite::Invite;
 pub use rename::RenameRoom;
+pub use server::ServerInfoDialog;
 pub use wallet::Wallet;

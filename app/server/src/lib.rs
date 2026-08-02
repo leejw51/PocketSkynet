@@ -12,6 +12,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod http3;
 pub mod hub;
 pub mod jsonl;
 pub mod payment;
@@ -201,6 +202,27 @@ pub fn connect_urls(addr: std::net::SocketAddr, scheme: Scheme) -> Vec<Endpoint>
     urls
 }
 
+/// The same endpoints, addressed at the QUIC port.
+///
+/// Always `https://`, whatever the TCP listener is doing: QUIC has no
+/// plaintext mode, so a `http://` HTTP/3 URL would be a URL nothing can open.
+pub fn http3_urls(endpoints: &[Endpoint], port: u16) -> Vec<Endpoint> {
+    endpoints
+        .iter()
+        .filter_map(|endpoint| {
+            // Rebuilt from the host rather than string-replacing the port: a
+            // replace would also rewrite a matching digit run inside an
+            // address, and `connect_urls` only ever emits `scheme://host:port`.
+            let (_, rest) = endpoint.url.split_once("://")?;
+            let host = rest.rsplit_once(':')?.0;
+            Some(Endpoint {
+                url: format!("https://{host}:{port}"),
+                reach: endpoint.reach,
+            })
+        })
+        .collect()
+}
+
 /// The one URL to hand to another device, or `None` when the server is bound
 /// to loopback and there is nothing to hand out.
 ///
@@ -243,15 +265,63 @@ pub fn connect_banner(
     scheme: Scheme,
     redirect_port: Option<u16>,
 ) -> String {
+    connect_banner_with_http3(addr, scheme, redirect_port, None)
+}
+
+/// [`connect_banner`], plus the HTTP/3 endpoint when one is listening.
+///
+/// Separate entry point rather than a fourth argument on the original: the
+/// three-argument form is what the desktop app and a pile of tests call, and
+/// HTTP/3 is opt-in enough that most deployments have nothing to report.
+pub fn connect_banner_with_http3(
+    addr: std::net::SocketAddr,
+    scheme: Scheme,
+    redirect_port: Option<u16>,
+    http3_port: Option<u16>,
+) -> String {
     let endpoints = connect_urls(addr, scheme);
     let mut out = String::from("\n  PocketSkynet is running.\n\n");
 
+    // The TCP listener, headed so the two transports read as two lists rather
+    // than one list with a footnote.
+    out.push_str(&format!(
+        "  {} · tcp/{}\n\n",
+        match scheme {
+            Scheme::Http => "HTTP",
+            Scheme::Https => "HTTPS",
+        },
+        addr.port()
+    ));
     for endpoint in &endpoints {
         out.push_str(&format!(
             "    {:<9} {}\n",
             endpoint.reach.label(),
             endpoint.url
         ));
+    }
+
+    if let Some(port) = http3_port {
+        // The same addresses again, with the QUIC port substituted — a URL
+        // that can be copied, rather than a port number the reader has to
+        // assemble one themselves. They are `https://` whatever the TCP
+        // listener is doing, because QUIC has no plaintext mode.
+        //
+        // "udp/" is spelled out because the single most confusing thing about
+        // running both is that `lsof -i :9101` shows nothing when you forget
+        // QUIC is not TCP.
+        out.push_str(&format!("\n  HTTP/3 · QUIC · udp/{port}\n\n"));
+        for endpoint in http3_urls(&endpoints, port) {
+            out.push_str(&format!(
+                "    {:<9} {}\n",
+                endpoint.reach.label(),
+                endpoint.url
+            ));
+        }
+        out.push_str(
+            "\n    Advertised to clients as Alt-Svc, so a browser or the iOS app moves\n    \
+             there on its own. The TCP listener above still serves everything, and\n    \
+             WebSocket exists only there.\n",
+        );
     }
 
     if let Some(share) = share_url(&endpoints) {
@@ -401,8 +471,11 @@ pub struct Bound {
     pub scheme: Scheme,
     /// The plain-HTTP port that redirects here, if one came up.
     pub redirect_port: Option<u16>,
+    /// The UDP port serving HTTP/3, if one came up.
+    pub http3_port: Option<u16>,
     transport: Transport,
     redirect: Option<(std::net::TcpListener, axum::Router)>,
+    http3: Option<(http3::Http3Listener, axum::Router)>,
     router: axum::Router,
     log: Arc<JsonlLog>,
     /// Keeps the Bonjour advertisement registered for the server's lifetime.
@@ -443,6 +516,17 @@ impl Bound {
         let signalled = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
             let _ = rx.changed().await;
         };
+
+        // HTTP/3 runs beside the TCP listener, not instead of it: they serve
+        // the same router on different transports, so a client can use either
+        // and the operator can measure both.
+        if let Some((http3, router)) = self.http3 {
+            let stop = signalled(rx.clone());
+            tokio::spawn(async move {
+                http3.serve(router, stop).await;
+                tracing::info!("the HTTP/3 listener stopped");
+            });
+        }
 
         if let Some((listener, router)) = self.redirect {
             let stop = signalled(rx.clone());
@@ -642,6 +726,8 @@ pub enum BindError {
     },
     #[error(transparent)]
     Tls(#[from] tls::TlsError),
+    #[error(transparent)]
+    Http3(#[from] http3::Http3Error),
 }
 
 /// Open the stores and bind the socket, without serving yet.
@@ -657,22 +743,44 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
     // `ca` is `Some` only for the generated certificate — a supplied one is
     // already trusted by whatever issued it, and publishing an unrelated CA
     // file would be worse than publishing nothing.
-    let (tls_config, ca) = match &cfg.tls {
-        config::Tls::Off => (None, None),
+    // QUIC has no plaintext mode, so asking for HTTP/3 is asking for a
+    // certificate — even when the TCP listener is plain HTTP. In that case the
+    // material is generated for the QUIC port alone and the TCP listener stays
+    // exactly as unencrypted as it was asked to be.
+    let wants_http3 = cfg.http3_port.is_some();
+    let (tls_config, ca, pem) = match &cfg.tls {
+        config::Tls::Off if !wants_http3 => (None, None, None),
+        config::Tls::Off => {
+            let materials = tls::ensure(&cfg.tls_dir(), &tls::local_names())?;
+            (
+                None,
+                Some(materials.ca),
+                Some((materials.chain, materials.key)),
+            )
+        }
         config::Tls::SelfSigned => {
             let materials = tls::ensure(&cfg.tls_dir(), &tls::local_names())?;
             let config = tls::server_config(&materials.chain, &materials.key).await?;
-            (Some(config), Some(materials.ca))
+            (
+                Some(config),
+                Some(materials.ca),
+                Some((materials.chain, materials.key)),
+            )
         }
-        config::Tls::Supplied { cert, key } => (Some(tls::server_config(cert, key).await?), None),
+        config::Tls::Supplied { cert, key } => (
+            Some(tls::server_config(cert, key).await?),
+            None,
+            Some((cert.clone(), key.clone())),
+        ),
     };
 
     let redirect_port = cfg.http_redirect_port;
+    let http3_port = cfg.http3_port;
     let host = cfg.host;
 
     let state = AppState::build(cfg, secret)?;
     let log = state.log.clone();
-    let router = routes::build(state);
+    let base_router = routes::build(state);
 
     let (bound_addr, transport, scheme) = match tls_config {
         None => {
@@ -714,6 +822,45 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
             }
         });
 
+    // HTTP/3, on its own UDP socket. Unlike the redirect listener this is a
+    // hard failure: it was explicitly asked for, and silently serving only TCP
+    // would look exactly like a working deployment right up until someone
+    // measured it.
+    let http3 = match (http3_port, &pem) {
+        (Some(port), Some((chain, key))) => {
+            let addr = std::net::SocketAddr::new(host, port);
+            let config = http3::quic_config(chain, key)?;
+            Some(http3::Http3Listener::bind(addr, config)?)
+        }
+        // `pem` is `None` only when nothing asked for a certificate, which is
+        // the same condition as `http3_port` being `None`.
+        _ => None,
+    };
+    let http3_port = http3.as_ref().map(|l| l.addr().port());
+
+    // A client cannot discover HTTP/3 by trying it — QUIC on a closed UDP port
+    // is silence, not a refusal — so the only way it learns the port is being
+    // told over the connection it already has. URLSession and every browser
+    // upgrade on this header alone.
+    let router = match http3_port {
+        Some(port) => {
+            let value = http3::alt_svc_value(port);
+            match axum::http::HeaderValue::from_str(&value) {
+                Ok(value) => base_router.clone().layer(
+                    tower_http::set_header::SetResponseHeaderLayer::overriding(
+                        axum::http::header::ALT_SVC,
+                        value,
+                    ),
+                ),
+                Err(e) => {
+                    tracing::warn!(%value, error = %e, "could not advertise HTTP/3 via Alt-Svc");
+                    base_router.clone()
+                }
+            }
+        }
+        None => base_router.clone(),
+    };
+
     tracing::info!(
         bound = %bound_addr,
         scheme = scheme.as_str(),
@@ -739,8 +886,12 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
             .as_ref()
             .and_then(|(l, _)| l.local_addr().ok())
             .map(|a| a.port()),
+        http3_port,
         transport,
         redirect,
+        // HTTP/3 serves the router *without* the Alt-Svc layer: advertising
+        // an alternative service to a client already using it is noise.
+        http3: http3.map(|listener| (listener, base_router)),
         router,
         log,
         mdns,
@@ -829,6 +980,7 @@ mod banner_tests {
             trust_proxy: 0,
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
+            http3_port: None,
         };
 
         assert_eq!(
@@ -888,6 +1040,7 @@ mod banner_tests {
             trust_proxy: 0,
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
+            http3_port: None,
         };
         let banner = storage_banner(&cfg);
 
@@ -1002,6 +1155,7 @@ mod test_support {
             trust_proxy: 0,
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
+            http3_port: None,
         };
         let db = Db::open_temp().unwrap();
         let log = Arc::new(JsonlLog::open(dir.join("events")).unwrap());
