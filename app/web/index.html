@@ -13,8 +13,27 @@
     />
     <title>PocketSkynet</title>
 
+    <!-- The colour behind the status bar and the window chrome once installed.
+         Two values because the app follows the system scheme: `--fn-bg` in
+         each, so the chrome is continuous with the page rather than a band of
+         a different colour above it. -->
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#070a0d" media="(prefers-color-scheme: dark)" />
+
     <!-- Everything under static/ is copied verbatim into dist/static/. -->
     <link data-trunk rel="copy-dir" href="static" />
+
+    <!-- The two files that make this installable, copied to the site *root*
+         rather than under static/. The manifest could live anywhere, but a
+         service worker may only control the paths below its own URL, and this
+         one has to control `/` — so `/sw.js` it is.
+
+         `pwa/` is a directory of its own rather than part of static/ precisely
+         because copy-dir would put these under /static/, where the worker's
+         scope would be useless. -->
+    <link data-trunk rel="copy-file" href="pwa/manifest.webmanifest" />
+    <link data-trunk rel="copy-file" href="pwa/sw.js" />
+    <link rel="manifest" href="/manifest.webmanifest" />
 
     <!-- Declared explicitly so `wasm-opt -Oz` runs on release builds. The
          bundle is the largest thing on the wire and the first thing that has to
@@ -24,6 +43,20 @@
 
     <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
     <link rel="apple-touch-icon" href="/static/img/favicon-180.png" />
+
+    <!-- Safari honours only part of the manifest, and did not read it at all
+         before 16.4. "Add to Home Screen" on iOS is still driven by these and
+         by the apple-touch-icon above, so they are not redundant with the
+         manifest — on an older iPhone they are the only copy that is read.
+
+         The status bar stays `default` rather than `black-translucent`: the
+         layout already pads by `env(safe-area-inset-*)` and could take the
+         edge-to-edge treatment, but translucent pins the bar's text to white,
+         which is unreadable over the light theme. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Skynet" />
 
     <!-- Topcoat first, then our layer on top of it. Both are vendored: the app
          must work on an air-gapped LAN, so nothing is fetched from a CDN.
@@ -48,5 +81,26 @@
       <p>Loading PocketSkynet…</p>
       <noscript>PocketSkynet needs JavaScript and WebAssembly enabled.</noscript>
     </div>
+
+    <!-- Register the worker, but only where one belongs.
+         * A secure context is a hard platform requirement — on a plain-HTTP LAN
+           address `navigator.serviceWorker` is not even defined, which is one
+           more reason `make https` is the way to join from a phone.
+         * The desktop app is excluded by hand. Its window loads the embedded
+           server over loopback, so it *is* a secure context and would happily
+           install a worker — and then a cached shell inside the app would
+           outlive an app update, which is a stale build nobody would think to
+           look for. Tauri injects `__TAURI_INTERNALS__` before page scripts run.
+         Deferred to `load` so registration never competes with the WASM fetch
+         for the first paint. -->
+    <script>
+      window.addEventListener("load", function () {
+        if (!("serviceWorker" in navigator) || !window.isSecureContext) return;
+        if ("__TAURI_INTERNALS__" in window) return;
+        navigator.serviceWorker.register("/sw.js").catch(function (error) {
+          console.warn("service worker registration failed", error);
+        });
+      });
+    </script>
   </body>
 </html>

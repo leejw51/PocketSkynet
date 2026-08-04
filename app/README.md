@@ -126,6 +126,44 @@ once stays trusted. To use a real certificate instead, pass `--tls-cert` and
 a webview meets a self-signed certificate with a hard failure and no way to
 accept it.
 
+## Installing it as an app
+
+The client is a progressive web app, so a phone can keep it on the home screen
+and open it in its own window with no browser chrome — and open it *fast*,
+because the shell is already on the device:
+
+- **iOS/iPadOS** — Safari, **Share → Add to Home Screen**. It has to be Safari;
+  no other iOS browser can install.
+- **Android** — Chrome offers **Install app** in the menu, or a prompt.
+- **Desktop** — Chrome and Edge show an install button in the address bar.
+
+This needs a **secure context**, which means `make https` (or a real
+certificate). On a plain-HTTP LAN address the browser does not define
+`navigator.serviceWorker` at all, so there is nothing to install — the same
+reason the section above exists. Loopback counts as secure, so a desktop
+install from `http://127.0.0.1:9099` works.
+
+What is cached is the shell and only the shell: `index.html`, the WASM bundle,
+the stylesheet, the fonts and the imagery it has used. **No message, no room
+key and no API response is ever written to Cache Storage** — the same rule the
+client already follows in memory (see *Storage*). Launched with the server
+unreachable, the app paints and routes; it just has nothing to show in it.
+
+Redeploys are handled without a cache to bust:
+
+- the document is fetched **network-first**, so a rebuilt client is picked up on
+  the next launch rather than the one after it;
+- content-hashed bundles are served from the cache with no request at all,
+  because a changed file is a changed URL;
+- when the shell does change, the hashed files it no longer names are deleted —
+  otherwise every redeploy would leave another 2.5 MB WASM bundle behind
+  forever.
+
+The worker is `web/pwa/sw.js`, copied to `/sw.js` because a worker can only
+control paths below its own URL. The desktop app deliberately does not register
+one: its window is a secure context on loopback and would happily install a
+worker, and a shell cached inside the app would then outlive an app update.
+
 ## HTTP/3
 
 `--http3` adds a QUIC listener beside the TCP one. Both run at once and serve
@@ -196,6 +234,7 @@ PocketSkynet/
 ├── gui/                  # pocketskynet-gui — Tauri desktop app, embeds the server
 ├── web/                  # pocketskynet-web — Yew + WebAssembly
 │   ├── index.html
+│   ├── pwa/              #   manifest + service worker, copied to the site root
 │   └── static/           #   app.css, vendored Topcoat reset, generated imagery
 ├── docs/                 # API.md, CRYPTO.md, REALTIME.md, DESIGN.md
 ├── scripts/
@@ -285,6 +324,9 @@ Four things get it there, and each is load-bearing:
 - **`Cache-Control: immutable`** for content-hashed bundles, `no-cache` for
   stable URLs like `index.html` and `app.css` — so a redeploy is picked up
   immediately while the bundle is never re-fetched.
+- **A service worker** for every load after the first: the bundle is already on
+  the device, so a home-screen launch paints without waiting for 452 KB — and
+  paints at all with no server reachable. See *Installing it as an app*.
 - **A `Link:` preload hint** on the HTML document, so the WASM fetch starts in
   parallel with the JS instead of waiting a round trip for it. The server emits
   this rather than the bundler, because the filename is content-hashed and only

@@ -14,7 +14,7 @@ public_url = "/"
 # the content-hashed filename at runtime. See `server/src/routes/mod.rs`.
 
 [watch]
-watch = ["src", "index.html", "static", "../core/src"]
+watch = ["src", "index.html", "static", "pwa", "../core/src"]
 ignore = ["dist"]
 
 [serve]

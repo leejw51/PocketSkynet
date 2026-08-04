@@ -15,6 +15,9 @@ plaintext messages or symmetric keys.
 - **AI assistant** — Grok, OpenAI, Anthropic and Gemini behind one dialog:
   draft, reply-in-context, and image generation. Bring your own keys; they
   stay in your browser.
+- **Installable** — the web client is a PWA: add it to a phone's home screen and
+  it opens in its own window, from a cached shell, even with the server down.
+  Nothing but the shell is cached — never a message, a key or an API response.
 
 Built as an axum + SQLite server, a Yew/WebAssembly web client, and a Tauri
 desktop app, sharing one `core` crate for wallet, EIP-191, and E2EE crypto.
