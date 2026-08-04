@@ -44,7 +44,13 @@ macro_rules! icons {
 icons! {
     plus => html! { <><path d="M12 5v14"/><path d="M5 12h14"/></> };
     search => html! { <><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></> };
-    book => html! { <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5Z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20"/></> };
+    // An open book — two pages and a spine. The closed cover this replaced was
+    // a rounded rectangle whose only interior stroke (the shelf lip) landed on
+    // its own bottom edge, so at 18px it merged into a blank square and people
+    // could not find the Knowledge screen behind it. The curved page edges and
+    // the centre spine keep it clear of `columns`, the other two-part glyph in
+    // the same row: hard rectangles with a gap, against soft lobes with a line.
+    book => html! { <><path d="M12 7.5v11.9"/><path d="M12 7.5c-1.9-1.7-4.4-2.4-7.5-2.2v11.9c3.1-.2 5.6.5 7.5 2.2"/><path d="M12 7.5c1.9-1.7 4.4-2.4 7.5-2.2v11.9c-3.1-.2-5.6.5-7.5 2.2"/></> };
     bank => html! { <><path d="M3 9.5 12 4l9 5.5"/><path d="M4.5 10v7"/><path d="M9.2 10v7"/><path d="M14.8 10v7"/><path d="M19.5 10v7"/><path d="M3 20h18"/></> };
     // Two stacked rack units with an activity lamp on each — the shape people
     // read as "a server", rather than a cloud, which reads as somebody else's.

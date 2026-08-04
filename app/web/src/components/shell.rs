@@ -256,6 +256,55 @@ pub fn shell(p: &ShellProps) -> Html {
                     >
                         { icons::wallet(18) }
                     </button>
+                    // Destinations first — Wallet, Knowledge, Bank, Publish,
+                    // Operator — then the modals and the appearance toggles.
+                    // A row that interleaves "go somewhere" with "change how
+                    // this looks" makes people read all fourteen glyphs to
+                    // find one; grouped, they only read the half they want.
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet"
+                        aria-label={t(lang, Key::nav_knowledge)}
+                        title={t(lang, Key::nav_knowledge)}
+                        aria-current={(p.route.nav_key() == "knowledge").then_some("page")}
+                        onclick={go(Route::Knowledge, p.on_navigate.clone())}
+                    >
+                        { icons::book(18) }
+                    </button>
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet"
+                        aria-label={t(lang, Key::menu_bank)}
+                        title={t(lang, Key::menu_bank)}
+                        aria-current={(p.route.nav_key() == "bank").then_some("page")}
+                        onclick={go(Route::Bank, p.on_navigate.clone())}
+                    >
+                        { icons::bank(18) }
+                    </button>
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet"
+                        aria-label={t(lang, Key::nav_publish)}
+                        title={t(lang, Key::nav_publish)}
+                        aria-current={(p.route.nav_key() == "publish").then_some("page")}
+                        onclick={go(Route::Publish, p.on_navigate.clone())}
+                    >
+                        { icons::globe(18) }
+                    </button>
+                    // The operator's file. Also in the bottom nav, which the
+                    // two-pane tier hides — without this button the whole
+                    // section is unreachable on anything wider than a phone.
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet"
+                        aria-label={t(lang, Key::nav_operator)}
+                        title={t(lang, Key::nav_operator)}
+                        aria-current={(p.route.nav_key() == "operator").then_some("page")}
+                        onclick={go(Route::Operator, p.on_navigate.clone())}
+                    >
+                        { icons::crown(18) }
+                        <Unread count={orders_left} />
+                    </button>
                     // Where this server is, and which transport is carrying
                     // this session. The second half is the reason it exists:
                     // a browser upgrades itself to HTTP/3 silently, so the
@@ -287,16 +336,6 @@ pub fn shell(p: &ShellProps) -> Html {
                         }}
                     >
                         { icons::megaphone(18) }
-                    </button>
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet"
-                        aria-label={t(lang, Key::menu_bank)}
-                        title={t(lang, Key::menu_bank)}
-                        aria-current={(p.route.nav_key() == "bank").then_some("page")}
-                        onclick={go(Route::Bank, p.on_navigate.clone())}
-                    >
-                        { icons::bank(18) }
                     </button>
                     // Hidden below the two-pane breakpoint by its class: a
                     // phone has one column whichever way this points, and a
@@ -346,24 +385,6 @@ pub fn shell(p: &ShellProps) -> Html {
                         onclick={cycle_font_scale}
                     >
                         { icons::type_size(18) }
-                    </button>
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet"
-                        aria-label={t(lang, Key::nav_knowledge)}
-                        title={t(lang, Key::nav_knowledge)}
-                        onclick={go(Route::Knowledge, p.on_navigate.clone())}
-                    >
-                        { icons::book(18) }
-                    </button>
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet"
-                        aria-label={t(lang, Key::nav_publish)}
-                        title={t(lang, Key::nav_publish)}
-                        onclick={go(Route::Publish, p.on_navigate.clone())}
-                    >
-                        { icons::globe(18) }
                     </button>
                     <button
                         type="button"

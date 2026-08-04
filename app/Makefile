@@ -6,6 +6,7 @@
 #   make http     Plain HTTP — localhost only; a LAN address cannot sign in
 #   make stop     Stop a running server
 #   make restart  Stop it, rebuild, and start it again
+#   make refresh  Rebuild just the web UI — no server restart needed
 #   make build    Release build: core, server, and the WASM client
 #   make gui      Run the desktop app
 #   make package  Bundle the desktop app as an installer
@@ -86,7 +87,7 @@ CARGO_PROFILE_FLAG :=
 TRUNK_PROFILE_FLAG :=
 endif
 
-.PHONY: help start https http http3 stop restart build gui package test \
+.PHONY: help start https http http3 stop restart refresh build gui package test \
         web server tools dev \
         test-unit test-web test-integration test-wasm \
         package-installer verify fmt format fmt-check lint clean distclean assets assets-force db-reset
@@ -111,6 +112,21 @@ build: web server ## Build everything in release mode
 web: tools ## Compile the Yew client to WebAssembly into web/dist
 	@echo "==> web client (wasm32, $(PROFILE))"
 	cd web && $(TRUNK) build $(TRUNK_PROFILE_FLAG)
+
+# `web` under the name people reach for after changing the UI. It is a separate
+# target because the instinct after a client-side edit is `make restart`, which
+# stops the server, rebuilds the Rust binary too, and starts it again — none of
+# which a changed component needs. The server serves the client straight out of
+# `web/dist` as a static directory, so replacing the bundle is the whole job and
+# an already-running server hands out the new one on the next request.
+#
+# Reloading the tab is enough to see it, and the service worker does not get in
+# the way: `web/pwa/sw.js` serves the document network-first, and every asset it
+# does answer from cache is content-hashed, so a new build is a new URL.
+refresh: web ## Rebuild the web UI — reload the browser to pick it up
+	@echo ""
+	@echo "  ✓ $(WEB_DIST) rebuilt — reload the page"
+	@echo ""
 
 server: ## Compile the server binary
 	@echo "==> server ($(PROFILE))"
