@@ -599,11 +599,15 @@ pub fn save_as(_url: &str, _filename: &str) {}
 
 /// A copy-to-clipboard helper.
 ///
-/// Falls back silently when the Clipboard API is unavailable (insecure origin,
-/// or an older engine) — the caller shows a toast either way, and a failed copy
-/// is not worth an error dialog.
+/// Async because the honest answer is: `writeText` returns a promise, and
+/// whether the write was permitted is not known until it settles. This used to
+/// fire that promise, discard it and return `true` — so a browser that denied
+/// clipboard access (no permission, an unfocused document, Safari's stricter
+/// gesture rules) still reported a successful copy. On the login screen that
+/// was the difference between "your recovery phrase is on the clipboard" and
+/// an account nobody can ever get back into.
 #[cfg(target_arch = "wasm32")]
-pub fn copy_to_clipboard(text: &str) -> bool {
+pub async fn copy_to_clipboard(text: &str) -> bool {
     let Some(win) = web_sys::window() else {
         return false;
     };
@@ -623,12 +627,36 @@ pub fn copy_to_clipboard(text: &str) -> bool {
         .map(|v| !v.is_undefined() && !v.is_null())
         .unwrap_or(false);
 
-    if has_async_api {
-        let _ = win.navigator().clipboard().write_text(text);
+    if !has_async_api {
+        // Nothing is awaited on this path, so the legacy copy still runs inside
+        // the click's own turn — which it requires.
+        return legacy_copy(&win, text);
+    }
+
+    let promise = win.navigator().clipboard().write_text(text);
+    if wasm_bindgen_futures::JsFuture::from(promise).await.is_ok() {
         return true;
     }
 
+    // Denied. The legacy path wants a live user gesture and we have just
+    // awaited past it, so this is best effort — but it either copies or
+    // reports that it did not, which is the whole point.
     legacy_copy(&win, text)
+}
+
+/// Copy `text`, then hand the outcome — the real one — to `done`.
+///
+/// The shape every caller wants: they are inside a click handler, not an async
+/// context, and they need to know whether it worked.
+#[cfg(target_arch = "wasm32")]
+pub fn copy_then(text: &str, done: impl FnOnce(bool) + 'static) {
+    let text = text.to_owned();
+    wasm_bindgen_futures::spawn_local(async move { done(copy_to_clipboard(&text).await) });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn copy_then(_text: &str, done: impl FnOnce(bool) + 'static) {
+    done(false);
 }
 
 /// `document.execCommand("copy")` over a temporary, off-screen textarea.
@@ -672,7 +700,7 @@ fn legacy_copy(win: &web_sys::Window, text: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn copy_to_clipboard(_text: &str) -> bool {
+pub async fn copy_to_clipboard(_text: &str) -> bool {
     false
 }
 
@@ -686,16 +714,20 @@ pub fn copy_with_toast(store: &crate::state::Store, text: &str, title: impl Into
     if text.is_empty() {
         return;
     }
-    if copy_to_clipboard(text) {
-        super::toast::success(store, title.into());
-    } else {
-        let lang = store.language;
-        super::toast::error(
-            store,
-            t(lang, Key::couldnt_copy),
-            Some(t(lang, Key::clipboard_blocked).into()),
-        );
-    }
+    let store = store.clone();
+    let title = title.into();
+    copy_then(text, move |ok| {
+        if ok {
+            super::toast::success(&store, title);
+        } else {
+            let lang = store.language;
+            super::toast::error(
+                &store,
+                t(lang, Key::couldnt_copy),
+                Some(t(lang, Key::clipboard_blocked).into()),
+            );
+        }
+    });
 }
 
 /// True when a click landed on — or inside — something that answers clicks by

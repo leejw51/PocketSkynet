@@ -35,15 +35,18 @@ pub fn settings(p: &SettingsProps) -> Html {
         let store = store.clone();
         let address = address.clone();
         Callback::from(move |_: MouseEvent| {
-            if super::common::copy_to_clipboard(&address.to_checksummed()) {
-                toast::success(&store, t(lang, Key::address_copied));
-            } else {
-                toast::error(
-                    &store,
-                    t(lang, Key::couldnt_copy),
-                    Some(t(lang, Key::clipboard_blocked).into()),
-                );
-            }
+            let store = store.clone();
+            super::common::copy_then(&address.to_checksummed(), move |ok| {
+                if ok {
+                    toast::success(&store, t(lang, Key::address_copied));
+                } else {
+                    toast::error(
+                        &store,
+                        t(lang, Key::couldnt_copy),
+                        Some(t(lang, Key::clipboard_blocked).into()),
+                    );
+                }
+            });
         })
     };
 
@@ -53,15 +56,18 @@ pub fn settings(p: &SettingsProps) -> Html {
 
     let copy_phrase = |phrase: String, store: crate::state::Store| {
         Callback::from(move |_: MouseEvent| {
-            if super::common::copy_to_clipboard(&phrase) {
-                toast::success(&store, t(lang, Key::phrase_copied));
-            } else {
-                toast::error(
-                    &store,
-                    t(lang, Key::couldnt_copy),
-                    Some(t(lang, Key::clipboard_blocked).into()),
-                );
-            }
+            let store = store.clone();
+            super::common::copy_then(&phrase, move |ok| {
+                if ok {
+                    toast::success(&store, t(lang, Key::phrase_copied));
+                } else {
+                    toast::error(
+                        &store,
+                        t(lang, Key::couldnt_copy),
+                        Some(t(lang, Key::clipboard_blocked).into()),
+                    );
+                }
+            });
         })
     };
 

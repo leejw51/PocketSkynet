@@ -285,9 +285,7 @@ pub fn spotlight_layer() -> Html {
             // The stage stays up — the scrim's close handler must not see
             // this click.
             e.stop_propagation();
-            if super::common::copy_to_clipboard(&value) {
-                toast::success(&store, t(store.language, Key::address_copied));
-            }
+            super::common::copy_with_toast(&store, &value, t(store.language, Key::address_copied));
         })
     });
 

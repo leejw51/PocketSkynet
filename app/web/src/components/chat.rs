@@ -161,15 +161,18 @@ pub fn chat(p: &ChatProps) -> Html {
             if text.is_empty() {
                 return;
             }
-            if super::common::copy_to_clipboard(&text) {
-                toast::success(&store, t(lang, Key::copied));
-            } else {
-                toast::error(
-                    &store,
-                    t(lang, Key::couldnt_copy),
-                    Some(t(lang, Key::clipboard_blocked).into()),
-                );
-            }
+            let store = store.clone();
+            super::common::copy_then(&text, move |ok| {
+                if ok {
+                    toast::success(&store, t(lang, Key::copied));
+                } else {
+                    toast::error(
+                        &store,
+                        t(lang, Key::couldnt_copy),
+                        Some(t(lang, Key::clipboard_blocked).into()),
+                    );
+                }
+            });
         })
     };
 
