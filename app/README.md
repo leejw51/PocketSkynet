@@ -159,6 +159,31 @@ Redeploys are handled without a cache to bust:
   otherwise every redeploy would leave another 2.5 MB WASM bundle behind
   forever.
 
+The installed tile is the **native iOS app's icon** — the same 1024px artwork in
+`ios/App/Resources/Assets.xcassets/AppIcon.appiconset/appicon.png` — so an
+installed web app and the App Store one are the same thing on the home screen.
+It is checked in at the sizes each platform asks for, regenerated with:
+
+```bash
+SRC=../../ios/App/Resources/Assets.xcassets/AppIcon.appiconset/appicon.png
+cd web/static/img
+# iOS home screen, and the manifest's "any" icons — the art untouched, because
+# it is drawn for a rounded-rect crop and already carries its own margin.
+for s in 180 192 512; do
+  magick "$SRC" -resize ${s}x${s} -strip -define png:compression-level=9 icon-$s.png
+done
+# The manifest's "maskable" icons. Android crops to a circle inside the middle
+# 80%, which cuts the orbital rings clean off the full-bleed art, so these sit
+# the icon at 86% on its own background gradient. The added margin is invisible
+# — the gradient is sampled from the artwork's own corners.
+for s in 192 512; do
+  magick -size ${s}x${s} gradient:'srgb(5,60,72)-srgb(2,15,18)' \
+    \( "$SRC" -resize $((s * 86 / 100))x$((s * 86 / 100)) \) \
+    -gravity center -composite -depth 8 -strip \
+    -define png:compression-level=9 icon-maskable-$s.png
+done
+```
+
 The worker is `web/pwa/sw.js`, copied to `/sw.js` because a worker can only
 control paths below its own URL. The desktop app deliberately does not register
 one: its window is a secure context on loopback and would happily install a

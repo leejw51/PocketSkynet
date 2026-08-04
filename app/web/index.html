@@ -42,7 +42,12 @@
     <link data-trunk rel="rust" data-wasm-opt="z" />
 
     <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
-    <link rel="apple-touch-icon" href="/static/img/favicon-180.png" />
+    <!-- The home-screen icon on iOS, and the same artwork the native iOS app
+         ships (`ios/App/Resources/Assets.xcassets/AppIcon.appiconset`), so an
+         installed web app and the native one are the same tile. Unmasked on
+         purpose: the art is drawn for iOS's rounded-rect crop and already
+         carries its own margin. -->
+    <link rel="apple-touch-icon" href="/static/img/icon-180.png" />
 
     <!-- Safari honours only part of the manifest, and did not read it at all
          before 16.4. "Add to Home Screen" on iOS is still driven by these and

@@ -34,9 +34,13 @@ const CACHES = [SHELL_CACHE, ASSET_CACHE];
 ///
 /// The typefaces are reached from `@font-face` inside the stylesheet, and the
 /// manifest icons from the manifest, so neither appears in the HTML the asset
-/// list is read out of. They are 20 KB and two PNGs together, and without them
-/// a first offline launch renders in a fallback serif and cannot show its own
-/// install icon.
+/// list is read out of. Without the fonts a first offline launch renders in a
+/// fallback serif; without an icon the install prompt has nothing to show.
+///
+/// Only the 192s: the 512s are four times the bytes and are wanted in exactly
+/// one place, the install prompt, which is a thing that happens online. Once
+/// installed, the launcher draws from the copy the OS took at install time and
+/// never asks for this cache at all.
 ///
 /// The line is drawn here on purpose: `static/img/` is 26 MB of generated
 /// artwork, and precaching it would turn a 3 MB install into a download nobody
@@ -45,7 +49,7 @@ const ALWAYS = [
   '/static/fonts/chakra-petch-600-latin.woff2',
   '/static/fonts/chakra-petch-700-latin.woff2',
   '/static/img/icon-192.png',
-  '/static/img/favicon-512.png',
+  '/static/img/icon-maskable-192.png',
 ];
 
 /// Paths that must always reach the server.
