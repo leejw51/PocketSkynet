@@ -150,6 +150,30 @@ impl Client {
         let _: serde_json::Value = self.send(method, path).await?;
         Ok(())
     }
+
+    /// Whether *this* server is answering.
+    ///
+    /// The distinction from `navigator.onLine` is the whole point. That flag
+    /// reports whether the machine has a network route at all, which says
+    /// nothing about a server on loopback, on the LAN, or on a mesh VPN — all
+    /// three keep working with the Wi-Fi off, and all three are how this app is
+    /// normally reached. Trusting the browser's flag locks people out of a
+    /// server that is sitting there answering requests.
+    ///
+    /// `/api/health` is the right probe: it is exempt from the rate limiter, so
+    /// polling it cannot lock the caller out, and it probes the database rather
+    /// than only proving the HTTP stack is up.
+    ///
+    /// Any completed response counts, including a 5xx. This asks "is there a
+    /// server on the other end", not "is it healthy" — a server returning 500
+    /// is one whose errors the user should see, not one to hide behind a dead
+    /// button.
+    pub async fn reachable(&self) -> bool {
+        let Ok(req) = self.build(Method::GET, "/api/health").build() else {
+            return false;
+        };
+        req.send().await.is_ok()
+    }
 }
 
 /// Turn a `gloo` response into `Result<T, ApiError>`.

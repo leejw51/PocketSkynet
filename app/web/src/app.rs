@@ -140,28 +140,83 @@ fn root() -> Html {
         // network flap after logging in would 401 and sign the user out.
         use_effect_with(store.auth.token().map(str::to_owned), move |_| {
             let window = web_sys::window().expect("a browser window");
-            let online = window.navigator().on_line();
-            store.dispatch(Action::SetOnline(online));
+
+            // `navigator.onLine` is not the question. It reports whether the
+            // machine has a network route, and this server is routinely on
+            // loopback, on the LAN, or on a mesh VPN — every one of which
+            // answers with the Wi-Fi off, when that flag reads `false`. Asking
+            // the server directly is the only signal that means what the rest
+            // of the app assumes `online` means.
+            //
+            // The browser's events are kept, demoted to hints: they say
+            // "something about the network just changed, look again" rather
+            // than what the answer is.
+
+            // What the store was last told. Read back from `store` instead and
+            // it would be whatever this render captured — the effect runs once,
+            // so that value never updates and every probe would look like a
+            // change.
+            let last_up = Rc::new(std::cell::Cell::new(true));
+
+            let probe = {
+                let store = store.clone();
+                let last_up = last_up.clone();
+                move |announce: bool| {
+                    let store = store.clone();
+                    let last_up = last_up.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let up = store.client.reachable().await;
+                        // Only a transition is worth acting on: no re-toasting
+                        // and no re-syncing while the answer stays the same.
+                        if up == last_up.get() {
+                            return;
+                        }
+                        last_up.set(up);
+                        store.dispatch(Action::SetOnline(up));
+                        if up {
+                            store.dispatch(Action::SetConn(ConnStatus::Syncing));
+                            if announce {
+                                toast::info(&store, t(store.language, Key::back_online));
+                            }
+                            wasm_bindgen_futures::spawn_local(actions::refresh_all(store.clone()));
+                        }
+                    });
+                }
+            };
+
+            // The store starts `online: true` so the first paint is usable; this
+            // corrects it if the server really is not there. Nothing to announce
+            // yet — nobody has seen a connected state to be told they lost.
+            probe(false);
 
             let up = {
-                let store = store.clone();
-                gloo_events::EventListener::new(&window, "online", move |_| {
-                    store.dispatch(Action::SetOnline(true));
-                    store.dispatch(Action::SetConn(ConnStatus::Syncing));
-                    toast::info(&store, t(store.language, Key::back_online));
-                    let store = store.clone();
-                    wasm_bindgen_futures::spawn_local(actions::refresh_all(store));
-                })
+                let probe = probe.clone();
+                gloo_events::EventListener::new(&window, "online", move |_| probe(true))
             };
             let down = {
-                let store = store.clone();
-                gloo_events::EventListener::new(&window, "offline", move |_| {
-                    store.dispatch(Action::SetOnline(false));
-                })
+                let probe = probe.clone();
+                gloo_events::EventListener::new(&window, "offline", move |_| probe(true))
             };
+
+            // Coming back has no event to wait for. A slept laptop, a restarted
+            // server and a dropped VPN all look identical from here and none of
+            // them fire `online`, so without a retry the app would sit in a
+            // state it can never leave — which is the dead-button failure this
+            // whole effect exists to avoid. Only while down: once the server
+            // answers, this stops asking.
+            let poll = gloo_timers::callback::Interval::new(5_000, {
+                let last_up = last_up.clone();
+                move || {
+                    if !last_up.get() {
+                        probe(true);
+                    }
+                }
+            });
+
             move || {
                 drop(up);
                 drop(down);
+                drop(poll);
             }
         });
     }
