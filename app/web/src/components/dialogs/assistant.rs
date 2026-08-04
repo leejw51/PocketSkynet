@@ -353,9 +353,11 @@ pub fn assistant(p: &AssistantProps) -> Html {
                                     let store = store.clone();
                                     let draft = draft.clone();
                                     Callback::from(move |_: MouseEvent| {
-                                        if super::super::common::copy_to_clipboard(&draft) {
-                                            toast::success(&store, t(lang, Key::copied));
-                                        }
+                                        super::super::common::copy_with_toast(
+                                            &store,
+                                            &draft,
+                                            t(lang, Key::copied),
+                                        );
                                     })
                                 }}
                             >
