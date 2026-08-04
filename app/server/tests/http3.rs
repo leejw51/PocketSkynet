@@ -35,6 +35,10 @@ struct H3Client {
 
 struct H3Response {
     status: http::StatusCode,
+    /// Captured so a failing assertion can be diagnosed from the response
+    /// itself; no test reads it, and taking it is how we know the header
+    /// frame parsed at all.
+    #[allow(dead_code)]
     headers: http::HeaderMap,
     body: Vec<u8>,
 }
@@ -335,7 +339,7 @@ async fn a_room_created_over_http3_is_visible_over_tcp() {
     let created = client
         .post(
             "/api/rooms",
-            Some(&user.api.token()),
+            Some(user.api.token()),
             json!({ "name": "quic-room", "encrypted": false }),
         )
         .await;

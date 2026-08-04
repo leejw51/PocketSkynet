@@ -1367,9 +1367,10 @@ input.topcoat-checkbox__input:checked {
 }
 .fn-addr--full { word-break: break-all; white-space: normal; }
 input.fn-mono, textarea.fn-mono { color: var(--fn-fg); }
-button.fn-addr {
-  background: none;
-  border: 0;
+/* A copyable address. A span with `role="button"` rather than a real button,
+   so it stays part of the line it sits in — see common.rs. Everything a button
+   would have given it is put back by hand: the pointer, the ring, the states. */
+.fn-addr--copy {
   padding: 2px 4px;
   margin: -2px -4px;
   border-radius: var(--fn-r-ctl);
@@ -1377,8 +1378,23 @@ button.fn-addr {
   transition: background-color var(--fn-dur-fast) var(--fn-ease),
               color var(--fn-dur-fast) var(--fn-ease);
 }
-button.fn-addr:hover { background: var(--fn-surface-3); color: var(--fn-fg); }
-button.fn-addr[data-copied="true"] { color: var(--fn-encrypt-text); }
+.fn-addr--copy:hover { background: var(--fn-surface-3); color: var(--fn-fg); }
+.fn-addr--copy:focus-visible {
+  outline: 2px solid var(--fn-focus);
+  outline-offset: 1px;
+}
+/* The copied state is a colour, not a swapped label. Replacing the address
+   with the word "Copied" moves the text out from under the pointer and takes
+   away the thing the user was just looking at. */
+.fn-addr--copy[data-copied="true"] {
+  color: var(--fn-encrypt-text);
+  background: var(--fn-encrypt-soft);
+}
+/* A members row is a copy target in its own right (members.rs). The pointer
+   says so; the address inside it is the named, focusable version for everyone
+   not using one. */
+.fn-person--tap { cursor: pointer; }
+.fn-person--tap:active { background: var(--fn-surface-4); }
 
 /* --- Badges & pills ------------------------------------------------------
    Every badge is the same neutral chip. Only the *ink* carries the meaning,
@@ -2070,6 +2086,73 @@ span.fn-conn { cursor: default; }
 
 /* Rotation-pending: the room can be read but not posted to. */
 .fn-room-row.is-rotation-pending .fn-lock { color: var(--fn-crown); }
+
+/* --- Swipe to remove ------------------------------------------------------
+   The drawer is not positioned over the row and revealed by opacity; it sits
+   *after* it in one flex track that slides. That way the reveal is a single
+   compositor transform with nothing painted underneath it, and the row needs
+   no opaque background of its own to hide the buttons at rest — they are
+   genuinely outside the clip.
+
+   `touch-action: pan-y` is what makes the gesture cohabit with the scroller:
+   the browser keeps vertical panning, and horizontal movement is left for the
+   pointer handlers to claim. */
+.fn-swipe {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--fn-r-card);
+  touch-action: pan-y;
+  /* A drag with a mouse must not paint a text selection across the row, and a
+     long press on iOS must not raise the callout. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+.fn-swipe__track {
+  display: flex;
+  align-items: stretch;
+  inline-size: 100%;
+  will-change: transform;
+  transition: transform var(--fn-dur-snappy) var(--fn-spring-snappy);
+}
+/* While a finger is on it there is nothing to animate towards: the row is
+   already where the thumb put it. */
+.fn-swipe__track[data-dragging="true"] { transition: none; }
+.fn-swipe__track > .fn-room-row { flex: 0 0 100%; }
+.fn-swipe__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  /* Rounded on the trailing side only: the leading edge is a cut, not a gap —
+     the buttons are the underside of the row, not a second card. */
+  border-start-end-radius: var(--fn-r-card);
+  border-end-end-radius: var(--fn-r-card);
+  overflow: hidden;
+}
+.fn-swipe__action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  inline-size: 76px;
+  padding: 0 var(--fn-s2);
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--fn-t-xs);
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: center;
+  background: var(--fn-surface-4);
+  color: var(--fn-fg);
+  transition: filter var(--fn-dur-fast) var(--fn-ease);
+}
+.fn-swipe__action:hover { filter: brightness(1.08); }
+.fn-swipe__action:active { filter: brightness(0.94); }
+.fn-swipe__action--danger {
+  background: var(--fn-danger-fill);
+  color: var(--fn-danger-ink);
+}
 
 .fn-roomlist__empty,
 .fn-roomlist__loading {

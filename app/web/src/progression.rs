@@ -207,14 +207,6 @@ impl Progression {
             promoted,
         }
     }
-
-    pub fn reset(&mut self) {
-        *self = Self {
-            palette: default_palette(),
-            ..Self::default()
-        };
-        self.persist();
-    }
 }
 
 /// Today, as the local day index the rules count in.
@@ -233,8 +225,7 @@ pub fn today() -> i64 {
 /// and write it back over a newer one.
 pub fn award(award: Award) -> Outcome {
     let mut file = Progression::load_stored();
-    let outcome = file.record(award, today());
-    outcome
+    file.record(award, today())
 }
 
 /// Report in for the day. Called once when a session reaches the shell.

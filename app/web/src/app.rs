@@ -747,6 +747,16 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
 
             wasm_bindgen_futures::spawn_local(async move {
                 let client = store.client.clone();
+                // Read before the request: a room that has just been left,
+                // hidden or deleted is gone from the store by the time the
+                // refresh lands, and "Room hidden" without the name is a
+                // confirmation you cannot check.
+                let removed_name = match &action {
+                    ConfirmAction::LeaveRoom(id)
+                    | ConfirmAction::DeleteRoom(id)
+                    | ConfirmAction::HideRoom(id) => store.room(id).map(|r| r.room.name.clone()),
+                    _ => None,
+                };
                 let result: Result<(), String> = match &action {
                     ConfirmAction::LeaveRoom(id) => {
                         client.leave_room(id).await.map_err(|e| e.user_message())
@@ -801,6 +811,29 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
                             ConfirmAction::LeaveRoom(_)
                             | ConfirmAction::DeleteRoom(_)
                             | ConfirmAction::HideRoom(_) => {
+                                // A room vanishing from the list is a large,
+                                // silent change. Name what left, and — for the
+                                // reversible one — where it went.
+                                let name = removed_name.unwrap_or_default();
+                                let lang = store.language;
+                                match &action {
+                                    ConfirmAction::HideRoom(_) => store.dispatch(Action::Toast(
+                                        crate::state::ToastKind::Neutral,
+                                        t(lang, Key::room_hidden_toast).replace("{name}", &name),
+                                        Some(t(lang, Key::room_hidden_toast_body).into()),
+                                    )),
+                                    ConfirmAction::LeaveRoom(_) => toast::neutral(
+                                        &store,
+                                        t(lang, Key::room_left_toast).replace("{name}", &name),
+                                    ),
+                                    _ => toast::neutral(
+                                        &store,
+                                        t(lang, Key::room_deleted_toast).replace("{name}", &name),
+                                    ),
+                                }
+                                // Only removals count towards the swipe streak,
+                                // and only once the server has agreed.
+                                crate::components::room_list::settle_swipe_streak(&store);
                                 actions::refresh_rooms(store.clone()).await;
                                 on_navigate.emit(Route::Rooms);
                             }
