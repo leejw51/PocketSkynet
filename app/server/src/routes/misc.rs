@@ -165,10 +165,31 @@ fn setting_opt(key: &str, baked: Option<&'static str>) -> Option<String> {
         (!v.is_empty()).then(|| v.to_owned())
     }
     let runtime = std::env::var(key).ok();
+    let baked = if ignore_baked() { None } else { baked };
     runtime
         .as_deref()
         .and_then(present)
         .or_else(|| baked.and_then(present))
+}
+
+/// Whether compiled-in defaults are off.
+///
+/// The integration harness clears the `VITE_*` variables before spawning a
+/// server so that a developer's `.env` cannot decide what the suite sees. That
+/// scrub reaches the *environment* only, and [`setting_opt`] then falls back to
+/// values `option_env!` captured when the binary was compiled — which `make
+/// build` populates from `.env` on purpose. So a machine that had ever built
+/// normally ran the "no payment wallet" test against a server that did have
+/// one, and it failed there and nowhere else.
+///
+/// This is the switch that makes the scrub total. Nothing in a real deployment
+/// sets it; it exists so a test can say "this server is configured with
+/// nothing" and be believed.
+fn ignore_baked() -> bool {
+    std::env::var("PS_IGNORE_BAKED_ENV").is_ok_and(|v| {
+        let v = v.trim();
+        !v.is_empty() && v != "0"
+    })
 }
 
 /// The same lookup, flattened to an empty string.
