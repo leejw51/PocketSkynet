@@ -77,6 +77,18 @@ text that happened to fall back to mono — is most of what makes the shell feel
 like an instrument. Sparing corner-bracket framing on the focused element reads
 as a targeting HUD at the cost of a few hairlines; anything heavier is costume.
 
+**Every address on screen copies itself.** An address is the one thing in this product
+that is nearly always on its way somewhere else — a send form, an invite field, another
+person — and forty-two mono characters is not something anyone selects by hand on a
+phone. So `<Addr>` is a copy control by default, everywhere it appears: the member row,
+the message header, the invite picker, a `0x…` typed into a message. It is a `<span
+role="button">` rather than a real button because an address inside a bubble is part of
+a sentence, and an atomic inline-block takes a line of its own and pushes the rest of
+the sentence onto the next one. Copying anywhere in the app answers with the same
+sentence, from `common::copy_with_toast`. Opt out with `copy=false` only where the
+address sits *inside* another control — the top bar's profile button — because nesting
+one is markup no browser has an answer for.
+
 **The ledger gutter stays.** Every message carries an 8-character `msgHash` slug
 beneath it, turning to the security colour with a check once published on-chain.
 It reads as a receipt stub, and no other chat app has it. Its recession is done
@@ -634,6 +646,35 @@ descending — a room list in database insertion order is not a room list.
 - New rooms and unread changes arrive over WebSocket and re-render in place; the list never
   scroll-jumps because rows are keyed by room id.
 
+### Swipe to remove — `.fn-swipe`
+
+Getting a room out of the list used to mean opening it and finding the `⋮` menu: four
+taps to undo one. A drag left on the row now reveals **Hide** and **Leave** as the
+underside of the row, and the escalation below removes a tap for anyone who does it
+often.
+
+| | |
+| --- | --- |
+| **Reveal** | Drag left past 40 % of the drawer; it latches open. The buttons open the ordinary confirm dialog — same title, same body, same verb as the `⋮` menu. |
+| **Express** | After **three removals in a row by swipe**, a drag that carries past the whole drawer plus 64px goes straight to the confirmation. Distance, not speed, so a flick that got away cannot reach it — and the confirmation stays, because the escalation removes a tap, not a decision. Announced once by an info toast the moment it unlocks. |
+| **Streak** | Counted only when the server has agreed to the removal, so a cancelled dialog is not a removal. Removing a room from the `⋮` menu instead resets it — "in a row" is a claim about the gesture. Persisted in `ps-swipe-streak`. |
+| **Not here** | **Delete room.** It is the one room action that reaches other people's clients; it stays in the `⋮` menu behind admin rights, where you have to have gone looking. |
+| **Dismiss** | Tapping the row, `Esc`, opening another row's drawer, or a pointer landing anywhere outside it. |
+| **Keyboard** | `Delete` / `Backspace` on a focused row opens the drawer and puts its buttons in the tab order; they are `tabindex="-1"` and `aria-hidden` while it is shut. A gesture-only action is an action some people do not have. |
+
+Every removal — swiped or not — now ends in a toast that names the room, and the hide
+toast says where it went ("Bring it back from Settings → Hidden rooms"): a room
+vanishing from the list is a large, silent change.
+
+The drawer is not a layer over the row revealed by opacity — it sits *after* it in one
+flex track that slides, clipped by `.fn-swipe`. So the reveal is a single compositor
+transform, and the row needs no opaque background to hide buttons that are genuinely
+outside the clip. `touch-action: pan-y` leaves vertical panning to the scroller; the
+handler claims a gesture only once it has moved 10px and moved further across than down
+(ties go to the scroller — a list is scrolled far more often than pruned). The offset is
+written to the track node directly rather than through the store: a pointermove that
+re-renders the room list is a re-render per frame of a finger movement.
+
 ---
 
 ## 7. Screen 3 — Chat view
@@ -942,6 +983,14 @@ your own row:
 
 Each has a `title` **and** an `aria-label` naming the person: "Remove sourCherry88 from
 this room".
+
+**Tapping the card copies the address** (`.fn-person--tap`). Looking someone up here is
+almost always in order to paste them somewhere — a send form, an invite field — and a
+44px portrait beside a name is a much easier target than the address under it. The
+address itself stays a copy control too: that is the named, focusable version, for the
+keyboard and the screen reader. A click that landed on one of the action buttons or on
+the zoomable portrait is not "the card" and does not copy (`common::hit_control`) — one
+tap, one answer.
 
 ### States
 
@@ -1380,7 +1429,9 @@ appears on `:focus-within`, so keyboard users reach it.
   Incoming messages announce as "{username}: {text}". History loads do not announce.
 - Fruit chips are `aria-hidden="true"` — always.
 - Addresses expose the full checksum via `aria-label` even when the text is truncated:
-  `aria-label="Wallet address 0x9f2A…7c41, copy"`.
+  `aria-label="Copy wallet address 0x9f2A…7c41"`. A copyable one is a `<span
+  role="button" tabindex="0">`, not a `<button>` — see below — with Enter and Space
+  wired to the same handler as the click.
 - Icon-only buttons carry an `aria-label` that names the object, not the icon: "Remove
   sourCherry88 from this room".
 - Unread counts announce as "12 unread messages", not "12".

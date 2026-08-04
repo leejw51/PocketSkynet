@@ -716,6 +716,10 @@ fn room_menu(
                    open: UseStateHandle<bool>| {
         let store = store.clone();
         let onclick = Callback::from(move |_: MouseEvent| {
+            // This removal came from the menu, so the swipe streak is broken
+            // — "three in a row" is a claim about the gesture, and somebody
+            // who came back to the menu has not made it.
+            super::room_list::reset_swipe_streak();
             store.dispatch(Action::OpenModal(Modal::Confirm(Confirm {
                 title: title.clone(),
                 body: body.clone(),

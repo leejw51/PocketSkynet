@@ -205,7 +205,10 @@ pub fn shell(p: &ShellProps) -> Html {
                         <span class="fn-topbar__name">{ &username }</span>
                         <span class="fn-topbar__addr">
                             if let Some(a) = &address {
-                                <Addr address={a.clone()} />
+                                // `copy=false`: this one is inside the profile
+                                // button. Nested buttons are invalid markup,
+                                // and the tap already has an owner.
+                                <Addr address={a.clone()} copy=false />
                             }
                         </span>
                     </span>

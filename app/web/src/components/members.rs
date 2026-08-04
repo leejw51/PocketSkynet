@@ -12,7 +12,9 @@ use crate::api::RoomMember;
 use crate::route::Route;
 use crate::state::{use_store, Action, Confirm, ConfirmAction, Load, Modal};
 
-use super::common::{Addr, Back, Badge, Empty, IconButton, Ident, IdentSize, Skeleton};
+use super::common::{
+    copy_with_toast, hit_control, Addr, Back, Badge, Empty, IconButton, Ident, IdentSize, Skeleton,
+};
 use super::icons;
 use crate::i18n::{t, Key, Lang};
 
@@ -143,10 +145,28 @@ fn person_row(
     let blocked = store.blocks.hides(&m.user_address);
     let name = m.user.display_name();
 
-    let mut class = classes!("fn-person");
+    let mut class = classes!("fn-person", "fn-person--tap");
     if is_me {
         class.push("fn-person--self");
     }
+
+    // Tapping the card copies the address. A wallet address is the only thing
+    // a member row is ever *for* outside of blocking someone — you look
+    // someone up here in order to send them funds, or to paste them into an
+    // invite — and forty-two mono characters is not a thing anyone selects by
+    // hand on a phone. The address itself is also a button (`<Addr>`), which
+    // is what gives the keyboard and a screen reader a named target; this is
+    // the pointer's larger, unnamed version of it.
+    let copy_card = {
+        let store = store.clone();
+        let who = m.user_address.clone();
+        Callback::from(move |e: MouseEvent| {
+            if hit_control(&e) {
+                return;
+            }
+            copy_with_toast(&store, &who.to_checksummed(), t(lang, Key::address_copied));
+        })
+    };
 
     // Never render actions on your own row: "block yourself" and "remove
     // yourself" are either impossible or have a dedicated flow (Leave room).
@@ -220,7 +240,13 @@ fn person_row(
     };
 
     html! {
-        <li key={m.user_address.to_string()} {class} style={format!("--i: {index}")}>
+        <li
+            key={m.user_address.to_string()}
+            {class}
+            style={format!("--i: {index}")}
+            title={t(lang, Key::tap_to_copy_address)}
+            onclick={copy_card}
+        >
             <Ident
                 seed={m.user_address.to_string()}
                 size={IdentSize::Lg}

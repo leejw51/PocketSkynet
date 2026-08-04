@@ -266,6 +266,16 @@ fn render_content(lang: Lang, text: &str, on_tag: &Callback<String>) -> Html {
                     <a href={token.to_owned()} target="_blank" rel="noopener noreferrer">{ token }</a>
                 });
             }
+        } else if let Some((addr, tail)) = wallet_in(token) {
+            // A pasted wallet address is the one piece of message content
+            // people reliably want *back out* of the conversation, and it is
+            // also the one piece nobody can select accurately with a thumb.
+            // Rendered full-length, so the text still says what was typed —
+            // only now tapping it copies the checksummed form.
+            out.push(html! { <Addr address={addr} full=true /> });
+            if !tail.is_empty() {
+                out.push(html! { { tail.to_owned() } });
+            }
         } else if let Some(tag) = super::knowledge::hashtag_of(token) {
             // A live filter, not decoration: the chip opens Knowledge
             // scoped to this tag (docs/SEARCH.md §5).
@@ -283,6 +293,19 @@ fn render_content(lang: Lang, text: &str, on_tag: &Callback<String>) -> Html {
         }
     }
     html! { <>{ for out }</> }
+}
+
+/// A bare wallet address written into a message, plus whatever punctuation was
+/// stuck to the end of it.
+///
+/// The tail is returned rather than swallowed: "pay 0xabc…123." ends in a full
+/// stop that belongs to the sentence, not to the address, and a renderer that
+/// eats it is quietly rewriting what somebody said.
+fn wallet_in(token: &str) -> Option<(WalletAddress, &str)> {
+    const TRAILING: [char; 10] = ['.', ',', ';', ':', '!', '?', ')', ']', '"', '\''];
+    let head = token.trim_end_matches(TRAILING);
+    let addr = WalletAddress::new(head).ok()?;
+    Some((addr, &token[head.len()..]))
 }
 
 /// `(host, path, query)` of an `http(s)` URL, host lowercased, no fragment.
@@ -867,7 +890,20 @@ fn menu(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_image_url, youtube_id};
+    use super::{is_image_url, wallet_in, youtube_id};
+
+    #[test]
+    fn a_pasted_address_is_recognised_with_its_punctuation_intact() {
+        let (addr, tail) = wallet_in("0x742d35Cc6634C0532925a3b844Bc454e4438f44e.").unwrap();
+        assert_eq!(addr.as_str(), "0x742d35cc6634c0532925a3b844bc454e4438f44e");
+        assert_eq!(tail, ".");
+    }
+
+    #[test]
+    fn a_hex_string_of_the_wrong_length_is_just_text() {
+        assert!(wallet_in("0xdeadbeef").is_none());
+        assert!(wallet_in("742d35Cc6634C0532925a3b844Bc454e4438f44e").is_none());
+    }
 
     #[test]
     fn an_ai_generated_jpeg_url_is_an_image() {

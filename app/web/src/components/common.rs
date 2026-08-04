@@ -193,9 +193,23 @@ pub struct AddrProps {
     /// Show the full EIP-55 checksum rather than `0x9f2a…7c41`.
     #[prop_or_default]
     pub full: bool,
+    /// Tapping the address copies the **full checksum**, truncated or not.
+    ///
+    /// On by default. An address on screen is nearly always something someone
+    /// is about to paste somewhere else, and asking them to select forty-two
+    /// mono characters by hand — on a phone — is the kind of small friction
+    /// that makes a product feel unfinished. Turn it off only where the
+    /// address sits *inside* another control: a button within a button is not
+    /// markup a browser has an answer for.
+    #[prop_or(true)]
+    pub copy: bool,
 }
 
-/// A wallet address in mono.
+/// How long the copied tick stays lit. Long enough to be read after the
+/// pointer has moved on, short enough that the next copy is a fresh event.
+const COPIED_FLASH_MS: u32 = 1200;
+
+/// A wallet address in mono — and, by default, the control that copies it.
 ///
 /// The `aria-label` always carries the **full checksum** even when the visible
 /// text is truncated, so a screen-reader user can read out the whole address
@@ -203,20 +217,91 @@ pub struct AddrProps {
 /// the lowercase form the newtype guarantees.
 #[function_component(Addr)]
 pub fn addr(p: &AddrProps) -> Html {
-    let lang = crate::state::use_store().language;
+    let store = crate::state::use_store();
+    let lang = store.language;
+    // Unconditional, and before the read-only early return: hooks are ordered
+    // by call, not by branch.
+    let copied = use_state(|| false);
+
     let checksum = p.address.to_checksummed();
     let text = if p.full {
         checksum.clone()
     } else {
         p.address.abbreviated()
     };
-    let class = if p.full {
-        "fn-addr fn-addr--full"
-    } else {
-        "fn-addr"
+    let mut class = classes!("fn-addr");
+    if p.full {
+        class.push("fn-addr--full");
+    }
+
+    if !p.copy {
+        let aria = t(lang, Key::wallet_address_aria).replace("{address}", &checksum);
+        return html! { <span {class} aria-label={aria}>{ text }</span> };
+    }
+
+    class.push("fn-addr--copy");
+    let label = t(lang, Key::copy_wallet_address).replace("{address}", &checksum);
+
+    let fire = {
+        let store = store.clone();
+        let checksum = checksum.clone();
+        let copied = copied.clone();
+        std::rc::Rc::new(move || {
+            copy_with_toast(&store, &checksum, t(lang, Key::address_copied));
+            copied.set(true);
+            let copied = copied.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                flash_sleep(COPIED_FLASH_MS).await;
+                copied.set(false);
+            });
+        })
     };
-    html! { <span {class} aria-label={t(lang, Key::wallet_address_aria).replace("{address}", &checksum)}>{ text }</span> }
+    let onclick = {
+        let fire = fire.clone();
+        Callback::from(move |e: MouseEvent| {
+            // Rows carry their own tap action — a members card copies too, a
+            // room row opens the room. The address is the more specific
+            // answer, so it takes the click rather than sharing it.
+            e.stop_propagation();
+            fire();
+        })
+    };
+    let onkeydown = Callback::from(move |e: KeyboardEvent| {
+        if e.key() == "Enter" || e.key() == " " {
+            e.prevent_default();
+            e.stop_propagation();
+            fire();
+        }
+    });
+
+    html! {
+        // A `<span role="button">` rather than a `<button>`, and the reason is
+        // typographic: an address inside a message bubble is part of a
+        // sentence. A real button is an atomic inline-block — forty-two mono
+        // characters of it take a line of their own and push the rest of the
+        // sentence onto the next one. A span flows, breaks and re-joins like
+        // the text it is sitting in, and the role, the tabindex and the
+        // Enter/Space handler give back everything the element gave up.
+        <span
+            {class}
+            role="button"
+            tabindex="0"
+            data-copied={copied.then_some("true")}
+            title={label.clone()}
+            aria-label={label}
+            {onclick}
+            {onkeydown}
+        >{ text }</span>
+    }
 }
+
+#[cfg(target_arch = "wasm32")]
+async fn flash_sleep(ms: u32) {
+    gloo_timers::future::TimeoutFuture::new(ms).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn flash_sleep(_ms: u32) {}
 
 #[derive(Properties, PartialEq)]
 pub struct LockProps {
@@ -588,6 +673,53 @@ fn legacy_copy(win: &web_sys::Window, text: &str) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn copy_to_clipboard(_text: &str) -> bool {
+    false
+}
+
+/// Copy `text`, then say so.
+///
+/// The one place the confirmation and the "clipboard blocked" failure are
+/// worded. Copying is the most repeated micro-interaction in this client —
+/// addresses, hashes, phrases — and a copy that reports success in three
+/// different sentences reads as three different features.
+pub fn copy_with_toast(store: &crate::state::Store, text: &str, title: impl Into<String>) {
+    if text.is_empty() {
+        return;
+    }
+    if copy_to_clipboard(text) {
+        super::toast::success(store, title.into());
+    } else {
+        let lang = store.language;
+        super::toast::error(
+            store,
+            t(lang, Key::couldnt_copy),
+            Some(t(lang, Key::clipboard_blocked).into()),
+        );
+    }
+}
+
+/// True when a click landed on — or inside — something that answers clicks by
+/// itself: a button, a link, a field, or anything wearing `role="button"`.
+///
+/// Rows that carry a tap action of their own need this. A members card copies
+/// the address, but the block and remove buttons on its trailing edge are not
+/// "the card", and a copy that also fired on *Block* would be two answers to
+/// one tap.
+#[cfg(target_arch = "wasm32")]
+pub fn hit_control(e: &MouseEvent) -> bool {
+    use wasm_bindgen::JsCast;
+    e.target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|el| {
+            el.closest("button, a, input, textarea, select, [role='button']")
+                .ok()
+                .flatten()
+        })
+        .is_some()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn hit_control(_e: &MouseEvent) -> bool {
     false
 }
 
