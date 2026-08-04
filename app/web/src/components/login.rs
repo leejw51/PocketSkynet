@@ -332,23 +332,27 @@ pub fn login(p: &LoginProps) -> Html {
         let store = store.clone();
         Callback::from(move |_: MouseEvent| {
             if let Some(p) = generated.as_ref() {
-                if super::common::copy_to_clipboard(p) {
-                    backed_up.set(true);
-                    toast::success(&store, t(lang, Key::phrase_copied));
-                } else {
-                    // Never open the gate on a copy that did not happen: the
-                    // user would sign in believing they had saved the one
-                    // string that can recover the account.
-                    toast::error(
-                        &store,
-                        "Couldn't copy the phrase",
-                        Some(
-                            "Your browser blocked clipboard access. Use \"Download backup\", \
-                             or select the phrase and copy it by hand."
-                                .into(),
-                        ),
-                    );
-                }
+                let backed_up = backed_up.clone();
+                let store = store.clone();
+                super::common::copy_then(p, move |ok| {
+                    if ok {
+                        backed_up.set(true);
+                        toast::success(&store, t(lang, Key::phrase_copied));
+                    } else {
+                        // Never open the gate on a copy that did not happen: the
+                        // user would sign in believing they had saved the one
+                        // string that can recover the account.
+                        toast::error(
+                            &store,
+                            "Couldn't copy the phrase",
+                            Some(
+                                "Your browser blocked clipboard access. Use \"Download backup\", \
+                                 or select the phrase and copy it by hand."
+                                    .into(),
+                            ),
+                        );
+                    }
+                });
             }
         })
     };

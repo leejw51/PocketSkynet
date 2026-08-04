@@ -609,9 +609,7 @@ fn portfolio_view(p: &PortfolioProps) -> Html {
         let store = store.clone();
         let addr = p.me.to_checksummed();
         Callback::from(move |_: MouseEvent| {
-            if super::common::copy_to_clipboard(&addr) {
-                toast::success(&store, t(store.language, Key::address_copied));
-            }
+            super::common::copy_with_toast(&store, &addr, t(store.language, Key::address_copied));
         })
     };
 
@@ -684,9 +682,11 @@ fn portfolio_view(p: &PortfolioProps) -> Html {
                         let store = store.clone();
                         let addr = p.me.to_checksummed();
                         Callback::from(move |_: MouseEvent| {
-                            if super::common::copy_to_clipboard(&addr) {
-                                toast::success(&store, t(store.language, Key::address_copied));
-                            }
+                            super::common::copy_with_toast(
+                                &store,
+                                &addr,
+                                t(store.language, Key::address_copied),
+                            );
                         })
                     }}>
                         { t(lang, Key::copy_address) }

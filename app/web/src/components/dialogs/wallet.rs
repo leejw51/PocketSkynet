@@ -396,9 +396,11 @@ pub fn wallet(p: &WalletProps) -> Html {
             .map(WalletAddress::to_checksummed)
             .unwrap_or_default();
         Callback::from(move |_: MouseEvent| {
-            if super::super::common::copy_to_clipboard(&addr) {
-                toast::success(&store, t(store.language, Key::address_copied));
-            }
+            super::super::common::copy_with_toast(
+                &store,
+                &addr,
+                t(store.language, Key::address_copied),
+            );
         })
     };
 

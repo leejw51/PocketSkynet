@@ -234,13 +234,16 @@ pub fn publish(p: &PublishProps) -> Html {
     let copy_url = {
         let store = store.clone();
         Callback::from(move |url: String| {
-            if super::common::copy_to_clipboard(&url) {
-                toast::success(&store, t(store.language, Key::publish_url_copied));
-            } else {
-                // No clipboard on this platform — the URL is on screen; say
-                // so rather than pretending.
-                toast::warn(&store, t(store.language, Key::publish_copy_failed), None);
-            }
+            let store = store.clone();
+            super::common::copy_then(&url, move |ok| {
+                if ok {
+                    toast::success(&store, t(store.language, Key::publish_url_copied));
+                } else {
+                    // No clipboard on this platform — the URL is on screen; say
+                    // so rather than pretending.
+                    toast::warn(&store, t(store.language, Key::publish_copy_failed), None);
+                }
+            });
         })
     };
 
