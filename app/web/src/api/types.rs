@@ -474,7 +474,7 @@ impl ServerInfo {
             "h2" => "HTTP/2",
             "http/1.1" => "HTTP/1.1",
             "http/1.0" => "HTTP/1.0",
-            other if other.is_empty() => "unknown",
+            "" => "unknown",
             other => other,
         }
     }

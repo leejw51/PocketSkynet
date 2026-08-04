@@ -479,6 +479,13 @@ pub struct Bound {
     router: axum::Router,
     log: Arc<JsonlLog>,
     /// Keeps the Bonjour advertisement registered for the server's lifetime.
+    ///
+    /// Never read, and that is the whole point: it is an RAII guard. Dropping
+    /// the `Advertiser` withdraws the service from the network, so the field
+    /// exists only to hold that drop off until the server itself goes away.
+    /// Binding it to `_` instead would withdraw the advertisement immediately
+    /// and the server would be unreachable by name.
+    #[allow(dead_code)]
     mdns: Option<Advertiser>,
 }
 

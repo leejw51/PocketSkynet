@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 
 #[tokio::test]
 async fn probe_live_server() {
