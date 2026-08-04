@@ -2363,6 +2363,16 @@ span.fn-conn { cursor: default; }
   translate: -50% -50%;
 }
 .fn-media--failed { color: var(--fn-fg-muted); }
+/* A generated clip posted into a room. Same block as an inline image, with
+   the player's own controls: never autoplaying, so a room does not start
+   making noise when a message arrives. */
+.fn-media--clip video {
+  display: block;
+  inline-size: min(420px, 100%);
+  max-block-size: 400px;
+  border-radius: 10px;
+  background: #000;
+}
 .fn-media--video iframe {
   display: block;
   inline-size: min(480px, 100%);
@@ -5820,6 +5830,78 @@ span.fn-conn { cursor: default; }
 }
 
 .fn-ai__keys { display: grid; gap: var(--fn-s2); }
+
+/* --- The assistant's waiting row -------------------------------------------
+   An AI call is the one thing in this app whose latency is measured in
+   minutes rather than milliseconds, and a disabled button cannot say that.
+   The row states what is being waited on and how long it has been: a spinner
+   for "still alive", a shimmering label for "working", and a live seconds
+   reading, which is the part that distinguishes slow from stuck.
+
+   The sweep underneath is deliberately indeterminate — nothing here knows a
+   percentage, and a bar that invented one would be lying. */
+.fn-ai__wait {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--fn-s2);
+  padding: var(--fn-s2) var(--fn-s3);
+  border: 1px solid var(--fn-primary-line);
+  border-radius: var(--fn-r-sm, 8px);
+  background: var(--fn-surface-2);
+  overflow: hidden;
+  animation: fn-list-in var(--fn-dur-snappy) var(--fn-ease-expo);
+}
+/* The sweep: one line travelling the width of the row, on the same 1.3s
+   cadence as the skeleton shimmer so the two never beat against each other. */
+.fn-ai__wait::after {
+  content: "";
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-start: 0;
+  block-size: 2px;
+  inline-size: 40%;
+  background: linear-gradient(90deg, transparent, var(--fn-primary), transparent);
+  animation: fn-ai-sweep 1.3s var(--fn-ease-cosine) infinite;
+}
+@keyframes fn-ai-sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(350%); }
+}
+.fn-ai__wait-text {
+  flex: 1;
+  min-inline-size: 0;
+  color: var(--fn-fg-muted);
+  font-size: var(--fn-t-sm);
+  background: linear-gradient(
+    90deg,
+    var(--fn-fg-muted) 0%,
+    var(--fn-fg) 50%,
+    var(--fn-fg-muted) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: fn-shimmer 1.3s linear infinite;
+}
+.fn-ai__wait-time {
+  color: var(--fn-fg-muted);
+  font-size: var(--fn-t-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* With motion off the row still has to read as *working*, so the label keeps
+   its ordinary colour instead of a frozen mid-shimmer gradient, and the sweep
+   is dropped rather than parked somewhere arbitrary. */
+@media (prefers-reduced-motion: reduce) {
+  .fn-ai__wait::after { display: none; }
+  .fn-ai__wait-text {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: var(--fn-fg);
+  }
+}
 
 /* --- HUD theatre ------------------------------------------------------------ */
 

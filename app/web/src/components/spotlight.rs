@@ -30,8 +30,6 @@ use yew::prelude::*;
 use crate::i18n::{t, Key};
 use crate::state::use_store;
 
-use super::toast;
-
 // ------------------------------------------------------------------ the API --
 
 /// What the stage shows.

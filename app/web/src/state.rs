@@ -214,6 +214,15 @@ pub struct AppState {
     /// the page on mount. A field rather than a route parameter because the
     /// teach seed carries message content, which has no business in a URL.
     pub knowledge_seed: Option<KnowledgeSeed>,
+    /// The base URL to hand to *another device*, from `GET /api/server/info`:
+    /// the Tailscale address when this host has one, else a LAN address.
+    /// `None` before that call answers, and on a loopback-only server.
+    ///
+    /// Kept in the store rather than fetched per use because two unrelated
+    /// surfaces need it — the assistant's "copy this link" row and a
+    /// message's Copy link — and both must produce the *same* address as the
+    /// startup banner. See [`AppState::shareable_url`].
+    pub share_base: Option<String>,
     next_id: u64,
 }
 
@@ -270,8 +279,27 @@ impl AppState {
             pending_boot: None,
             dissolving: std::collections::HashSet::new(),
             knowledge_seed: None,
+            share_base: None,
             next_id: 1,
         }
+    }
+
+    /// The absolute URL for a same-origin path, aimed at somebody else's
+    /// device.
+    ///
+    /// The server's recommended base wins over the viewer's own origin, and
+    /// that is the whole point: this app is normally opened at
+    /// `http://127.0.0.1:9099` or a `.local` name, and a generated picture
+    /// copied out of it as `http://127.0.0.1:9099/api/images/…` resolves to
+    /// *the reader's own machine* — a broken link that looks like a working
+    /// one. The base the server hands back is a Tailscale address when there
+    /// is one, which is the only address that also works from a train.
+    pub fn shareable_url(&self, path: &str) -> String {
+        let base = self
+            .share_base
+            .clone()
+            .unwrap_or_else(crate::format::page_origin);
+        crate::format::join_url(&base, path)
     }
 
     pub fn me(&self) -> Option<&WalletAddress> {
@@ -487,6 +515,9 @@ pub enum Action {
     SetFontScale(FontScale),
     SetLanguage(Lang),
     SetNetworks(Vec<Network>),
+    /// The server's answer to "what address should I give somebody else?"
+    /// (`GET /api/server/info`). `None` on a loopback-only server.
+    SetShareBase(Option<String>),
 
     Toast(ToastKind, String, Option<String>),
     DismissToast(u64),
@@ -528,6 +559,7 @@ impl Reducible for AppState {
             pending_boot: self.pending_boot.clone(),
             dissolving: self.dissolving.clone(),
             knowledge_seed: self.knowledge_seed.clone(),
+            share_base: self.share_base.clone(),
             next_id: self.next_id,
         };
 
@@ -583,6 +615,11 @@ impl Reducible for AppState {
             },
             Action::SetChain(c) => s.chain = c,
             Action::SetNetworks(list) => s.networks = Rc::new(list),
+            Action::SetShareBase(base) => {
+                // Empty is the same as absent: a base of "" would produce a
+                // relative link that only works on the page it came from.
+                s.share_base = base.filter(|b| !b.trim().is_empty());
+            }
 
             Action::RoomsLoading => s.rooms_load = Load::Loading,
             Action::RoomsLoaded(rooms) => {

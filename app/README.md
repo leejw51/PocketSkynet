@@ -16,8 +16,12 @@ Three things in one shell — a small-team Slack alternative you run yourself:
   switchable, send pending). Transactions are signed in the browser
   (EIP-155 + RLP in `core/`); the server never sees a key.
 - **AI assistant** — Grok, OpenAI, Anthropic and Gemini behind one dialog in
-  the composer: draft, reply-in-context, and image generation. Bring your own
-  keys; they live in your browser's localStorage, never on the server.
+  the composer: draft, reply-in-context, image generation, and video
+  generation (Grok's Imagine). Bring your own keys; they live in your
+  browser's localStorage, never on the server. Every generated picture and
+  clip is stored on *this* server under `~/.pocketskynet/images/` and posted
+  as a same-origin URL, so it renders inline in the room and still resolves
+  next year — the providers' own links expire within about a day.
 
 Two **paid features** fund the deployment — each requires an on-chain payment
 to the operator's wallet (`VITE_FRUITNATION_WALLET`), verified by the server
@@ -284,6 +288,11 @@ Two layers, on purpose:
 - **JSONL** (`~/.pocketskynet/events/events-YYYY-MM-DD.jsonl`) — an append-only, ordered,
   grep-able log of every realtime event. It backs SSE resume and gives you a
   plain-text audit trail that survives a database rebuild.
+
+Bytes live beside them, one file per content hash, so one backup of
+`~/.pocketskynet/` captures everything: `images/` for AI generations and
+avatars (public capability URLs, served inline), `files/` for room
+attachments (authenticated, always downloaded), `sites/` for published pages.
 
 Events are committed to SQLite first, then logged, then fanned out — so the log
 is always a superset of what was delivered, never the reverse.

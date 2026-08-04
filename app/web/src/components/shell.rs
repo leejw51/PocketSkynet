@@ -46,6 +46,10 @@ pub fn shell(p: &ShellProps) -> Html {
             wasm_bindgen_futures::spawn_local(async move {
                 if let Ok(info) = store.client.server_info().await {
                     on_http3.set(info.is_http3());
+                    // The same call carries the address to hand to other
+                    // people, which everything that offers a "copy link"
+                    // reads out of the store (`AppState::shareable_url`).
+                    store.dispatch(crate::state::Action::SetShareBase(info.share_base));
                 }
             });
             || ()

@@ -574,27 +574,69 @@ send disabled. `chainId` is omitted (not null) for non-EVM entries.
 
 #### 6.1.4 `POST /api/images` — Auth: **✓** *(PocketSkynet extension)*
 
-Hosts raw image bytes (AI generations) and returns a same-origin URL. The
-reference client calls this endpoint but its server never implemented it;
-here it exists. Body is the raw bytes, `Content-Type` must be `image/png`,
-`image/jpeg`, `image/webp` or `image/gif`; limit **5 MB** (this route lifts
-the 100 KB API-wide body cap). Storage is content-addressed
+Hosts raw image or video bytes (AI generations) and returns a same-origin
+URL. The reference client calls this endpoint but its server never
+implemented it; here it exists. Body is the raw bytes, `Content-Type` must be
+`image/png`, `image/jpeg`, `image/webp`, `image/gif`, `video/mp4` or
+`video/webm`; limit **5 MB** for an image and **25 MB** for a video (this
+route lifts the 100 KB API-wide body cap). Storage is content-addressed
 (`sha256(bytes).ext`), so re-uploading is idempotent.
 
 | Status | Body |
 |---|---|
 | 200 | `{"url": "/api/images/<sha256>.<ext>"}` |
-| 400 | wrong content type or empty body |
+| 400 | wrong content type, empty body, or past the cap for that media type |
 | 401 | no token |
-| 413 | over 5 MB |
+| 413 | over 25 MB |
+
+#### 6.1.4a `POST /api/images/import` — Auth: **✓** *(PocketSkynet extension)*
+
+Fetches a provider's **temporary** media URL server-side and stores the bytes
+here, returning the permanent same-origin URL. Video generation has no base64
+mode — the provider answers with a link on its own CDN that expires within
+about a day, and that CDN sends no CORS headers, so the browser can display
+the video but cannot read its bytes to re-upload them.
+
+Body `{"url": "https://…"}`. The URL must be `https` and its host must be one
+of the AI providers' media hosts (`x.ai`, `oaiusercontent.com`,
+`googleapis.com`, or a subdomain of one); redirects are **not** followed, the
+response's `Content-Type` must be in the same allow-list as the upload route,
+and the same per-type size caps apply. Those four rules together are what
+keeps this from being an SSRF proxy — see `routes/images.rs::import`.
+
+| Status | Body |
+|---|---|
+| 200 | `{"url": "/api/images/<sha256>.<ext>"}` |
+| 400 | host not allow-listed, not https, fetch failed, wrong type, or too large |
+| 401 | no token |
 
 #### 6.1.5 `GET /api/images/{name}` — Auth: **no** *(PocketSkynet extension)*
 
-Serves a stored image with `Cache-Control: public, max-age=31536000,
-immutable` (sound: the name *is* the content hash). Unauthenticated because
-image URLs are pasted into rooms and loaded by `<img>` tags, which cannot
-attach a bearer header — the unguessable hash name is the capability. `name`
-must be exactly 64 hex chars plus a known extension; anything else is 404.
+Serves a stored image or video with `Cache-Control: public, max-age=31536000,
+immutable` (sound: the name *is* the content hash) and `X-Content-Type-Options:
+nosniff`. Unauthenticated because these URLs are pasted into rooms and loaded
+by `<img>` and `<video>` tags, which cannot attach a bearer header — the
+unguessable hash name is the capability. `name` must be exactly 64 hex chars
+plus a known extension; anything else is 404.
+
+#### 6.1.6 `GET /api/server/info` — Auth: **no** *(PocketSkynet extension)*
+
+Where this server is and how you got here: `protocol` (`h3` | `h2` |
+`http/1.1` — what carried *this* request, which is the only honest way for a
+page to know it was silently upgraded to QUIC), `scheme`, `port`,
+`http3Port`, `http3Available`, `endpoints` (`{tcp: [...], http3: [...]}`),
+`uptime`, `websocketTransport`, `caCertAvailable`, and:
+
+* `shareBase` — the base URL to prefix onto a relative path when the link is
+  meant for **another device**: the VPN (Tailscale) address when the host has
+  one, else a LAN address, `null` on a loopback-only server or an ephemeral
+  port. The same value `GET /api/sites` returns. Clients use it for every
+  "copy link" affordance — an AI generation copied as
+  `http://127.0.0.1:9099/api/images/…` names the *reader's* machine, which is
+  a broken link that looks like a working one. They fall back to their own
+  origin when it is `null`.
+
+Unauthenticated: every field is already discoverable by connecting.
 
 ---
 
@@ -2421,8 +2463,9 @@ pointer advanced past an `edit` costs nothing.
 | 1 | GET | `/api/health` | — | — (exempt from rate limiting) |
 | 2 | GET | `/api/blockchain/info` | — | — |
 | 2a | GET | `/api/networks` | — | — (PocketSkynet extension) |
-| 2b | POST | `/api/images` | ✓ | any user (5 MB body cap, PocketSkynet extension) |
+| 2b | POST | `/api/images` | ✓ | any user (5 MB image / 25 MB video cap, PocketSkynet extension) |
 | 2c | GET | `/api/images/{name}` | — | capability URL (PocketSkynet extension) |
+| 2d | POST | `/api/images/import` | ✓ | any user (allow-listed provider hosts, PocketSkynet extension) |
 | 3 | POST | `/api/auth/challenge` | — | — (10/min) |
 | 4 | POST | `/api/auth/login` | — | — (5/min) |
 | 5 | POST | `/api/auth/logout` | — | — |

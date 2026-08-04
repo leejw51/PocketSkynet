@@ -187,13 +187,9 @@ impl Client {
         self.send(Method::GET, "/api/networks").await
     }
 
-    /// Upload raw image bytes (an AI generation) and get back a same-origin
-    /// URL that can be pasted into a room.
+    /// Upload raw image or video bytes (an AI generation) and get back a
+    /// same-origin URL that can be pasted into a room.
     pub async fn upload_image(&self, mime: &str, bytes: Vec<u8>) -> ApiResult<String> {
-        #[derive(serde::Deserialize)]
-        struct Hosted {
-            url: String,
-        }
         let req = self
             .build(Method::POST, "/api/images")
             .header("Content-Type", mime)
@@ -206,4 +202,30 @@ impl Client {
         let hosted: Hosted = super::decode(resp).await?;
         Ok(hosted.url)
     }
+
+    /// Re-host a provider's **temporary** media URL on this server, and get
+    /// back the permanent same-origin URL.
+    ///
+    /// Video generation hands back a link on the provider's CDN that stops
+    /// resolving within about a day, and that CDN sends no CORS headers — so
+    /// this browser can play the clip but cannot read its bytes to upload
+    /// them. The server does the fetch instead, against a host allow-list
+    /// (`routes/images.rs::import`). Nothing but the URL crosses over: the
+    /// API key stays here, as always.
+    pub async fn import_media(&self, url: &str) -> ApiResult<String> {
+        let hosted: Hosted = self
+            .send_json(
+                Method::POST,
+                "/api/images/import",
+                &serde_json::json!({ "url": url }),
+            )
+            .await?;
+        Ok(hosted.url)
+    }
+}
+
+/// The one-field answer both hosting endpoints give.
+#[derive(serde::Deserialize)]
+struct Hosted {
+    url: String,
 }

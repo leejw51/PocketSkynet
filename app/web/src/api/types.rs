@@ -441,6 +441,13 @@ pub struct ServerInfo {
     pub http3_available: bool,
     #[serde(default)]
     pub endpoints: ServerEndpoints,
+    /// The base URL to put in front of a relative path when the link is for
+    /// somebody else's device: the Tailscale address when the host has one,
+    /// else a LAN address, `None` when this server is loopback-only. The
+    /// viewer's own origin is the fallback, and it is often `127.0.0.1` —
+    /// which is why this is worth asking the server for.
+    #[serde(default)]
+    pub share_base: Option<String>,
     #[serde(default)]
     pub uptime: u64,
     /// Realtime lives only on TCP — there is no WebSocket over HTTP/3.

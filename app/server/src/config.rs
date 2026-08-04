@@ -224,9 +224,10 @@ impl Config {
         self.data_dir.join("events")
     }
 
-    /// Where AI-generated and user-uploaded images are stored, one file per
-    /// content hash. Lives under the data dir so a backup of `data/` captures
-    /// everything the deployment owns.
+    /// Where AI-generated and user-uploaded media — images *and* generated
+    /// video — are stored, one file per content hash. Lives under the data
+    /// dir so a backup of `data/` captures everything the deployment owns,
+    /// and so an AI generation outlives the provider's own expiring link.
     pub fn images_dir(&self) -> PathBuf {
         self.data_dir.join("images")
     }
