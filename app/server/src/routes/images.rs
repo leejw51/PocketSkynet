@@ -1,11 +1,24 @@
-//! Hosted images for the AI assistant.
+//! Hosted images and videos for the AI assistant.
 //!
-//! The AI image providers answer in two shapes: a hosted URL (Grok) or raw
-//! base64 bytes (OpenAI, Gemini). Base64 cannot be pasted into a chat room —
-//! messages are capped far below a megabyte of PNG — so the client uploads
-//! the bytes here and posts the resulting URL instead. The reference client
-//! calls exactly this endpoint (`POST /api/images`) but its server never
-//! implemented it; this is the fix, not an invention.
+//! The AI providers answer in two shapes: raw base64 bytes (image generation
+//! on Grok, OpenAI and Gemini) or a temporary URL on the provider's own CDN
+//! (video generation, where there is no bytes option at all). Neither can be
+//! pasted into a chat room as it stands: base64 blows past the message size
+//! cap, and a provider URL stops resolving within about a day — a room full
+//! of dead links. So both are stored *here* and the room carries a
+//! same-origin URL this server will still serve next year.
+//!
+//! Two ways in, for those two shapes:
+//!
+//! * `POST /api/images` — the caller has the bytes (base64 decoded in the
+//!   browser). The reference client called exactly this endpoint but its
+//!   server never implemented it; this is the fix, not an invention.
+//! * `POST /api/images/import` — the caller has only a provider URL. The
+//!   fetch happens on this server rather than in the browser because the
+//!   provider CDNs send no CORS headers, so the browser cannot read the
+//!   bytes it is being shown. See [`import`] for the SSRF allow-list that
+//!   keeps "the server will fetch a URL for you" from meaning "the server
+//!   will fetch *any* URL for you".
 //!
 //! Storage is content-addressed: the filename is the SHA-256 of the bytes,
 //! so re-uploading the same image is idempotent, the URL can be cached as
@@ -14,40 +27,64 @@
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
-/// Uploads above this are refused. Generous for a 1024×1024 PNG, small
+/// Image uploads above this are refused. Generous for a 1024×1024 PNG, small
 /// enough that the endpoint is useless as free blob storage.
 pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+/// Video gets a larger ceiling because a ten-second 720p clip is simply
+/// bigger than any still — the same 25 MB attachments get, and for the same
+/// reason: the whole body is held in memory on both paths.
+pub const MAX_VIDEO_BYTES: usize = 25 * 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/images", post(upload))
+        .route("/images/import", post(import))
         .route("/images/{name}", get(serve))
         // Overrides the 100 KB API-wide default: this is the one endpoint
         // whose whole point is a body bigger than that. Innermost layer
-        // wins, so the general limit still applies everywhere else.
-        .layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES))
+        // wins, so the general limit still applies everywhere else. The
+        // per-kind caps below are what actually bound a stored file; this
+        // only has to be the larger of the two.
+        .layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES))
 }
 
-/// The image types the AI providers actually emit. A server that stores
+/// The media types the AI providers actually emit. A server that stores
 /// arbitrary content types is a server that hosts `text/html` for phishing
 /// pages, so this is an allow-list, not a validation.
+///
+/// Every entry is inert in a browser: an `<img>` or a `<video>` source
+/// carries no script capability, which is what keeps serving these inline on
+/// the app's own origin sound. Nothing that a sniffer could take for markup
+/// belongs in this table.
 const ALLOWED: &[(&str, &str)] = &[
     ("image/png", "png"),
     ("image/jpeg", "jpg"),
     ("image/webp", "webp"),
     ("image/gif", "gif"),
+    ("video/mp4", "mp4"),
+    ("video/webm", "webm"),
 ];
+
+/// The ceiling for one stored file, by media type.
+fn cap_for(extension: &str) -> usize {
+    match extension {
+        "mp4" | "webm" => MAX_VIDEO_BYTES,
+        _ => MAX_IMAGE_BYTES,
+    }
+}
 
 fn extension_for(content_type: &str) -> Option<&'static str> {
     // `image/png;charset=...` never legitimately happens, but a lenient
@@ -66,7 +103,7 @@ fn mime_for(extension: &str) -> Option<&'static str> {
         .map(|(mime, _)| *mime)
 }
 
-/// `POST /api/images` — store raw image bytes, return the hosted URL.
+/// `POST /api/images` — store raw image or video bytes, return the hosted URL.
 ///
 /// Auth required: hosting is a privilege of logged-in users. The GET side is
 /// deliberately public (see [`serve`]).
@@ -82,14 +119,31 @@ async fn upload(
         .unwrap_or("");
     let Some(ext) = extension_for(content_type) else {
         return Err(ApiError::bad_request(
-            "Content-Type must be image/png, image/jpeg, image/webp, or image/gif",
+            "Content-Type must be image/png, image/jpeg, image/webp, image/gif, \
+             video/mp4, or video/webm",
         ));
     };
+    let url = store(&state, ext, &body).await?;
+    Ok((StatusCode::OK, Json(serde_json::json!({ "url": url }))).into_response())
+}
+
+/// Write bytes under their content hash and return the hosted URL.
+///
+/// The one place a file is created, so the emptiness check, the size cap and
+/// the atomic write cannot drift between the two ways in.
+async fn store(state: &AppState, ext: &str, body: &[u8]) -> ApiResult<String> {
     if body.is_empty() {
-        return Err(ApiError::bad_request("Empty image"));
+        return Err(ApiError::bad_request("Empty file"));
+    }
+    let cap = cap_for(ext);
+    if body.len() > cap {
+        return Err(ApiError::bad_request(format!(
+            "File is larger than the {} MB limit for this media type",
+            cap / (1024 * 1024)
+        )));
     }
 
-    let name = format!("{}.{ext}", hex::encode(Sha256::digest(&body)));
+    let name = format!("{}.{ext}", hex::encode(Sha256::digest(body)));
     let dir = state.cfg.images_dir();
     let path = dir.join(&name);
 
@@ -100,9 +154,11 @@ async fn upload(
             .await
             .map_err(|e| ApiError::Internal(e.into()))?;
         // Write-then-rename so a crash mid-write can never leave a corrupt
-        // file behind the immutable cache header.
-        let tmp = dir.join(format!(".{name}.tmp"));
-        tokio::fs::write(&tmp, &body)
+        // file behind the immutable cache header. The tmp name carries a uuid
+        // as well as the hash: two concurrent uploads of the same bytes would
+        // otherwise share one tmp path and race each other's rename.
+        let tmp = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
+        tokio::fs::write(&tmp, body)
             .await
             .map_err(|e| ApiError::Internal(e.into()))?;
         tokio::fs::rename(&tmp, &path)
@@ -110,21 +166,139 @@ async fn upload(
             .map_err(|e| ApiError::Internal(e.into()))?;
     }
 
-    Ok((
-        StatusCode::OK,
-        Json(serde_json::json!({ "url": format!("/api/images/{name}") })),
-    )
-        .into_response())
+    Ok(format!("/api/images/{name}"))
 }
 
-/// `GET /api/images/{name}` — serve a stored image.
+#[derive(Debug, Deserialize)]
+struct ImportRequest {
+    url: String,
+}
+
+/// `POST /api/images/import` — fetch a provider's temporary media URL and
+/// store the bytes here, returning the permanent same-origin URL.
 ///
-/// No auth: image URLs are pasted into encrypted messages and loaded by
-/// `<img>` tags, which cannot attach an `Authorization` header. The name is
-/// a SHA-256 of the content — an unguessable capability — so possession of
-/// the URL is the access control, the same model as every chat attachment
-/// host. Immutable caching is sound for the same reason: the name *is* the
-/// content.
+/// # Why the server fetches instead of the browser
+///
+/// Video generation has no base64 mode: the provider answers with a URL on
+/// its own CDN that expires, and that CDN sends no `Access-Control-Allow-Origin`,
+/// so a browser can display the video but cannot read its bytes to re-upload
+/// them. Without this endpoint the only thing a client could paste into a
+/// room is the expiring link.
+///
+/// # Why this is not an open proxy
+///
+/// "Fetch this URL for me" is server-side request forgery unless the target
+/// set is closed, so it is closed on every axis at once:
+///
+/// * **https only**, so no `file:`, `gopher:` or plain-HTTP intranet target;
+/// * **host allow-list** — the AI providers' media CDNs and nothing else, so
+///   the URL can never name a link-local metadata address or a service on the
+///   host's own network;
+/// * **no redirects followed**, because a 302 from an allowed host to
+///   `169.254.169.254` would otherwise walk straight through the allow-list;
+/// * **allow-listed response type and a size cap**, so the answer becomes a
+///   file only if it is the kind of media this route already hosts.
+///
+/// The response body is never shown to the caller, only stored, so this
+/// cannot be used to read an internal endpoint even if one were reachable.
+async fn import(
+    State(state): State<AppState>,
+    AuthUser(_caller): AuthUser,
+    Json(req): Json<ImportRequest>,
+) -> ApiResult<Response> {
+    if !is_allowed_source(&req.url) {
+        return Err(ApiError::bad_request(
+            "Only media URLs from a supported AI provider can be imported",
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        // A ten-second video is a large download over a slow link, and the
+        // provider CDN is not on this machine.
+        .timeout(std::time::Duration::from_secs(120))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| ApiError::Internal(e.into()))?;
+
+    let response = client
+        .get(&req.url)
+        .send()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("Could not fetch that URL: {e}")))?;
+    if !response.status().is_success() {
+        return Err(ApiError::bad_request(format!(
+            "The provider answered HTTP {} for that URL — it may have expired",
+            response.status().as_u16()
+        )));
+    }
+
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
+    let Some(ext) = extension_for(&content_type) else {
+        return Err(ApiError::bad_request(
+            "That URL does not answer with an image or a video",
+        ));
+    };
+
+    // Refuse on the advertised length before spending the bandwidth; `store`
+    // re-checks the real length, because `Content-Length` is a claim.
+    if let Some(len) = response.content_length() {
+        if len > cap_for(ext) as u64 {
+            return Err(ApiError::bad_request("That file is too large to host"));
+        }
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("Could not read that URL: {e}")))?;
+
+    let url = store(&state, ext, &bytes).await?;
+    Ok((StatusCode::OK, Json(serde_json::json!({ "url": url }))).into_response())
+}
+
+/// The hosts whose media this server will fetch on a caller's behalf.
+///
+/// Matched on the *whole* host or a dot-prefixed suffix — never `contains`,
+/// which would make `x.ai.evil.example` an allowed source.
+const IMPORT_HOSTS: &[&str] = &[
+    // xAI: `imgen.x.ai` serves generated stills, `vidgen.x.ai` generated
+    // video. The parent suffix covers both and any sibling they add.
+    "x.ai",
+    // OpenAI's image responses when a URL is returned rather than base64.
+    "oaiusercontent.com",
+    // Gemini's file service, for the same case.
+    "googleapis.com",
+];
+
+fn is_allowed_source(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let rest = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Userinfo is stripped by taking what follows the last `@`: without this
+    // `https://x.ai@evil.example/` would read as the allowed host.
+    let host = rest.rsplit('@').next().unwrap_or(rest);
+    let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    IMPORT_HOSTS
+        .iter()
+        .any(|h| host == *h || host.ends_with(&format!(".{h}")))
+}
+
+/// `GET /api/images/{name}` — serve a stored image or video.
+///
+/// No auth: these URLs are pasted into encrypted messages and loaded by
+/// `<img>` and `<video>` tags, which cannot attach an `Authorization` header.
+/// The name is a SHA-256 of the content — an unguessable capability — so
+/// possession of the URL is the access control, the same model as every chat
+/// attachment host. Immutable caching is sound for the same reason: the name
+/// *is* the content.
 async fn serve(State(state): State<AppState>, Path(name): Path<String>) -> ApiResult<Response> {
     let Some((stem, ext)) = name.rsplit_once('.') else {
         return Err(ApiError::not_found("Image not found"));
@@ -144,13 +318,16 @@ async fn serve(State(state): State<AppState>, Path(name): Path<String>) -> ApiRe
         .map_err(|_| ApiError::not_found("Image not found"))?;
 
     let mut response = (StatusCode::OK, bytes).into_response();
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static(mime));
-    response.headers_mut().insert(
+    let headers = response.headers_mut();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime));
+    headers.insert(
         CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=31536000, immutable"),
     );
+    // The type is from the allow-list, not from whoever uploaded — but the
+    // extension is what chose it, and `nosniff` is what stops a browser
+    // second-guessing that on content it finds surprising.
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     Ok(response)
 }
 
@@ -285,8 +462,111 @@ mod tests {
         let (status, _) = post_image(&router, Some(&token), "image/png", &medium).await;
         assert_eq!(status, StatusCode::OK);
 
+        // Past the *image* cap but inside the layer's video-sized limit, so
+        // this is the handler's own check answering, not the body limit.
         let huge = vec![0x42u8; MAX_IMAGE_BYTES + 1];
         let (status, _) = post_image(&router, Some(&token), "image/png", &huge).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Past the largest thing this route hosts: refused by the layer.
+        let enormous = vec![0x42u8; MAX_VIDEO_BYTES + 1];
+        let (status, _) = post_image(&router, Some(&token), "video/mp4", &enormous).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn video_is_hosted_and_served_as_video() {
+        let state = state("img-video");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        // A generated clip is bigger than any image, and must be accepted at
+        // a size the image cap would refuse.
+        let clip = vec![0x21u8; MAX_IMAGE_BYTES + 1];
+        let (status, json) = post_image(&router, Some(&token), "video/mp4", &clip).await;
+        assert_eq!(status, StatusCode::OK);
+        let url = json["url"].as_str().expect("a url");
+        assert!(url.ends_with(".mp4"), "{url}");
+
+        let req = Request::builder().uri(url).body(Body::empty()).unwrap();
+        let response = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "video/mp4");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    }
+
+    #[tokio::test]
+    async fn an_import_of_an_unlisted_host_never_leaves_the_process() {
+        let state = state("img-import");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        for hostile in [
+            // The classic cloud metadata address, and the loopback and
+            // private ranges behind it.
+            "http://169.254.169.254/latest/meta-data/",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://127.0.0.1:8443/api/server/info",
+            "https://192.168.1.1/",
+            "file:///etc/passwd",
+            // Shapes that only *look* like an allowed host.
+            "https://x.ai.evil.example/clip.mp4",
+            "https://x.ai@evil.example/clip.mp4",
+            "https://notx.ai/clip.mp4",
+            // Right host, wrong scheme.
+            "http://vidgen.x.ai/clip.mp4",
+            "",
+        ] {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/api/images/import")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(
+                    serde_json::json!({ "url": hostile }).to_string(),
+                ))
+                .unwrap();
+            let response = router.clone().oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{hostile:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn imports_need_a_token() {
+        let router = build(state("img-import-auth"));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/images/import")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "url": "https://vidgen.x.ai/a.mp4" }).to_string(),
+            ))
+            .unwrap();
+        let response = router.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// The allow-list is the whole of the SSRF defence, so it gets a test of
+    /// its own rather than only being exercised through the handler.
+    #[test]
+    fn only_provider_media_hosts_are_importable() {
+        assert!(is_allowed_source("https://vidgen.x.ai/xai-video/abc.mp4"));
+        assert!(is_allowed_source("https://imgen.x.ai/xai-imgen/abc.jpeg"));
+        assert!(is_allowed_source("https://x.ai/a.png"));
+        assert!(is_allowed_source(
+            "https://videos.oaiusercontent.com/a.mp4?sig=1"
+        ));
+
+        // Suffix, not substring; userinfo cannot forge the host; https only.
+        assert!(!is_allowed_source("https://x.ai.evil.example/a.mp4"));
+        assert!(!is_allowed_source("https://evil.example/x.ai/a.mp4"));
+        assert!(!is_allowed_source("https://x.ai@evil.example/a.mp4"));
+        assert!(!is_allowed_source("https://notx.ai/a.mp4"));
+        assert!(!is_allowed_source("http://vidgen.x.ai/a.mp4"));
+        assert!(!is_allowed_source("file:///etc/passwd"));
+        assert!(!is_allowed_source("https://"));
+        assert!(!is_allowed_source(""));
     }
 }

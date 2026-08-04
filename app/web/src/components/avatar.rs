@@ -13,7 +13,7 @@
 
 use yew::prelude::*;
 
-use crate::ai::{self, ImageOut};
+use crate::ai;
 use crate::i18n::{t, Key};
 use crate::identity;
 use crate::state::{use_store, Action, Store};
@@ -166,22 +166,13 @@ pub fn avatar_picker() -> Html {
             let ai_prompt = ai_prompt.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let lang = store.language;
+                // Whatever the provider answered with, the profile stores a
+                // permanent same-origin URL — the only shape it may store.
+                // Bytes are uploaded; a provider link is fetched by the
+                // server, because that link is on a foreign origin and
+                // expires within about a day.
                 let hosted = match ai::generate_image(provider, &key, &prompt).await {
-                    // Providers that answer with bytes (Grok, OpenAI, Gemini):
-                    // re-host on this server so the URL is permanent and
-                    // same-origin — the only shape the profile may store.
-                    Ok(ImageOut::Bytes { mime, bytes }) => store
-                        .client
-                        .upload_image(&mime, bytes)
-                        .await
-                        .map_err(|e| e.to_string()),
-                    // A provider-hosted URL cannot be stored (foreign origin,
-                    // and it expires). Grok is asked for bytes, so reaching
-                    // this means the provider ignored that — surface it.
-                    Ok(ImageOut::Url(_)) => Err(
-                        "The provider returned a link instead of an image file. Try again."
-                            .to_owned(),
-                    ),
+                    Ok(out) => ai::host_generation(&store.client, out).await,
                     Err(e) => Err(e),
                 };
                 match hosted {

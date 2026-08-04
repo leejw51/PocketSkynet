@@ -13,8 +13,9 @@ plaintext messages or symmetric keys.
   testnet 338); transactions are signed in the browser, the server never
   sees a key.
 - **AI assistant** — Grok, OpenAI, Anthropic and Gemini behind one dialog:
-  draft, reply-in-context, and image generation. Bring your own keys; they
-  stay in your browser.
+  draft, reply-in-context, image generation, and video generation. Bring your
+  own keys; they stay in your browser. Generated media is stored on your own
+  server and posted as a link that keeps working.
 - **Installable** — the web client is a PWA: add it to a phone's home screen and
   it opens in its own window, from a cached shell, even with the server down.
   Nothing but the shell is cached — never a message, a key or an API response.

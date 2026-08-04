@@ -26,6 +26,41 @@ pub fn now_ms() -> i64 {
     0
 }
 
+/// The origin this page was loaded from, e.g. `https://100.64.0.1:9099`.
+///
+/// The *last* resort for building a shareable link — often `127.0.0.1`, which
+/// means something different on every machine. See
+/// [`crate::state::AppState::shareable_url`].
+#[cfg(target_arch = "wasm32")]
+pub fn page_origin() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn page_origin() -> String {
+    String::new()
+}
+
+/// Join a base URL and an absolute path without doubling or dropping the
+/// separator, and leave anything already absolute alone.
+///
+/// The pass-through matters: message content is user-written, so "the link in
+/// this message" may already be a full `https://…` URL that has nothing to do
+/// with this server. Prefixing a base onto that would produce nonsense.
+pub fn join_url(base: &str, path: &str) -> String {
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return path.to_owned();
+    }
+    let base = base.trim_end_matches('/');
+    if path.starts_with('/') {
+        format!("{base}{path}")
+    } else {
+        format!("{base}/{path}")
+    }
+}
+
 /// The viewer's timezone offset in minutes **east** of UTC (the negation of
 /// JavaScript's `getTimezoneOffset`, which is famously backwards).
 #[cfg(target_arch = "wasm32")]
@@ -168,6 +203,21 @@ pub fn relative_time(ms: i64, now: i64) -> String {
     }
 }
 
+/// A stopwatch reading for something happening *now* — an AI generation in
+/// flight, where the number is the whole point.
+///
+/// Counts in seconds up to a minute and then in `m:ss`, and never rounds away
+/// the seconds: this is read while waiting, and a display that sat on
+/// "1 minute" for sixty seconds would look stopped. Language-free by design,
+/// so it needs no translation to be correct.
+pub fn elapsed_clock(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
 /// `YYYY-MM-DD`, for "blocked 14 Mar"-style secondary rows where a precise date
 /// beats a fuzzy interval.
 pub fn short_date(ms: i64, tz: i32) -> String {
@@ -291,6 +341,46 @@ mod tests {
         let leap = parse_iso8601_ms("2024-02-29T12:00:00.000Z").unwrap();
         let c = civil_from_ms(leap, 0);
         assert_eq!((c.year, c.month, c.day), (2024, 2, 29));
+    }
+
+    #[test]
+    fn a_shareable_link_joins_cleanly_and_leaves_absolute_urls_alone() {
+        assert_eq!(
+            join_url("http://100.64.0.7:9099", "/api/images/a.png"),
+            "http://100.64.0.7:9099/api/images/a.png"
+        );
+        // A trailing slash on the base, or a missing leading slash on the
+        // path, must not produce `//` or a glued-together host.
+        assert_eq!(join_url("https://host/", "/a"), "https://host/a");
+        assert_eq!(join_url("https://host", "a"), "https://host/a");
+
+        // Already absolute: a URL somebody typed into a message belongs to
+        // whatever host it names, not to this server.
+        assert_eq!(
+            join_url("https://host", "https://example.com/x.png"),
+            "https://example.com/x.png"
+        );
+        assert_eq!(
+            join_url("https://host", "http://example.com/x.png"),
+            "http://example.com/x.png"
+        );
+
+        // No base at all (loopback-only server, non-wasm build): the path is
+        // left as it was rather than turned into something wrong.
+        assert_eq!(join_url("", "/api/images/a.png"), "/api/images/a.png");
+    }
+
+    #[test]
+    fn the_elapsed_clock_keeps_counting_seconds_past_a_minute() {
+        assert_eq!(elapsed_clock(0), "0s");
+        assert_eq!(elapsed_clock(9), "9s");
+        assert_eq!(elapsed_clock(59), "59s");
+        // The seconds must keep moving after a minute — a reading that sat on
+        // "1 minute" for sixty seconds would look like a hang, which is the
+        // exact thing this display exists to rule out.
+        assert_eq!(elapsed_clock(60), "1:00");
+        assert_eq!(elapsed_clock(61), "1:01");
+        assert_eq!(elapsed_clock(599), "9:59");
     }
 
     #[test]

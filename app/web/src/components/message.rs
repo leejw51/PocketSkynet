@@ -94,6 +94,15 @@ pub fn message_row(p: &MessageProps) -> Html {
         Callback::from(move |_: MouseEvent| on_copy.emit(hash.clone()))
     };
 
+    // The link this message carries, as an address another device can open.
+    // Computed here because it needs the store: the host to name is the
+    // server's recommendation, not this page's origin.
+    let share_link = p
+        .body
+        .text()
+        .and_then(link_in)
+        .map(|url| store.shareable_url(url));
+
     let toggle_menu = {
         let menu_open = menu_open.clone();
         Callback::from(move |_: MouseEvent| menu_open.set(!*menu_open))
@@ -203,7 +212,7 @@ pub fn message_row(p: &MessageProps) -> Html {
                 </button>
                 // Unconditional: `Popover` must observe `open` going false
                 // to run its exit (common.rs).
-                { menu(lang, p, start_edit, *menu_open, menu_open.clone()) }
+                { menu(lang, p, share_link.clone(), start_edit, *menu_open, menu_open.clone()) }
                 { reaction_picker(p) }
             </div>
         </article>
@@ -256,11 +265,23 @@ fn render_content(lang: Lang, text: &str, on_tag: &Callback<String>) -> Html {
             // than as the path it literally is, but the path stays visible
             // inside the card — see `AttachmentEmbed`.
             out.push(html! { <AttachmentEmbed id={id.to_owned()} /> });
+        } else if let Some(media) = hosted_media_in(token) {
+            // Media this server hosts, posted as the same-origin path it is
+            // served at — every AI generation lands here. Before this it
+            // rendered as the bare text `/api/images/<64 hex>.png`, which is
+            // the one shape in a room that is unambiguously a picture and
+            // was the only one shown as a string.
+            out.push(match media.kind {
+                MediaKind::Image => html! { <ImageEmbed url={media.url.to_owned()} /> },
+                MediaKind::Video => html! { <VideoEmbed url={media.url.to_owned()} /> },
+            });
         } else if token.starts_with("https://") || token.starts_with("http://") {
             if let Some(id) = youtube_id(token) {
                 out.push(youtube_embed(lang, &id));
             } else if is_image_url(token) {
                 out.push(html! { <ImageEmbed url={token.to_owned()} /> });
+            } else if is_video_url(token) {
+                out.push(html! { <VideoEmbed url={token.to_owned()} /> });
             } else {
                 out.push(html! {
                     <a href={token.to_owned()} target="_blank" rel="noopener noreferrer">{ token }</a>
@@ -348,6 +369,78 @@ fn is_image_url(url: &str) -> bool {
         || IMAGE_HOSTS
             .iter()
             .any(|h| host == *h || host.ends_with(&format!(".{h}")))
+}
+
+/// Video by file extension, for a URL that is a video file rather than a
+/// page about one. Deliberately narrow: only what a `<video>` element can
+/// actually play without a codec surprise.
+fn is_video_url(url: &str) -> bool {
+    const EXTENSIONS: [&str; 3] = [".mp4", ".webm", ".ogv"];
+    let Some((_, path, _)) = split_url(url) else {
+        return false;
+    };
+    let path = path.to_ascii_lowercase();
+    EXTENSIONS.iter().any(|ext| path.ends_with(ext))
+}
+
+/// The first link in a message worth copying: media this server hosts, or any
+/// `http(s)` URL somebody typed.
+///
+/// Returned relative when that is how it was written — [`AppState::shareable_url`]
+/// is what turns it into an address for another device, and it is the only
+/// place that decides which host to name.
+///
+/// [`AppState::shareable_url`]: crate::state::AppState::shareable_url
+fn link_in(text: &str) -> Option<&str> {
+    text.split_whitespace().find(|token| {
+        hosted_media_in(token).is_some()
+            || token.starts_with("https://")
+            || token.starts_with("http://")
+    })
+}
+
+/// What an embed should be drawn as.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MediaKind {
+    Image,
+    Video,
+}
+
+/// Media hosted by a PocketSkynet server, found in a message.
+///
+/// The AI assistant posts its generations as the path they are served at —
+/// `/api/images/<sha256>.<ext>` — because a relative URL keeps working when
+/// the same server is reached over Tailscale, over the LAN, and over
+/// loopback, which one baked-in absolute URL does not.
+struct HostedMedia<'a> {
+    url: &'a str,
+    kind: MediaKind,
+}
+
+/// Recognise a hosted-media URL, relative or absolute.
+///
+/// The shape is checked, not just the prefix: exactly a 64-character hex
+/// digest and one known extension, which is the same rule the server applies
+/// before it will serve the file. Anything else is left as text rather than
+/// turned into an element pointing at a path that cannot resolve.
+fn hosted_media_in(token: &str) -> Option<HostedMedia<'_>> {
+    const PREFIX: &str = "/api/images/";
+    let name = match token.strip_prefix(PREFIX) {
+        Some(rest) => rest.to_owned(),
+        // The absolute form: what the assistant's copy button hands over, so
+        // pasting that back into a room has to render as the picture too.
+        None => split_url(token)?.1.strip_prefix(PREFIX)?.to_owned(),
+    };
+    let (stem, ext) = name.rsplit_once('.')?;
+    if stem.len() != 64 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let kind = match ext.to_ascii_lowercase().as_str() {
+        "png" | "jpg" | "jpeg" | "webp" | "gif" => MediaKind::Image,
+        "mp4" | "webm" => MediaKind::Video,
+        _ => return None,
+    };
+    Some(HostedMedia { url: token, kind })
 }
 
 /// The 11-character video id, from any of the YouTube URL shapes.
@@ -625,6 +718,64 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
     }
 }
 
+#[derive(Properties, PartialEq)]
+struct VideoEmbedProps {
+    url: AttrValue,
+}
+
+/// An inline video: the clip itself, with controls, where the URL would have
+/// been.
+///
+/// `preload="metadata"` rather than `auto`: a room can hold a dozen of these
+/// and a scroll past them must not pull down a dozen whole files. Muted and
+/// never autoplaying — a message that starts making noise when it arrives is
+/// a message nobody wants twice. On failure the URL stays clickable, exactly
+/// as `ImageEmbed` does.
+#[function_component(VideoEmbed)]
+fn video_embed(p: &VideoEmbedProps) -> Html {
+    let lang = crate::state::use_store().language;
+    let load = use_state(|| MediaLoad::Loading);
+
+    if *load == MediaLoad::Failed {
+        return html! {
+            <span class="fn-media--failed">
+                { t(lang, Key::video_failed) }
+                { " " }
+                <a href={p.url.clone()} target="_blank" rel="noopener noreferrer">{ &p.url }</a>
+            </span>
+        };
+    }
+
+    let onloadeddata = {
+        let load = load.clone();
+        Callback::from(move |_: Event| load.set(MediaLoad::Loaded))
+    };
+    let onerror = {
+        let load = load.clone();
+        Callback::from(move |_: Event| load.set(MediaLoad::Failed))
+    };
+    let mut class = classes!("fn-media", "fn-media--clip");
+    if *load == MediaLoad::Loading {
+        class.push("fn-media--loading");
+    }
+    html! {
+        <span {class}>
+            if *load == MediaLoad::Loading {
+                <span class="fn-spinner" aria-hidden="true"></span>
+            }
+            <video
+                src={p.url.clone()}
+                controls=true
+                playsinline=true
+                preload="metadata"
+                aria-label={t(lang, Key::video_alt)}
+                onloadeddata={onloadeddata}
+                {onerror}
+            />
+        </span>
+    }
+}
+
 /// The ledger gutter.
 fn hash_slug(
     lang: Lang,
@@ -784,9 +935,13 @@ fn edit_box(
     }
 }
 
+/// The `⋮` menu. `share_link` is the message's link as an absolute URL for
+/// another device, when it has one — an AI generation this server hosts, or a
+/// pasted `http(s)` URL.
 fn menu(
     lang: Lang,
     p: &MessageProps,
+    share_link: Option<String>,
     start_edit: Callback<MouseEvent>,
     is_open: bool,
     open: UseStateHandle<bool>,
@@ -815,6 +970,19 @@ fn menu(
             close();
         })
     };
+    // Copying the *text* of a message whose text is a URL gives a relative
+    // path that only resolves inside this app. This gives the address to send
+    // somebody — which for a picture generated here is the whole point of
+    // having generated it.
+    let copy_link = {
+        let on_copy = p.on_copy.clone();
+        let link = share_link.clone().unwrap_or_default();
+        let close = close.clone();
+        Callback::from(move |_: MouseEvent| {
+            on_copy.emit(link.clone());
+            close();
+        })
+    };
     let copy_tx = {
         let on_copy = p.on_copy.clone();
         let tx = m.tx_hash.clone().unwrap_or_default();
@@ -837,6 +1005,15 @@ fn menu(
     html! {
         <Popover open={is_open} class="fn-picker" role="menu" label={t(lang, Key::message_actions)}
             on_dismiss={{ let close = close.clone(); Callback::from(move |_: ()| close()) }}>
+            // First, when there is one: for a picture or a clip this is the
+            // only entry anybody wants, and it sits above "Copy text" because
+            // "Copy text" on such a message hands over a path with no host —
+            // a link that resolves nowhere but here.
+            if share_link.is_some() {
+                <button type="button" role="menuitem" class="topcoat-button--quiet" onclick={copy_link}>
+                    { t(lang, Key::copy_link) }
+                </button>
+            }
             if p.body.text().is_some() {
                 <button type="button" role="menuitem" class="topcoat-button--quiet" onclick={copy_text}>
                     { t(lang, Key::copy_text) }
@@ -890,7 +1067,89 @@ fn menu(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_image_url, wallet_in, youtube_id};
+    use super::{hosted_media_in, is_image_url, is_video_url, wallet_in, youtube_id, MediaKind};
+
+    /// A 64-character hex digest, the only stem this server serves.
+    fn digest() -> String {
+        "41bd9a30a292e7860bc9ddbae8c5c5c1907f972cc657665cdf6baee6e61a2008".to_owned()
+    }
+
+    #[test]
+    fn an_ai_generation_posted_into_a_room_renders_as_the_media_not_the_path() {
+        // The exact shape the assistant posts. This used to be shown as a
+        // line of text, which is the bug this recognises.
+        let png = format!("/api/images/{}.png", digest());
+        assert_eq!(hosted_media_in(&png).unwrap().kind, MediaKind::Image);
+
+        let mp4 = format!("/api/images/{}.mp4", digest());
+        let found = hosted_media_in(&mp4).unwrap();
+        assert_eq!(found.kind, MediaKind::Video);
+        // The URL is passed through untouched: what was written is what is
+        // loaded, and a relative path stays relative.
+        assert_eq!(found.url, mp4);
+
+        for ext in ["jpg", "jpeg", "webp", "gif", "webm"] {
+            let url = format!("/api/images/{}.{ext}", digest());
+            assert!(hosted_media_in(&url).is_some(), "{ext}");
+        }
+    }
+
+    #[test]
+    fn the_absolute_form_from_the_copy_button_renders_too() {
+        let url = format!("https://home.example:8443/api/images/{}.png", digest());
+        assert_eq!(hosted_media_in(&url).unwrap().kind, MediaKind::Image);
+        assert_eq!(hosted_media_in(&url).unwrap().url, url);
+    }
+
+    #[test]
+    fn only_a_real_hosted_name_becomes_an_element() {
+        for text in [
+            // Right prefix, wrong shape — an element pointing at this would
+            // just 404, so it stays text.
+            "/api/images/notahash.png",
+            &format!("/api/images/{}.png", "a".repeat(63)),
+            &format!("/api/images/{}.exe", digest()),
+            &format!("/api/images/{}", digest()),
+            "/api/images/",
+            // Traversal shapes never reach an `<img>`.
+            "/api/images/../jwt.secret.png",
+            // A different route that merely looks similar.
+            &format!("/api/files/{}/raw", digest()),
+            "just some text",
+        ] {
+            assert!(hosted_media_in(text).is_none(), "{text}");
+        }
+    }
+
+    #[test]
+    fn copy_link_finds_the_link_a_message_actually_carries() {
+        let png = format!("/api/images/{}.png", digest());
+        assert_eq!(super::link_in(&png), Some(png.as_str()));
+        // Prose around it, and a newline rather than a space, still finds it.
+        let with_words = format!("look at this\n{png} nice?");
+        assert_eq!(super::link_in(&with_words), Some(png.as_str()));
+
+        // An ordinary pasted URL is copyable too.
+        assert_eq!(
+            super::link_in("see https://example.com/a"),
+            Some("https://example.com/a")
+        );
+
+        // Nothing to copy: the menu entry must not appear.
+        assert_eq!(super::link_in("just a sentence"), None);
+        assert_eq!(super::link_in("/api/images/notahash.png"), None);
+        assert_eq!(super::link_in(""), None);
+    }
+
+    #[test]
+    fn a_video_file_url_is_a_clip_and_a_page_about_one_is_not() {
+        assert!(is_video_url("https://vidgen.x.ai/xai-video/abc.mp4"));
+        assert!(is_video_url("https://example.com/clip.WEBM?t=3"));
+        assert!(!is_video_url("https://example.com/watch/clip"));
+        // Images and videos must not both claim the same URL.
+        assert!(!is_image_url("https://example.com/clip.mp4"));
+        assert!(!is_video_url("https://example.com/photo.png"));
+    }
 
     #[test]
     fn a_pasted_address_is_recognised_with_its_punctuation_intact() {

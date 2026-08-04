@@ -649,14 +649,10 @@ async fn exec_tool(
             };
             d.stage.emit(Stage::Generating);
             let out = ai::generate_image(provider, &key, &prompt).await?;
-            let url = match out {
-                ai::ImageOut::Url(u) => u,
-                ai::ImageOut::Bytes { mime, bytes } => d
-                    .client
-                    .upload_image(&mime, bytes)
-                    .await
-                    .map_err(|e| e.user_message())?,
-            };
+            // Hosted here before it is shown, never linked from the provider:
+            // those links expire within about a day, and a picture the Banker
+            // drew should still be there tomorrow.
+            let url = ai::host_generation(&d.client, out).await?;
             fx.images.push(url.clone());
             Ok(format!("image generated and shown to the user ({url})"))
         }

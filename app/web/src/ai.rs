@@ -3,10 +3,13 @@
 //! Ported from the reference client's `services/ai.ts`, including its privacy
 //! stance: **API keys live only in this browser's localStorage and requests go
 //! directly from the user's device to the provider.** Keys and prompts never
-//! touch the PocketSkynet server — with one deliberate exception: generated
-//! image *bytes* are uploaded to `POST /api/images` so they can be pasted
-//! into a room as a URL (the reference called the same endpoint; its server
-//! just never implemented it).
+//! touch the PocketSkynet server — with one deliberate exception: a finished
+//! generation is stored on that server before it can reach a room, either as
+//! *bytes* uploaded to `POST /api/images` (the reference called the same
+//! endpoint; its server just never implemented it) or, when the provider
+//! answers with a link instead, as a URL handed to `POST /api/images/import`
+//! for the server to fetch. See [`host_generation`] for why. What crosses
+//! over is the media itself — never the key, never the prompt.
 //!
 //! The request builders and response parsers are pure and host-tested; only
 //! the `fetch` itself is wasm-gated.
@@ -79,6 +82,15 @@ impl Provider {
             Provider::Gemini => Some("gemini-2.5-flash-image"),
         }
     }
+
+    /// `None` means the provider has no video API. Only xAI's Imagine has
+    /// one that a browser can drive with a bring-your-own key today.
+    pub fn video_model(self) -> Option<&'static str> {
+        match self {
+            Provider::Grok => Some("grok-imagine-video"),
+            _ => None,
+        }
+    }
 }
 
 /// Persisted assistant settings (`ps-ai` in localStorage).
@@ -139,6 +151,13 @@ impl AiSettings {
     /// The provider to use for images (Anthropic never qualifies).
     pub fn image_provider(&self) -> Option<Provider> {
         self.resolve(self.image_provider, |p| p.image_model().is_some())
+    }
+
+    /// The provider to use for video. Shares the *image* selection rather
+    /// than storing a third choice: only one provider generates video at all,
+    /// so a separate picker would be a setting with one legal value.
+    pub fn video_provider(&self) -> Option<Provider> {
+        self.resolve(self.image_provider, |p| p.video_model().is_some())
     }
 
     fn resolve(
@@ -415,6 +434,87 @@ fn parse_image(provider: Provider, body: &Value) -> Result<ImageOut, String> {
     }
 }
 
+/// How long a generated clip runs, in seconds. The provider bills per second
+/// and allows 1–15; six is long enough to read as a shot rather than a
+/// flicker, and short enough that a mistyped prompt is not an expensive one.
+const VIDEO_SECONDS: u32 = 6;
+
+/// Build the request that *starts* a video generation. `None` if the provider
+/// cannot make video.
+///
+/// Video is asynchronous everywhere it exists: this call returns an id, and
+/// [`video_poll_request`] asks about it until the clip is rendered.
+fn video_request(provider: Provider, key: &str, prompt: &str) -> Option<Prepared> {
+    let model = provider.video_model()?;
+    match provider {
+        Provider::Grok => Some(Prepared {
+            url: "https://api.x.ai/v1/videos/generations".to_owned(),
+            headers: vec![("Authorization", format!("Bearer {key}"))],
+            body: json!({
+                "model": model,
+                "prompt": prompt,
+                "duration": VIDEO_SECONDS,
+                "aspect_ratio": "16:9",
+                "resolution": "720p",
+            }),
+        }),
+        _ => None,
+    }
+}
+
+/// The poll for one in-flight generation.
+fn video_poll_url(provider: Provider, request_id: &str) -> Option<String> {
+    match provider {
+        Provider::Grok => Some(format!("https://api.x.ai/v1/videos/{request_id}")),
+        _ => None,
+    }
+}
+
+/// Ids come back from the provider and go straight into a URL path, so they
+/// are checked rather than trusted: a hostile or corrupted id must not be
+/// able to steer the poll at some other endpoint.
+fn is_request_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Where an in-flight video generation stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VideoStatus {
+    /// Still rendering — poll again.
+    Pending,
+    /// Done, at the provider's own **temporary** URL. Callers re-host it
+    /// before it reaches a room; see `api::Client::import_media`.
+    Ready(String),
+}
+
+fn parse_video_start(body: &Value) -> Result<String, String> {
+    match body["request_id"].as_str() {
+        Some(id) if is_request_id(id) => Ok(id.to_owned()),
+        _ => Err(provider_error(body)
+            .unwrap_or_else(|| "The provider did not start a video generation.".to_owned())),
+    }
+}
+
+fn parse_video_status(body: &Value) -> Result<VideoStatus, String> {
+    match body["status"].as_str().unwrap_or_default() {
+        "done" => match body["video"]["url"].as_str() {
+            Some(url) if url.starts_with("https://") => Ok(VideoStatus::Ready(url.to_owned())),
+            _ => Err("The provider reported a finished video with no URL.".to_owned()),
+        },
+        // `expired` is the provider dropping the *request*, not the clip: it
+        // is as terminal as a failure and has to stop the polling loop.
+        "failed" | "expired" => Err(provider_error(body)
+            .unwrap_or_else(|| "The provider could not generate that video.".to_owned())),
+        // An unrecognised status is treated as "still working": a provider
+        // adding a `queued` state must not read as an error here.
+        _ => Ok(VideoStatus::Pending),
+    }
+}
+
 fn decode_base64(b64: &str) -> Result<Vec<u8>, String> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD
@@ -461,6 +561,32 @@ async fn post(_prepared: Prepared) -> Result<Value, String> {
     Err("AI requests are wasm-only".to_owned())
 }
 
+/// The polling half of video generation: same error handling as [`post`],
+/// no body.
+#[cfg(target_arch = "wasm32")]
+async fn get(url: &str, headers: &[(&'static str, String)]) -> Result<Value, String> {
+    let mut req = gloo_net::http::Request::get(url);
+    for (name, value) in headers {
+        req = req.header(name, value);
+    }
+    let resp = req.send().await.map_err(|e| format!("network: {e}"))?;
+    let status = resp.status();
+    let body: Value = resp
+        .json()
+        .await
+        .unwrap_or_else(|_| json!({ "message": format!("HTTP {status}") }));
+    if !(200..300).contains(&status) {
+        return Err(provider_error(&body)
+            .unwrap_or_else(|| format!("The provider answered HTTP {status}.")));
+    }
+    Ok(body)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn get(_url: &str, _headers: &[(&'static str, String)]) -> Result<Value, String> {
+    Err("AI requests are wasm-only".to_owned())
+}
+
 /// Generate text. `system` frames the task; `user` carries the prompt (and
 /// any conversation context the caller chose to include).
 pub async fn generate_text(
@@ -483,6 +609,47 @@ pub async fn generate_image(
         image_request(provider, key, prompt).ok_or("This provider cannot generate images.")?;
     let body = post(prepared).await?;
     parse_image(provider, &body)
+}
+
+/// Start a video generation for `prompt`, returning the id to poll.
+pub async fn start_video(provider: Provider, key: &str, prompt: &str) -> Result<String, String> {
+    let prepared =
+        video_request(provider, key, prompt).ok_or("This provider cannot generate video.")?;
+    let body = post(prepared).await?;
+    parse_video_start(&body)
+}
+
+/// Ask once whether a started generation has finished.
+pub async fn poll_video(
+    provider: Provider,
+    key: &str,
+    request_id: &str,
+) -> Result<VideoStatus, String> {
+    if !is_request_id(request_id) {
+        return Err("The provider returned an unusable generation id.".to_owned());
+    }
+    let url = video_poll_url(provider, request_id).ok_or("This provider cannot generate video.")?;
+    let body = get(&url, &[("Authorization", format!("Bearer {key}"))]).await?;
+    parse_video_status(&body)
+}
+
+/// Turn whatever a provider answered with into a URL **this** server hosts.
+///
+/// The single rule, in one place: a generation is stored here before it can
+/// reach a room. Bytes are uploaded; a provider URL is handed to the server
+/// to fetch, because those links expire within about a day and their CDNs
+/// send no CORS headers for the browser to read the bytes itself.
+pub async fn host_generation(client: &crate::api::Client, out: ImageOut) -> Result<String, String> {
+    match out {
+        ImageOut::Bytes { mime, bytes } => client
+            .upload_image(&mime, bytes)
+            .await
+            .map_err(|e| e.user_message()),
+        ImageOut::Url(url) => client
+            .import_media(&url)
+            .await
+            .map_err(|e| e.user_message()),
+    }
 }
 
 /// The connectivity test behind the Keys tab's "Test" button: a one-word
@@ -654,6 +821,89 @@ mod tests {
     fn anthropic_has_no_image_request() {
         assert!(image_request(Provider::Anthropic, "k", "p").is_none());
         assert!(image_request(Provider::Grok, "k", "p").is_some());
+    }
+
+    #[test]
+    fn only_grok_generates_video_and_it_asks_for_a_bounded_clip() {
+        for p in [Provider::OpenAi, Provider::Anthropic, Provider::Gemini] {
+            assert!(video_request(p, "k", "a cat").is_none(), "{p:?}");
+        }
+        let p = video_request(Provider::Grok, "k", "a cat").unwrap();
+        assert_eq!(p.url, "https://api.x.ai/v1/videos/generations");
+        assert_eq!(p.body["model"], "grok-imagine-video");
+        assert_eq!(p.body["prompt"], "a cat");
+        // Billed per second, so the duration is ours to state, not the
+        // provider's to default.
+        assert_eq!(p.body["duration"], VIDEO_SECONDS);
+    }
+
+    #[test]
+    fn a_started_generation_yields_an_id_that_is_safe_in_a_url() {
+        let ok = json!({ "request_id": "d97415a1-5796-b7ec-379f-4e6819e08fdf" });
+        assert_eq!(
+            parse_video_start(&ok).unwrap(),
+            "d97415a1-5796-b7ec-379f-4e6819e08fdf"
+        );
+        assert_eq!(
+            video_poll_url(Provider::Grok, "abc").unwrap(),
+            "https://api.x.ai/v1/videos/abc"
+        );
+
+        // An id that could steer the poll somewhere else is refused rather
+        // than pasted into a URL path.
+        for hostile in ["../chat/completions", "a/b", "a?x=1", "", "a b"] {
+            assert!(!is_request_id(hostile), "{hostile:?}");
+            let body = json!({ "request_id": hostile });
+            assert!(parse_video_start(&body).is_err(), "{hostile:?}");
+        }
+
+        // An error envelope beats the generic message.
+        let err = json!({ "error": { "message": "no credits" } });
+        assert_eq!(parse_video_start(&err).unwrap_err(), "no credits");
+    }
+
+    #[test]
+    fn polling_distinguishes_working_from_finished_from_dead() {
+        let pending = json!({ "status": "pending" });
+        assert_eq!(parse_video_status(&pending).unwrap(), VideoStatus::Pending);
+
+        // An unknown state is still "working" — a new queue status must not
+        // read as a failure.
+        let queued = json!({ "status": "queued" });
+        assert_eq!(parse_video_status(&queued).unwrap(), VideoStatus::Pending);
+
+        let done = json!({
+            "status": "done",
+            "video": { "url": "https://vidgen.x.ai/a.mp4", "duration": 6 },
+        });
+        assert_eq!(
+            parse_video_status(&done).unwrap(),
+            VideoStatus::Ready("https://vidgen.x.ai/a.mp4".to_owned())
+        );
+
+        // `expired` is as terminal as `failed`: both must stop the loop.
+        for state in ["failed", "expired"] {
+            let body = json!({ "status": state, "error": { "message": "moderated" } });
+            assert_eq!(parse_video_status(&body).unwrap_err(), "moderated");
+        }
+
+        // Done with nothing to show is an error, not an empty success.
+        let empty = json!({ "status": "done", "video": {} });
+        assert!(parse_video_status(&empty).is_err());
+    }
+
+    #[test]
+    fn video_falls_back_to_whichever_provider_can_actually_make_one() {
+        let mut s = AiSettings::default();
+        s.set_key(Provider::Gemini, "AIzaY");
+        // Gemini generates images but not video.
+        assert_eq!(s.image_provider(), Some(Provider::Gemini));
+        assert_eq!(s.video_provider(), None);
+
+        s.set_key(Provider::Grok, "xai-1");
+        s.image_provider = Some(Provider::Gemini);
+        assert_eq!(s.image_provider(), Some(Provider::Gemini));
+        assert_eq!(s.video_provider(), Some(Provider::Grok));
     }
 
     #[test]

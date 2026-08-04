@@ -249,6 +249,7 @@ strings! {
     (send, "Send", "보내기", "送信", "傳送", "Odeslat", "Enviar", "发送", "Senden"),
     (retry, "Retry", "다시 시도", "再試行", "重試", "Zkusit znovu", "Reintentar", "重试", "Erneut versuchen"),
     (copy_text, "Copy text", "텍스트 복사", "テキストをコピー", "複製文字", "Kopírovat text", "Copiar texto", "复制文本", "Text kopieren"),
+    (copy_link, "Copy link", "링크 복사", "リンクをコピー", "複製連結", "Kopírovat odkaz", "Copiar enlace", "复制链接", "Link kopieren"),
     (copy_hash, "Copy hash", "해시 복사", "ハッシュをコピー", "複製雜湊", "Kopírovat hash", "Copiar hash", "复制哈希", "Hash kopieren"),
 
     // --- Rooms --------------------------------------------------------------
@@ -325,6 +326,8 @@ strings! {
     (cancel_edit, "Cancel edit", "편집 취소", "編集をキャンセル", "取消編輯", "Zrušit úpravu", "Cancelar edición", "取消编辑", "Bearbeitung abbrechen"),
     (image_alt, "Image", "이미지", "画像", "圖片", "Obrázek", "Imagen", "图片", "Bild"),
     (image_failed, "Image failed to load", "이미지를 불러오지 못했습니다", "画像を読み込めませんでした", "圖片載入失敗", "Obrázek se nepodařilo načíst", "No se pudo cargar la imagen", "图片加载失败", "Bild konnte nicht geladen werden"),
+    (video_alt, "Video", "동영상", "動画", "影片", "Video", "Vídeo", "视频", "Video"),
+    (video_failed, "Video failed to load", "동영상을 불러오지 못했습니다", "動画を読み込めませんでした", "影片載入失敗", "Video se nepodařilo načíst", "No se pudo cargar el vídeo", "视频加载失败", "Video konnte nicht geladen werden"),
     (youtube_video, "YouTube video", "YouTube 동영상", "YouTube動画", "YouTube影片", "Video YouTube", "Vídeo de YouTube", "YouTube 视频", "YouTube-Video"),
 
     // --- Composer -----------------------------------------------------------
@@ -590,7 +593,17 @@ strings! {
     (tab_write, "Write", "작성", "作成", "撰寫", "Napsat", "Escribir", "撰写", "Schreiben"),
     (tab_reply, "Reply", "답장", "返信", "回覆", "Odpovědět", "Responder", "回复", "Antworten"),
     (tab_image, "Image", "이미지", "画像", "圖片", "Obrázek", "Imagen", "图片", "Bild"),
+    (tab_video, "Video", "동영상", "動画", "影片", "Video", "Vídeo", "视频", "Video"),
     (tab_keys, "Keys", "키", "キー", "金鑰", "Klíče", "Claves", "密钥", "Schlüssel"),
+    (generate_video, "Generate video", "동영상 생성", "動画を生成", "產生影片", "Vygenerovat video", "Generar vídeo", "生成视频", "Video generieren"),
+    (video_needs_grok, "Video needs a Grok (xAI) key — add one in the Keys tab.", "동영상에는 Grok(xAI) 키가 필요합니다 — 키 탭에서 추가하세요.", "動画には Grok（xAI）のキーが必要です — キータブで追加してください。", "影片需要 Grok（xAI）金鑰 — 喺金鑰分頁加入。", "Video vyžaduje klíč Grok (xAI) — přidejte jej na kartě Klíče.", "El vídeo necesita una clave de Grok (xAI): añádela en la pestaña Claves.", "生成视频需要 Grok（xAI）密钥 — 请在密钥标签页中添加。", "Video braucht einen Grok-(xAI-)Schlüssel — füge ihn im Tab „Schlüssel“ hinzu."),
+    (ai_writing, "Writing…", "작성 중…", "作成中…", "撰寫中…", "Píšu…", "Escribiendo…", "撰写中…", "Schreibt…"),
+    (ai_drawing, "Generating the image…", "이미지를 생성하는 중…", "画像を生成中…", "產生緊圖片…", "Generuji obrázek…", "Generando la imagen…", "正在生成图片…", "Bild wird generiert…"),
+    (ai_filming, "Rendering the clip — this can take a few minutes…", "영상을 만드는 중 — 몇 분 걸릴 수 있습니다…", "動画を生成中 — 数分かかることがあります…", "製作緊影片 — 可能要幾分鐘…", "Vytvářím video — může to trvat několik minut…", "Renderizando el clip: puede tardar unos minutos…", "正在渲染视频 — 可能需要几分钟…", "Clip wird gerendert — das kann einige Minuten dauern…"),
+    (ai_saving_here, "Saving to this server…", "이 서버에 저장하는 중…", "このサーバーに保存中…", "儲存去呢部伺服器…", "Ukládám na tento server…", "Guardando en este servidor…", "正在保存到本服务器…", "Wird auf diesem Server gespeichert…"),
+    (ai_video_timeout, "The provider is still rendering after ten minutes. Try a shorter or simpler prompt.", "10분이 지나도 생성이 끝나지 않았습니다. 더 짧거나 단순한 프롬프트로 시도해 보세요.", "10 分たっても生成が終わりませんでした。より短く簡単なプロンプトで試してください。", "過咗十分鐘都仲未完成。試下短啲或簡單啲嘅提示。", "Poskytovatel po deseti minutách stále generuje. Zkuste kratší nebo jednodušší zadání.", "El proveedor sigue renderizando tras diez minutos. Prueba con una indicación más corta o simple.", "十分钟后仍未生成完成。请尝试更短或更简单的提示词。", "Der Anbieter rendert nach zehn Minuten immer noch. Versuche eine kürzere oder einfachere Eingabe."),
+    (media_saved_here, "Saved on this server, so this link keeps working — the provider's own link expires within a day.", "이 서버에 저장되어 링크가 계속 유효합니다 — 제공자의 링크는 하루 안에 만료됩니다.", "このサーバーに保存されるのでリンクは有効なままです — プロバイダー側のリンクは 1 日ほどで失効します。", "已經存喺呢部伺服器，所以呢條連結會一直有效 — 供應商嗰條一日之內就會失效。", "Uloženo na tomto serveru, takže odkaz zůstane funkční — odkaz poskytovatele vyprší do jednoho dne.", "Guardado en este servidor, así que este enlace sigue funcionando: el del proveedor caduca en un día.", "已保存在本服务器，因此该链接会长期有效 — 提供方的链接一天内就会失效。", "Auf diesem Server gespeichert, damit dieser Link weiter funktioniert — der Link des Anbieters verfällt binnen eines Tages."),
+    (media_link, "Link to this media", "이 미디어 링크", "このメディアのリンク", "呢個媒體嘅連結", "Odkaz na toto médium", "Enlace a este contenido", "此媒体的链接", "Link zu dieser Datei"),
     (login_vertical, "Vertical", "세로", "縦", "垂直", "Svisle", "Vertical", "竖排", "Vertikal"),
     (login_horizontal, "Horizontal", "가로", "横", "水平", "Vodorovně", "Horizontal", "横排", "Horizontal"),
     (artwork_above, "Artwork above, form below", "위에 아트워크, 아래에 입력란", "上に画像、下に入力欄", "上面圖像，下面表格", "Obrázek nahoře, formulář dole", "Ilustración arriba, formulario abajo", "插图在上，表单在下", "Bild oben, Formular unten"),
@@ -1083,6 +1096,13 @@ mod tests {
             // has a native alternative a German reader would prefer.
             (Lang::De, Key::nav_operator),
             (Lang::De, Key::op_dossier),
+            // "Video" is the ordinary Czech and German noun as well; the
+            // Spanish "Vídeo" carries an accent, which is why only these two
+            // collide with the English.
+            (Lang::Cs, Key::video_alt),
+            (Lang::De, Key::video_alt),
+            (Lang::Cs, Key::tab_video),
+            (Lang::De, Key::tab_video),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

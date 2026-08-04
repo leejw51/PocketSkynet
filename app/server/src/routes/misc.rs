@@ -96,6 +96,14 @@ async fn server_info(State(state): State<AppState>, request: axum::extract::Requ
         // Every address this deployment answers on, per transport, so a client
         // can show them without re-deriving the host list itself.
         "endpoints": endpoint_json(&state),
+        // The one base URL to put in front of a relative path when the
+        // resulting link is meant for *somebody else's* device: the mesh-VPN
+        // (Tailscale) address when the host has one, else a LAN address,
+        // `null` when this server is loopback-only or its port is ephemeral.
+        // Without it a client can only offer its own origin, and a link
+        // reading `http://127.0.0.1:9099/…` is useless to everyone but the
+        // person who copied it. Same value `GET /api/sites` serves.
+        "shareBase": crate::share_base(&state.cfg),
         "uptime": state.started.elapsed().as_secs(),
         // Realtime lives only on TCP: there is no WebSocket over HTTP/3, and a
         // client that assumed otherwise would wait forever for an upgrade.
