@@ -238,6 +238,13 @@ impl TestServer {
         ] {
             cmd.env_remove(key);
         }
+        // Clearing the environment is only half of it: `make build` bakes these
+        // same values in with `option_env!`, and no amount of `env_remove`
+        // reaches a string that is already compiled into the binary. Without
+        // this, a developer who had run `make build` — which is everyone who
+        // has run the server — tested against a wallet the suite thought it had
+        // taken away.
+        cmd.env("PS_IGNORE_BAKED_ENV", "1");
         for (key, value) in env {
             cmd.env(key, value);
         }
