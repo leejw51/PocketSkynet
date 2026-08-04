@@ -1847,6 +1847,44 @@ span.fn-conn { cursor: default; }
   inset-inline-start: calc(50% + 6px);
 }
 
+/* The More sheet (dialogs/more.rs) — what the bottom nav's fifth slot opens.
+   A tab bar holds five things before the labels truncate, and this app has
+   nine destinations and three tools; the four that are used constantly keep
+   their slots and the rest live here.
+
+   Rows with words rather than a grid of glyphs: this is the surface people
+   arrive at *because* they could not find something, so every entry says its
+   name and the icon is only there to be recognised alongside it. */
+.fn-more { display: grid; gap: var(--fn-s3); }
+.fn-more__group { display: grid; gap: 2px; }
+.fn-more__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--fn-s3);
+  inline-size: 100%;
+  /* A full touch target even where the sheet is scrolled with a thumb. */
+  min-block-size: 48px;
+  padding: var(--fn-s2) var(--fn-s3);
+  border: 0;
+  border-radius: var(--fn-r-card);
+  background: none;
+  color: var(--fn-fg);
+  font-size: var(--fn-t-md);
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--fn-dur-fast) var(--fn-ease),
+              transform var(--fn-dur-snappy) var(--fn-spring-snappy);
+}
+.fn-more__row > svg { color: var(--fn-fg-muted); }
+.fn-more__row:hover { background: var(--fn-surface-3); }
+.fn-more__row:active { transform: scale(var(--fn-tap-press)); }
+/* The row you are already on. The sheet is a map as much as a menu, and one
+   marked row is what tells you where the map is centred. */
+.fn-more__row[aria-current="page"] { color: var(--fn-primary-text); }
+.fn-more__row[aria-current="page"] > svg { color: var(--fn-primary); }
+
 /* Back button appears only in the single-column layout (§16). */
 .fn-back { display: none; }
 
@@ -4824,6 +4862,14 @@ span.fn-conn { cursor: default; }
 
   .fn-bottomnav { display: grid; }
   .fn-back { display: inline-grid; }
+
+  /* Where the bottom nav exists, the top bar stops being a menu.
+     Fourteen 36px buttons want 504px; a phone in portrait has 390, and flex
+     does not wrap them — it runs them off the screen edge, taking the last
+     ones (settings, sign out) with it. Everything tagged `--wide` is reachable
+     below through the nav or the More sheet behind its fifth tab, so what is
+     left up here is the identity, the wallet, and the way out. */
+  .fn-topbar__wide { display: none; }
 
   .fn-topbar__addr .fn-addr--full { display: none; }
   .fn-stream { padding-inline: var(--fn-s3); }

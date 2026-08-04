@@ -220,6 +220,14 @@ strings! {
     (nav_invites, "Invites", "초대", "招待", "邀請", "Pozvánky", "Invitaciones", "邀请", "Einladungen"),
     (nav_settings, "Settings", "설정", "設定", "設定", "Nastavení", "Ajustes", "设置", "Einstellungen"),
     (nav_sections, "Sections", "섹션", "セクション", "區段", "Sekce", "Secciones", "栏目", "Bereiche"),
+    // The bottom nav's fifth tab, and the title of the sheet behind it.
+    (nav_more, "More", "더보기", "その他", "更多", "Více", "Más", "更多", "Mehr"),
+    (more_tools, "Tools", "도구", "ツール", "工具", "Nástroje", "Herramientas", "工具", "Werkzeuge"),
+    // Where this server is and which transport is carrying this session. The
+    // dialog's own contents are English throughout — they are addresses, ALPN
+    // names and port numbers — but the way in is a menu row like any other.
+    (server_info, "Server info", "서버 정보", "サーバー情報", "伺服器資訊", "Info o serveru", "Información del servidor", "服务器信息", "Serverinfo"),
+    (more_hint, "Everything that does not fit on the bar.", "바에 다 담기지 않는 나머지입니다.", "バーに収まらないものはすべてここにあります。", "擺唔落條 bar 嘅嘢全部喺呢度。", "Vše, co se nevejde na lištu.", "Todo lo que no cabe en la barra.", "栏上放不下的都在这里。", "Alles, was nicht auf die Leiste passt."),
     (nav_account, "Account", "계정", "アカウント", "帳戶", "Účet", "Cuenta", "账户", "Konto"),
     (skip_to_messages, "Skip to messages", "메시지로 건너뛰기", "メッセージへスキップ", "跳至訊息", "Přejít na zprávy", "Ir a los mensajes", "跳转到消息", "Zu den Nachrichten springen"),
 

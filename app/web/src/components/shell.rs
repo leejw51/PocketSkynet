@@ -261,9 +261,16 @@ pub fn shell(p: &ShellProps) -> Html {
                     // A row that interleaves "go somewhere" with "change how
                     // this looks" makes people read all fourteen glyphs to
                     // find one; grouped, they only read the half they want.
+                    //
+                    // Everything from here down carries `fn-topbar__wide` and
+                    // is hidden below 800px, where the bottom nav and the More
+                    // sheet behind its fifth tab reach all of it. Fourteen
+                    // 36px buttons need 504px; a phone in portrait has 390,
+                    // and the overflow ran off the screen edge taking sign-out
+                    // — the last button in the row — with it.
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={t(lang, Key::nav_knowledge)}
                         title={t(lang, Key::nav_knowledge)}
                         aria-current={(p.route.nav_key() == "knowledge").then_some("page")}
@@ -273,7 +280,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     </button>
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={t(lang, Key::menu_bank)}
                         title={t(lang, Key::menu_bank)}
                         aria-current={(p.route.nav_key() == "bank").then_some("page")}
@@ -283,7 +290,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     </button>
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={t(lang, Key::nav_publish)}
                         title={t(lang, Key::nav_publish)}
                         aria-current={(p.route.nav_key() == "publish").then_some("page")}
@@ -296,7 +303,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     // section is unreachable on anything wider than a phone.
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={t(lang, Key::nav_operator)}
                         title={t(lang, Key::nav_operator)}
                         aria-current={(p.route.nav_key() == "operator").then_some("page")}
@@ -311,9 +318,9 @@ pub fn shell(p: &ShellProps) -> Html {
                     // page cannot tell without asking the server.
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet fn-topbar__server"
-                        aria-label={"Server info"}
-                        title={"Server info"}
+                        class="topcoat-icon-button--quiet fn-topbar__wide fn-topbar__server"
+                        aria-label={t(lang, Key::server_info)}
+                        title={t(lang, Key::server_info)}
                         onclick={{
                             let store = store.clone();
                             Callback::from(move |_: MouseEvent| {
@@ -325,7 +332,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     </button>
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet fn-topbar__shout"
+                        class="topcoat-icon-button--quiet fn-topbar__wide fn-topbar__shout"
                         aria-label={t(lang, Key::shout_title)}
                         title={t(lang, Key::shout_title)}
                         onclick={{
@@ -361,7 +368,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     </button>
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={t(lang, Key::appearance_change).replace("{theme}", store.theme.as_str())}
                         title={t(lang, Key::appearance)}
                         onclick={cycle_theme}
@@ -370,7 +377,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     </button>
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={t(lang, Key::font_change).replace("{font}", store.font_face.as_str())}
                         title={t(lang, Key::font_face)}
                         onclick={cycle_font_face}
@@ -379,7 +386,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     </button>
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={t(lang, Key::text_size_change).replace("{size}", store.font_scale.as_str())}
                         title={t(lang, Key::text_size)}
                         onclick={cycle_font_scale}
@@ -388,7 +395,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     </button>
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={if invites == 1 {
                             "Invitations, 1 pending".to_owned()
                         } else {
@@ -402,7 +409,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     </button>
                     <button
                         type="button"
-                        class="topcoat-icon-button--quiet"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
                         aria-label={t(lang, Key::nav_settings)}
                         title={t(lang, Key::nav_settings)}
                         onclick={go(Route::Settings, p.on_navigate.clone())}
@@ -442,6 +449,11 @@ pub fn shell(p: &ShellProps) -> Html {
                 </main>
             </div>
 
+            // Five slots, and only five. Eight tracks across 390pt gave each
+            // label 48px, which is where "오퍼레이터" became "오퍼…" and the row
+            // stopped being readable at a glance. The four constants stay —
+            // rooms, this conversation, its members, the operator's file — and
+            // the fifth is the door to everything else.
             <nav class="fn-bottomnav" aria-label={t(lang, Key::nav_sections)}>
                 { nav_item(&p.route, "rooms", t(lang, Key::nav_rooms), icons::chat(20), Some(unread),
                            false, Route::Rooms, &p.on_navigate) }
@@ -451,20 +463,41 @@ pub fn shell(p: &ShellProps) -> Html {
                 { nav_item(&p.route, "members", t(lang, Key::nav_members), icons::people(20), None,
                            room.is_none(),
                            room.clone().map(Route::Members).unwrap_or(Route::Rooms), &p.on_navigate) }
-                { nav_item(&p.route, "invites", t(lang, Key::nav_invites), icons::envelope(20), Some(invites),
-                           false, Route::Invitations, &p.on_navigate) }
-                { nav_item(&p.route, "knowledge", t(lang, Key::nav_knowledge), icons::book(20), None,
-                           false, Route::Knowledge, &p.on_navigate) }
-                { nav_item(&p.route, "publish", t(lang, Key::nav_publish), icons::globe(20), None,
-                           false, Route::Publish, &p.on_navigate) }
                 { nav_item(&p.route, "operator", t(lang, Key::nav_operator), icons::crown(20), Some(orders_left),
                            false, Route::Operator, &p.on_navigate) }
-                { nav_item(&p.route, "settings", t(lang, Key::nav_settings), icons::gear(20), None,
-                           false, Route::Settings, &p.on_navigate) }
+                // Marked current whenever the open screen is one that lives
+                // behind it, so the bar never claims you are nowhere. It
+                // carries the invitations badge for the same reason: that
+                // count is the one thing in there that asks for an answer,
+                // and it would otherwise be invisible until you looked.
+                <button
+                    type="button"
+                    class="fn-bottomnav__item"
+                    aria-current={IN_MORE.contains(&p.route.nav_key()).then_some("page")}
+                    aria-haspopup="dialog"
+                    onclick={{
+                        let store = store.clone();
+                        Callback::from(move |_: MouseEvent| {
+                            store.dispatch(Action::OpenModal(Modal::More));
+                        })
+                    }}
+                >
+                    { icons::ellipsis(20) }
+                    <span>{ t(lang, Key::nav_more) }</span>
+                    if invites > 0 {
+                        <span class="fn-bottomnav__badge"><Unread count={invites} /></span>
+                    }
+                </button>
             </nav>
         </div>
     }
 }
+
+/// The sections the bottom nav reaches only through More. Kept beside the nav
+/// rather than on `Route`, because it is a fact about this five-slot bar and
+/// not about the routes themselves — the two-pane tier shows all of these as
+/// top-bar buttons and has no More at all.
+const IN_MORE: [&str; 5] = ["invites", "knowledge", "publish", "bank", "settings"];
 
 /// One bottom-nav item.
 ///

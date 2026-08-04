@@ -60,6 +60,10 @@ icons! {
     check => html! { <><path d="m5 13 4 4L19 7"/></> };
     refresh => html! { <><path d="M20 11a8 8 0 1 0-2.3 6"/><path d="M20 5v6h-6"/></> };
     more => html! { <><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></> };
+    // The same three dots lying down. `more` (upright) is the row-level "act on
+    // this thing" menu; this one is the bottom nav's fifth tab, where the dots
+    // sit above a label and an upright glyph would read as a column of bullets.
+    ellipsis => html! { <><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></> };
     smile => html! { <><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01"/><path d="M15 9.5h.01"/></> };
     send => html! { <><path d="M4 12 20 4l-8 16-2.2-6.2L4 12Z"/></> };
     lock => html! { <><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></> };

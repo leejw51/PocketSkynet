@@ -552,7 +552,7 @@ fn root() -> Html {
                 {list}
                 {detail}
             />
-            { render_modal(&store, &on_navigate) }
+            { render_modal(&store, &route, &on_navigate) }
             <toast::Toasts />
             // The particle layer (burst.rs): mounted once, fired from
             // anywhere — the send button's pop, a deleted message's poof.
@@ -634,7 +634,7 @@ fn handle_event(store: &Store, ev: ServerEvent) {
 
 /// The modal layer. Exactly one dialog can be open, which is what makes the
 /// focus trap tractable.
-fn render_modal(store: &Store, on_navigate: &Callback<Route>) -> Html {
+fn render_modal(store: &Store, route: &Route, on_navigate: &Callback<Route>) -> Html {
     let close = {
         let store = store.clone();
         Callback::from(move |_: ()| store.dispatch(Action::CloseModal))
@@ -686,6 +686,23 @@ fn render_modal(store: &Store, on_navigate: &Callback<Route>) -> Html {
         Some(Modal::Wallet) => html! { <dialogs::Wallet on_close={close} /> },
         Some(Modal::Shout) => html! { <shout::ShoutDialog on_close={close} /> },
         Some(Modal::ServerInfo) => html! { <dialogs::ServerInfoDialog on_close={close} /> },
+        Some(Modal::More) => html! {
+            <dialogs::MoreSheet
+                route={route.clone()}
+                on_close={close.clone()}
+                // Every row both navigates and dismisses. Leaving the sheet up
+                // over the screen it just opened would hide the thing it was
+                // asked to reveal.
+                on_navigate={{
+                    let store = store.clone();
+                    let on_navigate = on_navigate.clone();
+                    Callback::from(move |r: Route| {
+                        store.dispatch(Action::CloseModal);
+                        on_navigate.emit(r);
+                    })
+                }}
+            />
+        },
         Some(Modal::Assistant(id)) => html! {
             <dialogs::Assistant room_id={id} on_close={close} />
         },
