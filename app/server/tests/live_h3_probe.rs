@@ -10,7 +10,10 @@ async fn probe_live_server() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let ca = std::env::var("PROBE_CA").unwrap_or_else(|_| {
-        format!("{}/.pocketskynet/tls/ca.crt", std::env::var("HOME").unwrap())
+        format!(
+            "{}/.pocketskynet/tls/ca.crt",
+            std::env::var("HOME").unwrap()
+        )
     });
     let authority = std::env::var("PROBE_AUTHORITY").unwrap_or_else(|_| "localhost".into());
     let addr: std::net::SocketAddr = std::env::var("PROBE_ADDR")
@@ -57,7 +60,11 @@ async fn probe_live_server() {
     stream.finish().await.expect("finish");
 
     let response = stream.recv_response().await.expect("response");
-    eprintln!("status={} version={:?}", response.status(), response.version());
+    eprintln!(
+        "status={} version={:?}",
+        response.status(),
+        response.version()
+    );
 
     let mut body = Vec::new();
     while let Some(mut chunk) = stream.recv_data().await.expect("body") {

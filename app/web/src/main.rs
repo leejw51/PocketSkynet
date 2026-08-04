@@ -30,6 +30,7 @@ mod format;
 mod i18n;
 mod identity;
 mod privy;
+mod progression;
 mod realtime;
 mod route;
 mod rpc;

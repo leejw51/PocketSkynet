@@ -136,7 +136,13 @@ pub fn chat(p: &ChatProps) -> Html {
                 let result = if mine {
                     client.remove_emoticon(&id, &code).await
                 } else {
-                    client.add_emoticon(&id, &code).await
+                    let result = client.add_emoticon(&id, &code).await;
+                    if result.is_ok() {
+                        // Adding only — paying for the toggle would make
+                        // tapping the same emoji on and off a load farm.
+                        crate::progression::award(pocketskynet_core::progression::Award::Reaction);
+                    }
+                    result
                 };
                 if let Err(e) = result {
                     toast::error(

@@ -342,3 +342,29 @@ CREATE TABLE IF NOT EXISTS published_sites (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_sites_created ON published_sites (created_at DESC);
+
+-- The operator ladder (the game layer's only server-side state).
+--
+-- One row per wallet, self-reported by the client: synaptic load, the rank it
+-- implies, the daily streak, and the counts behind the trophy wall. The
+-- progression itself lives on the device — this table exists so a shared
+-- server can show a board, not so it can adjudicate one.
+--
+-- Which means it is trivially forgeable, and is meant to be read that way. A
+-- self-hosted LAN server has no way to verify that someone really sent four
+-- hundred messages, and building an anti-cheat economy into a messenger would
+-- cost more than the board is worth. `load` is therefore stored as a running
+-- maximum: a reinstall reporting zero cannot erase a standing, and the only
+-- "attack" is claiming a number, which on a server you host for your friends
+-- is called bragging.
+CREATE TABLE IF NOT EXISTS operator_files (
+    wallet_address TEXT    PRIMARY KEY,
+    load           INTEGER NOT NULL,
+    rank_level     INTEGER NOT NULL,
+    streak         INTEGER NOT NULL,
+    orders         INTEGER NOT NULL,
+    trophies       INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_operator_load ON operator_files (load DESC);

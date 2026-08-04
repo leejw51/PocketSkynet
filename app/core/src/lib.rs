@@ -19,6 +19,7 @@ pub mod events;
 pub mod hash;
 pub mod ids;
 pub mod keys;
+pub mod progression;
 pub mod username;
 pub mod wallet;
 
@@ -29,6 +30,7 @@ pub use events::{ClientMessage, ResyncReason, ServerEvent, Target};
 pub use hash::{msg_hash_encrypted, msg_hash_plaintext, EmoticonAction};
 pub use ids::{IdError, MessageId, RoomId, WalletAddress};
 pub use keys::{verify_key_binding, EncryptionKeypair};
+pub use progression::{Award, Directive, Rank, Snapshot, Trophy};
 pub use username::{deterministic_username, room_name_from_entropy};
 pub use wallet::{MnemonicLength, Wallet};
 

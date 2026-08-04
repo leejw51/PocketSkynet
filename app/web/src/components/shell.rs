@@ -149,6 +149,13 @@ pub fn shell(p: &ShellProps) -> Html {
     let username = store.auth.username().unwrap_or("").to_owned();
     let invites = store.pending_invitations();
     let unread = store.total_unread();
+    // Today's unfinished orders. Read straight from local storage rather than
+    // held in the store: it changes only when an award lands, and the nav
+    // re-renders on every one of those anyway.
+    let orders_left = {
+        let file = crate::progression::Progression::load_stored();
+        (file.today().len() - file.completed_today()) as u32
+    };
     let room = p.route.room_id().cloned();
 
     // A fact about the environment, not a notification, and never dismissible.
@@ -429,6 +436,8 @@ pub fn shell(p: &ShellProps) -> Html {
                            false, Route::Knowledge, &p.on_navigate) }
                 { nav_item(&p.route, "publish", t(lang, Key::nav_publish), icons::globe(20), None,
                            false, Route::Publish, &p.on_navigate) }
+                { nav_item(&p.route, "operator", t(lang, Key::nav_operator), icons::crown(20), Some(orders_left),
+                           false, Route::Operator, &p.on_navigate) }
                 { nav_item(&p.route, "settings", t(lang, Key::nav_settings), icons::gear(20), None,
                            false, Route::Settings, &p.on_navigate) }
             </nav>

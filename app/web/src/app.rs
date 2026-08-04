@@ -13,8 +13,8 @@ use yew::prelude::*;
 use crate::actions;
 use crate::api::Client;
 use crate::components::{
-    bank, boot, burst, chat, dialogs, invitations, knowledge, login, members, publish, room_list,
-    settings, shell, shout, spotlight, toast,
+    bank, boot, burst, chat, dialogs, invitations, knowledge, login, members, operator, publish,
+    room_list, settings, shell, shout, spotlight, toast,
 };
 use crate::format;
 use crate::i18n::{t, Key};
@@ -112,6 +112,22 @@ fn root() -> Html {
                 || ()
             },
         );
+    }
+
+    // --- report in for the day ---------------------------------------------
+
+    // Keyed on *having* a token rather than on mount: a reload lands here with
+    // a session already restored, and the streak should count the day the
+    // operator actually used the app, not the number of times it was opened.
+    // `boot` is idempotent within a day, so re-running it costs nothing.
+    {
+        let signed_in = store.auth.token().is_some();
+        use_effect_with(signed_in, move |signed_in| {
+            if *signed_in {
+                crate::progression::boot();
+            }
+            || ()
+        });
     }
 
     // --- connectivity -----------------------------------------------------
@@ -521,6 +537,7 @@ fn root() -> Html {
             <publish::Publish on_navigate={on_navigate.clone()} />
         },
         Route::Bank => html! { <bank::Bank /> },
+        Route::Operator => html! { <operator::OperatorPage store={store.clone()} /> },
         Route::Settings => html! {
             <settings::Settings on_navigate={on_navigate.clone()} />
         },

@@ -629,6 +629,24 @@ strings! {
     (server_unreadable, "The server sent something this client couldn't read.", "서버가 이 클라이언트가 읽을 수 없는 응답을 보냈습니다.", "サーバーがこのクライアントで読めないデータを返しました。", "伺服器傳咗啲呢個客戶端睇唔明嘅嘢。", "Server poslal něco, co klient nepřečetl.", "El servidor envió algo que este cliente no pudo leer.", "服务器返回了此客户端无法读取的内容。", "Der Server hat etwas gesendet, das dieser Client nicht lesen konnte."),
 
     // --- Knowledge (docs/SEARCH.md) ------------------------------------------
+    // --- Operator (the game layer) ------------------------------------------
+    (nav_operator, "Operator", "오퍼레이터", "オペレーター", "操作員", "Operátor", "Operador", "操作员", "Operator"),
+    (op_dossier, "Dossier", "인사 기록", "個人ファイル", "檔案", "Složka", "Expediente", "档案", "Dossier"),
+    (op_synaptic_load, "Synaptic load", "시냅스 부하", "シナプス負荷", "突觸負載", "Synaptická zátěž", "Carga sináptica", "突触负载", "Synaptische Last"),
+    (op_streak, "Streak", "연속 접속", "連続日数", "連續日數", "Série", "Racha", "连续天数", "Serie"),
+    (op_orders, "Orders", "지령", "任務", "指令", "Rozkazy", "Órdenes", "指令", "Befehle"),
+    (op_trophies, "Trophies", "트로피", "トロフィー", "獎章", "Trofeje", "Trofeos", "奖杯", "Trophäen"),
+    (op_standing_orders, "Standing orders", "상시 지령", "常設任務", "常設指令", "Trvalé rozkazy", "Órdenes permanentes", "常设指令", "Daueraufträge"),
+    (op_reissued, "Reissued at midnight.", "자정에 다시 발령됩니다.", "深夜0時に再発行されます。", "午夜重新下達。", "Znovu vydáno o půlnoci.", "Se reemiten a medianoche.", "午夜重新下发。", "Wird um Mitternacht neu erteilt."),
+    (op_file, "File", "기록", "ファイル", "檔案", "Spis", "Archivo", "档案", "Akte"),
+    (op_classified, "Classified", "기밀", "機密", "機密", "Utajeno", "Clasificado", "机密", "Geheim"),
+    (op_ladder, "Ladder", "사다리", "ラダー", "階梯", "Žebříček", "Escalafón", "阶梯", "Rangliste"),
+    (op_this_server, "This server", "이 서버", "このサーバー", "呢個伺服器", "Tento server", "Este servidor", "本服务器", "Dieser Server"),
+    (op_ladder_note, "Reported by each device. The server ranks what it is told — it has no way to check, and does not pretend to.", "각 기기가 보고합니다. 서버는 전달받은 값으로 순위를 매길 뿐이며, 검증할 방법이 없고 그런 척도 하지 않습니다.", "各デバイスからの自己申告です。サーバーは伝えられた値で順位を付けるだけで、検証する手段はなく、あるふりもしません。", "由每部裝置自行申報。伺服器只係按收到嘅數字排名 — 佢冇辦法查證，亦唔會扮有。", "Hlásí každé zařízení samo. Server řadí to, co mu řeknou — nemá jak to ověřit a netváří se, že má.", "Lo informa cada dispositivo. El servidor ordena lo que le dicen: no puede comprobarlo, y no finge lo contrario.", "由每台设备自行上报。服务器只按收到的数字排名——它无法核实，也不假装可以。", "Von jedem Gerät selbst gemeldet. Der Server sortiert, was ihm gesagt wird — er kann es nicht prüfen und tut auch nicht so."),
+    (op_clearance_raised, "Clearance raised", "권한 상승", "クリアランス上昇", "權限提升", "Zvýšeno oprávnění", "Autorización elevada", "权限提升", "Freigabe erhöht"),
+    (op_rank, "Rank", "등급", "ランク", "等級", "Hodnost", "Rango", "等级", "Rang"),
+    (op_order_complete, "Order complete", "지령 완료", "任務完了", "指令完成", "Rozkaz splněn", "Orden completada", "指令完成", "Auftrag erfüllt"),
+    (op_no_report, "No operator has reported to this server yet.", "아직 이 서버에 보고한 오퍼레이터가 없습니다.", "このサーバーにはまだ誰も報告していません。", "重未有操作員向呢個伺服器報告。", "Tomuto serveru se zatím nikdo nehlásil.", "Todavía no se ha reportado ningún operador a este servidor.", "还没有操作员向本服务器上报。", "Bei diesem Server hat sich noch niemand gemeldet."),
     (nav_knowledge, "Knowledge", "지식", "ナレッジ", "知識", "Znalosti", "Conocimiento", "知识", "Wissen"),
     (knowledge_tagline, "Everything written here is findable. Search it, or teach it something new.", "여기에 쓴 모든 것은 검색할 수 있습니다. 찾아보거나, 새로 가르쳐 주세요.", "ここに書いたことはすべて検索できます。探すか、新しく教えてください。", "喺度寫低嘅嘢全部搵得返。搜尋佢，或者教佢啲新嘢。", "Vše, co je zde napsáno, lze najít. Hledejte, nebo naučte něco nového.", "Todo lo escrito aquí se puede encontrar. Búscalo o enséñale algo nuevo.", "这里写下的一切都能被找到。搜索它，或教它点新东西。", "Alles, was hier geschrieben wird, ist auffindbar. Durchsuche es oder bringe ihm etwas Neues bei."),
     (mode_search, "Search", "검색", "検索", "搜尋", "Hledat", "Buscar", "搜索", "Suchen"),
@@ -1042,6 +1060,11 @@ mod tests {
             (Lang::Es, Key::font_serif),
             (Lang::De, Key::font_system),
             (Lang::De, Key::size_standard),
+            // German borrows both words wholesale: "Operator" is the ordinary
+            // German noun, and "Dossier" is French by way of German — neither
+            // has a native alternative a German reader would prefer.
+            (Lang::De, Key::nav_operator),
+            (Lang::De, Key::op_dossier),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

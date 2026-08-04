@@ -31,6 +31,7 @@ pub mod files;
 pub mod keys;
 pub mod messages;
 pub mod models;
+pub mod operators;
 pub mod rooms;
 pub mod shouts;
 pub mod sites;

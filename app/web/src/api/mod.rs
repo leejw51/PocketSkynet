@@ -22,9 +22,11 @@ mod auth;
 mod files;
 mod invitations;
 mod keys;
+pub mod messages;
 /// Public because [`messages::MessageBody`] is the shape `crate::crypto` builds
 /// and the composer sends; everything else in these modules is `impl Client`.
-pub mod messages;
+/// Public for the [`operators::OperatorFile`] type the ladder renders.
+pub mod operators;
 mod rooms;
 /// Public for the hit/note/tag types the Knowledge page renders.
 pub mod search;

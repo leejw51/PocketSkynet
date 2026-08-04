@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use pocketskynet_core::progression::Award;
 use pocketskynet_core::{RoomId, Wallet, WalletAddress};
 
 use crate::api::{Client, RoomKeyWrap};
@@ -367,6 +368,14 @@ pub async fn create_room_flow(
         None
     };
 
+    // A secure channel is worth more than a plain one because it cost more
+    // to make: a key was generated, wrapped and stored.  A requested seal that
+    // failed pays the plain rate — the room is not actually sealed.
+    crate::progression::award(if encrypt && downgraded.is_none() {
+        Award::EncryptedChannelForged
+    } else {
+        Award::ChannelForged
+    });
     refresh_rooms(store.clone()).await;
     Ok((room.id, downgraded))
 }
@@ -466,6 +475,11 @@ pub async fn fast_create_room(
     }
 
     refresh_rooms(store.clone()).await;
+    crate::progression::award(if sealed.is_ok() {
+        Award::EncryptedChannelForged
+    } else {
+        Award::ChannelForged
+    });
     Ok((room_id, sealed.err()))
 }
 
@@ -543,6 +557,14 @@ pub async fn send_message(store: Store, room_id: RoomId, local_id: u64, text: St
 
         match store.client.send_message(&room_id, &body).await {
             Ok(msg) => {
+                // Only once the server has taken it.  Paying for a
+                // transmission that failed to send would be the app lying
+                // about what happened.
+                crate::progression::award(if encrypted {
+                    Award::EncryptedTransmission
+                } else {
+                    Award::Transmission
+                });
                 store.dispatch(Action::Sync(room_id.clone(), vec![msg]));
                 store.dispatch(Action::SendSucceeded(room_id, local_id));
                 return;

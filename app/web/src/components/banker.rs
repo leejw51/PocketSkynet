@@ -1090,6 +1090,7 @@ pub fn banker_view(p: &BankerProps) -> Html {
             // yield the render-time snapshot, which does not yet contain the
             // question we just pushed — the user's bubble would vanish.
             let log_after_question = next;
+            crate::progression::award(pocketskynet_core::progression::Award::AgentQueried);
             wasm_bindgen_futures::spawn_local(async move {
                 // Fetch the native balance for the prompt — cheap, and it lets
                 // "what's my balance" answer without a tool round.

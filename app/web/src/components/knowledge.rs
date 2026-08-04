@@ -269,6 +269,9 @@ pub fn knowledge(p: &KnowledgeProps) -> Html {
                 teaching.set(false);
                 match outcome {
                     Ok(note) => {
+                        crate::progression::award(
+                            pocketskynet_core::progression::Award::KnowledgeStored,
+                        );
                         toast::success(&store, t(store.language, Key::taught_ok));
                         draft.set(String::new());
                         teach_source.set(None);

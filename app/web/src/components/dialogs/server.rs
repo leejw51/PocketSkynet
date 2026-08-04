@@ -278,9 +278,18 @@ mod tests {
             http3_available: available,
             ..Default::default()
         };
-        assert!(case("h2", true).http3_offered_but_unused(), "the whole point");
-        assert!(!case("h3", true).http3_offered_but_unused(), "already on it");
-        assert!(!case("h2", false).http3_offered_but_unused(), "nothing offered");
+        assert!(
+            case("h2", true).http3_offered_but_unused(),
+            "the whole point"
+        );
+        assert!(
+            !case("h3", true).http3_offered_but_unused(),
+            "already on it"
+        );
+        assert!(
+            !case("h2", false).http3_offered_but_unused(),
+            "nothing offered"
+        );
     }
 
     #[test]

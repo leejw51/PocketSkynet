@@ -63,9 +63,10 @@ impl H3Client {
                 .expect("the CA must be a usable trust anchor");
         }
 
-        let mut tls = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+        let mut tls =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(roots)
+                .with_no_client_auth();
         // Without this the handshake completes and then the server closes the
         // connection with "no application protocol" — the single most common
         // way an h3 client fails to work at all.
@@ -281,8 +282,14 @@ async fn the_full_auth_flow_works_over_http3() {
         .await;
     assert_eq!(challenge.status, 200, "challenge over QUIC");
     let body = challenge.json();
-    let message = body["message"].as_str().expect("a challenge message").to_string();
-    let challenge_id = body["challengeId"].as_str().expect("a challenge id").to_string();
+    let message = body["message"]
+        .as_str()
+        .expect("a challenge message")
+        .to_string();
+    let challenge_id = body["challengeId"]
+        .as_str()
+        .expect("a challenge id")
+        .to_string();
 
     let signature = signer.sign(&message);
     let login = client
@@ -298,14 +305,16 @@ async fn the_full_auth_flow_works_over_http3() {
         )
         .await;
     assert_eq!(login.status, 200, "login over QUIC: {:?}", login.json());
-    let token = login.json()["token"]
-        .as_str()
-        .expect("a JWT")
-        .to_string();
+    let token = login.json()["token"].as_str().expect("a JWT").to_string();
 
     // And the token is honoured on a later request over the same connection.
     let me = client.get("/api/auth/profile", Some(&token)).await;
-    assert_eq!(me.status, 200, "an authenticated GET over QUIC: {:?}", me.json());
+    assert_eq!(
+        me.status,
+        200,
+        "an authenticated GET over QUIC: {:?}",
+        me.json()
+    );
     assert_eq!(
         me.json()["walletAddress"].as_str().unwrap().to_lowercase(),
         signer.address().to_lowercase()
@@ -330,8 +339,16 @@ async fn a_room_created_over_http3_is_visible_over_tcp() {
             json!({ "name": "quic-room", "encrypted": false }),
         )
         .await;
-    assert_eq!(created.status, 200, "create a room over QUIC: {:?}", created.json());
-    let room_id = created.json()["id"].as_str().expect("a room id").to_string();
+    assert_eq!(
+        created.status,
+        200,
+        "create a room over QUIC: {:?}",
+        created.json()
+    );
+    let room_id = created.json()["id"]
+        .as_str()
+        .expect("a room id")
+        .to_string();
 
     // Read it back over the *TCP* listener, with the same token. The list is
     // a bare array, not an envelope.
@@ -360,12 +377,7 @@ async fn websocket_is_refused_with_an_explanation_not_a_hang() {
 
     let resp = tokio::time::timeout(
         Duration::from_secs(5),
-        client.request(
-            http::Method::GET,
-            "/ws",
-            None,
-            None,
-        ),
+        client.request(http::Method::GET, "/ws", None, None),
     )
     .await;
 
@@ -376,16 +388,17 @@ async fn websocket_is_refused_with_an_explanation_not_a_hang() {
 
     // The upgrade header is what marks it; without one this is just a GET on a
     // route that does not speak plain HTTP.
-    let upgrade = tokio::time::timeout(
-        Duration::from_secs(5),
-        upgrade_attempt(&mut client),
-    )
-    .await
-    .expect("the refusal must be immediate");
+    let upgrade = tokio::time::timeout(Duration::from_secs(5), upgrade_attempt(&mut client))
+        .await
+        .expect("the refusal must be immediate");
 
-    assert_eq!(upgrade.status, 501, "WebSocket over HTTP/3 is not implemented");
     assert_eq!(
-        upgrade.json()["code"], "NO_WEBSOCKET_OVER_H3",
+        upgrade.status, 501,
+        "WebSocket over HTTP/3 is not implemented"
+    );
+    assert_eq!(
+        upgrade.json()["code"],
+        "NO_WEBSOCKET_OVER_H3",
         "and it must say so in a form a client can branch on"
     );
     // The plain GET is allowed to fail however the route sees fit; what
@@ -413,7 +426,10 @@ async fn upgrade_attempt(client: &mut H3Client) -> H3Response {
         .expect("send the upgrade attempt");
     stream.finish().await.expect("finish the request stream");
 
-    let response = stream.recv_response().await.expect("a response, not a hang");
+    let response = stream
+        .recv_response()
+        .await
+        .expect("a response, not a hang");
     let mut body = Vec::new();
     while let Some(mut chunk) = stream.recv_data().await.expect("receive the body") {
         while chunk.has_remaining() {
@@ -569,7 +585,8 @@ async fn server_info_reports_the_transport_that_carried_the_request() {
     let over_quic = client.get("/api/server/info", None).await;
     assert_eq!(over_quic.status, 200);
     assert_eq!(
-        over_quic.json()["protocol"], "h3",
+        over_quic.json()["protocol"],
+        "h3",
         "a request that arrived over QUIC must say so"
     );
 

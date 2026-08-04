@@ -129,9 +129,7 @@ impl TestServer {
     /// The QUIC endpoint's address. Panics unless the server was started with
     /// [`start_http3`](Self::start_http3).
     pub fn http3_addr(&self) -> std::net::SocketAddr {
-        let port = self
-            .http3_port
-            .expect("this server has no HTTP/3 listener");
+        let port = self.http3_port.expect("this server has no HTTP/3 listener");
         std::net::SocketAddr::from(([127, 0, 0, 1], port))
     }
 

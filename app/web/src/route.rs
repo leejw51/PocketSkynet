@@ -34,6 +34,9 @@ pub enum Route {
     /// `/bank` — the universal wallet, a full screen since 2026-07 (it outgrew
     /// its dialog: six tabs, an agent chat and a portfolio don't fit a modal).
     Bank,
+    /// `/operator` — the operator's file: clearance, standing orders, the
+    /// trophy wall, and this server's ladder.
+    Operator,
     /// `/settings` — settings and profile.
     Settings,
     /// Anything else.
@@ -57,6 +60,7 @@ impl Route {
             ["knowledge"] => Route::Knowledge,
             ["publish"] => Route::Publish,
             ["bank"] => Route::Bank,
+            ["operator"] => Route::Operator,
             ["settings"] => Route::Settings,
             // A malformed room id is a 404, not a room screen that will 400 on
             // its first fetch: the id charset is validated by the newtype.
@@ -79,6 +83,7 @@ impl Route {
             Route::Knowledge => "/knowledge".into(),
             Route::Publish => "/publish".into(),
             Route::Bank => "/bank".into(),
+            Route::Operator => "/operator".into(),
             Route::Settings => "/settings".into(),
             // A 404 has no canonical path; going "back" to it is meaningless.
             Route::NotFound => "/".into(),
@@ -110,6 +115,7 @@ impl Route {
             | Route::Settings
             | Route::Knowledge
             | Route::Publish
+            | Route::Operator
             | Route::Bank => "settings",
             _ => "rooms",
         }
@@ -125,6 +131,7 @@ impl Route {
             Route::Knowledge => "knowledge",
             Route::Publish => "publish",
             Route::Bank => "bank",
+            Route::Operator => "operator",
             Route::Settings => "settings",
             _ => "",
         }
@@ -141,6 +148,7 @@ impl Route {
             Route::Knowledge => "Knowledge · PocketSkynet",
             Route::Publish => "Publish · PocketSkynet",
             Route::Bank => "Bank · PocketSkynet",
+            Route::Operator => "Operator · PocketSkynet",
             Route::Settings => "Settings · PocketSkynet",
             Route::NotFound => "Page not found · PocketSkynet",
         }

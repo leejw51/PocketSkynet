@@ -76,7 +76,11 @@ async fn server_info(State(state): State<AppState>, request: axum::extract::Requ
         _ => "unknown",
     };
 
-    let scheme = if state.cfg.tls.is_on() { "https" } else { "http" };
+    let scheme = if state.cfg.tls.is_on() {
+        "https"
+    } else {
+        "http"
+    };
     let http3_port = state.cfg.http3_port;
 
     Json(serde_json::json!({

@@ -636,8 +636,12 @@ fn advertise_mdns(addr: std::net::SocketAddr, scheme: Scheme) -> Option<Advertis
         .map(|e| format!("lan={}", e.url));
     if cfg!(target_os = "macos") {
         let mut args = vec![
-            "-R".to_string(), instance.clone(), "_pocketskynet._tcp".to_string(),
-            ".".to_string(), addr.port().to_string(), scheme_prop.to_string(),
+            "-R".to_string(),
+            instance.clone(),
+            "_pocketskynet._tcp".to_string(),
+            ".".to_string(),
+            addr.port().to_string(),
+            scheme_prop.to_string(),
         ];
         args.extend(vpn_prop.clone());
         args.extend(lan_prop.clone());
@@ -648,10 +652,16 @@ fn advertise_mdns(addr: std::net::SocketAddr, scheme: Scheme) -> Option<Advertis
             .spawn()
         {
             Ok(child) => {
-                tracing::info!(instance, port = addr.port(), "advertising over Bonjour (mDNSResponder)");
+                tracing::info!(
+                    instance,
+                    port = addr.port(),
+                    "advertising over Bonjour (mDNSResponder)"
+                );
                 return Some(Advertiser::System(child));
             }
-            Err(e) => tracing::warn!(error = %e, "dns-sd unavailable, falling back to in-process mDNS"),
+            Err(e) => {
+                tracing::warn!(error = %e, "dns-sd unavailable, falling back to in-process mDNS")
+            }
         }
     }
     let mut props = vec![scheme_prop.to_string()];
@@ -673,10 +683,7 @@ fn advertise_in_process(
         }
     };
     let host = hostname();
-    let pairs: Vec<(&str, &str)> = props
-        .iter()
-        .filter_map(|p| p.split_once('='))
-        .collect();
+    let pairs: Vec<(&str, &str)> = props.iter().filter_map(|p| p.split_once('=')).collect();
     let info = match mdns_sd::ServiceInfo::new(
         "_pocketskynet._tcp.local.",
         instance,

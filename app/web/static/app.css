@@ -7875,3 +7875,251 @@ span.fn-conn { cursor: default; }
   text-underline-offset: 2px;
 }
 .fn-modal__hint a:hover { text-decoration-thickness: 2px; }
+
+/* ==========================================================================
+   §20 The operator's file
+   --------------------------------------------------------------------------
+   The game layer's one screen: clearance, standing orders, the trophy wall
+   and the server's ladder. Everything here is a readout, so the type is
+   tabular and the surfaces are flat — this is an instrument panel, not a
+   dashboard of cards competing for attention.
+
+   Every colour comes from the existing tokens rather than a new palette: the
+   game layer is a lens on the same product, and inventing a second accent
+   would make it look like a different app bolted on.
+   ========================================================================== */
+
+.fn-operator {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  max-width: 720px;
+  margin-inline: auto;
+}
+
+/* The panel surface. Its own class rather than a generic `.fn-card`: this
+   stylesheet has never had one, and inventing a global name for four sections
+   would be claiming a word the rest of the app might later want for something
+   else. Built from the same tokens every other raised surface uses. */
+.fn-op-card {
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--fn-surface);
+  border: 1px solid var(--fn-border);
+  box-shadow: var(--fn-elev-1);
+}
+
+/* --- dossier -------------------------------------------------------------- */
+
+.fn-op-dossier { display: grid; justify-items: center; gap: 10px; text-align: center; }
+
+/* The emblem plate. The iOS client ships ten painted emblems; on the web the
+   tier is drawn from the same geometry the rest of the HUD uses, which keeps
+   the bundle honest — no megabyte of art for a number. */
+.fn-op-emblem {
+  inline-size: 96px;
+  block-size: 96px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 45%, var(--fn-primary-soft), transparent 70%),
+    var(--fn-surface-2);
+  border: 1px solid var(--fn-primary-line);
+  box-shadow: 0 0 24px -6px var(--fn-glow);
+}
+
+.fn-op-level {
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--fn-primary-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.fn-op-designation {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--fn-fg);
+}
+
+.fn-op-mandate { margin: 0; font-size: 13px; color: var(--fn-fg-muted); max-inline-size: 44ch; }
+
+/* --- bars ----------------------------------------------------------------- */
+
+.fn-op-bar {
+  inline-size: 100%;
+  block-size: 6px;
+  border-radius: 999px;
+  background: var(--fn-surface-3);
+  overflow: hidden;
+}
+.fn-op-bar--thin { block-size: 3px; }
+
+.fn-op-bar-fill {
+  block-size: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--fn-primary) 55%, transparent), var(--fn-primary));
+  transition: inline-size 240ms ease;
+}
+/* §17 kills durations globally; this one is a value readout, not decoration,
+   so flatten it rather than let it animate under reduced motion. */
+@media (prefers-reduced-motion: reduce) { .fn-op-bar-fill { transition-duration: 1ms; } }
+
+/* --- stats ---------------------------------------------------------------- */
+
+.fn-op-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  inline-size: 100%;
+  margin: 4px 0 0;
+}
+.fn-op-stat { display: grid; gap: 2px; text-align: center; }
+.fn-op-stat dd {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-primary-text);
+}
+.fn-op-stat dt {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fn-fg-faint);
+}
+
+/* --- section headers ------------------------------------------------------ */
+
+.fn-op-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-block-end: 10px;
+}
+.fn-op-head h3 {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fn-fg-faint);
+}
+.fn-op-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-fg-muted);
+}
+.fn-op-note { margin: 10px 0 0; font-size: 11px; color: var(--fn-fg-faint); }
+
+/* --- standing orders ------------------------------------------------------ */
+
+.fn-op-order { display: grid; gap: 4px; padding-block: 8px; }
+.fn-op-order + .fn-op-order { border-block-start: 1px solid var(--fn-hair); }
+.fn-op-order-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.fn-op-order-text { font-size: 14px; color: var(--fn-fg); }
+.fn-op-order.is-done .fn-op-order-text {
+  color: var(--fn-fg-muted);
+  text-decoration: line-through;
+}
+.fn-op-order.is-done .fn-op-bar-fill { background: var(--fn-encrypt); }
+.fn-op-bounty {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-primary-text);
+}
+.fn-op-order.is-done .fn-op-bounty { color: var(--fn-encrypt-text); }
+.fn-op-order-count {
+  justify-self: end;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-fg-faint);
+}
+
+/* --- trophy wall ---------------------------------------------------------- */
+
+.fn-op-trophies {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+.fn-op-trophy {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  padding: 10px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--fn-hair);
+  background: var(--fn-surface-2);
+  text-align: center;
+  min-block-size: 56px;
+}
+.fn-op-trophy-name {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--fn-fg-faint);
+}
+.fn-op-trophy-goal { font-size: 9px; font-variant-numeric: tabular-nums; color: var(--fn-fg-faint); }
+
+/* Earned tiles carry their tier's colour; locked ones stay a slab, because a
+   wall where everything glows tells you nothing about what you have done. */
+.fn-op-trophy.is-earned { border-color: var(--fn-border-strong); background: var(--fn-surface-3); }
+.fn-op-trophy.is-earned .fn-op-trophy-name { color: var(--fn-fg); }
+.fn-op-trophy.is-earned.tier-bronze  { box-shadow: inset 0 0 0 1px hsl(25 60% 50% / 0.45); }
+.fn-op-trophy.is-earned.tier-silver  { box-shadow: inset 0 0 0 1px hsl(210 16% 70% / 0.45); }
+.fn-op-trophy.is-earned.tier-gold    { box-shadow: inset 0 0 0 1px hsl(43 90% 55% / 0.50); }
+.fn-op-trophy.is-earned.tier-machine {
+  box-shadow: inset 0 0 0 1px var(--fn-primary-line), 0 0 18px -8px var(--fn-glow);
+}
+
+/* --- ladder --------------------------------------------------------------- */
+
+.fn-op-rung {
+  display: grid;
+  grid-template-columns: 24px 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding-block: 6px;
+}
+.fn-op-rung + .fn-op-rung { border-block-start: 1px solid var(--fn-hair); }
+.fn-op-pos {
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-fg-faint);
+  text-align: end;
+}
+.fn-op-who { display: grid; gap: 1px; min-inline-size: 0; }
+.fn-op-who strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fn-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fn-op-who em {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--fn-fg-faint);
+}
+.fn-op-rung-streak { font-size: 11px; color: var(--fn-warn-text, #f6c177); font-variant-numeric: tabular-nums; }
+.fn-op-rung-load {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-fg-muted);
+}
+.fn-op-rung.is-me {
+  background: var(--fn-primary-soft);
+  border-radius: 8px;
+  padding-inline: 6px;
+}
+.fn-op-rung.is-me .fn-op-rung-load { color: var(--fn-primary-text); }

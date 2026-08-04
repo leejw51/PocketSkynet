@@ -16,6 +16,7 @@ pub mod invitations;
 pub mod keys;
 pub mod messages;
 pub mod misc;
+pub mod operators;
 pub mod realtime;
 pub mod rooms;
 pub mod search;
@@ -151,6 +152,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(files::router())
         .merge(images::router())
         .merge(search::router())
+        .merge(operators::router())
         .merge(shout::router())
         .merge(sites::router())
         .merge(realtime::sse_router())

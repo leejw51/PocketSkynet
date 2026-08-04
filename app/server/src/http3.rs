@@ -158,11 +158,8 @@ pub struct Http3Listener {
 
 impl Http3Listener {
     pub fn bind(addr: SocketAddr, config: quinn::ServerConfig) -> Result<Self, Http3Error> {
-        let endpoint =
-            quinn::Endpoint::server(config, addr).map_err(|source| Http3Error::Bind {
-                addr,
-                source,
-            })?;
+        let endpoint = quinn::Endpoint::server(config, addr)
+            .map_err(|source| Http3Error::Bind { addr, source })?;
         let addr = endpoint
             .local_addr()
             .map_err(|source| Http3Error::Bind { addr, source })?;
@@ -386,7 +383,10 @@ mod tests {
             .header(http::header::UPGRADE, "WebSocket")
             .body(())
             .unwrap();
-        assert!(is_websocket_upgrade(&plain), "header match is case-insensitive");
+        assert!(
+            is_websocket_upgrade(&plain),
+            "header match is case-insensitive"
+        );
 
         let connect = Request::builder()
             .method(http::Method::CONNECT)
