@@ -5171,19 +5171,22 @@ span.fn-conn { cursor: default; }
      one the rule stops matching and the animation is *removed*, not
      restarted, so history stays still. */
   transform-origin: 0% 0%;
-  /* The charge rides the bloom: see THE LOCK-ON below for why it is stepped. */
+  /* The charge rides the bloom: see THE LOCK-ON below for why it is stepped.
+     Both are inside the 500ms the arrival is budgeted, along with the scan and
+     the arc below — the longest of the four is what "a message has landed"
+     costs, so they are capped together rather than each on its own merits. */
   animation:
-    fn-bubble-bloom 550ms var(--fn-spring-bouncy) both,
-    fn-bubble-charge 420ms steps(1, end) both;
+    fn-bubble-bloom 440ms var(--fn-spring-bouncy) both,
+    fn-bubble-charge 380ms steps(1, end) both;
 }
 .fn-msg--own:last-child .fn-bubble { transform-origin: 100% 0%; }
 /* A just-sent pending bubble is the last child and blooms like any arrival —
    but it must keep breathing afterwards, so all three animations ride together. */
 .fn-msg--pending:last-child .fn-bubble {
   animation:
-    fn-bubble-bloom 550ms var(--fn-spring-bouncy) both,
-    fn-bubble-charge 420ms steps(1, end) both,
-    fn-breathe 1.6s var(--fn-ease-cosine) 550ms infinite;
+    fn-bubble-bloom 440ms var(--fn-spring-bouncy) both,
+    fn-bubble-charge 380ms steps(1, end) both,
+    fn-breathe 1.6s var(--fn-ease-cosine) 440ms infinite;
 }
 @keyframes fn-bubble-bloom {
   0%   { opacity: 0; transform: scale(0.2) translateY(8px); filter: blur(5px); }
@@ -5210,7 +5213,10 @@ span.fn-conn { cursor: default; }
     transparent 62%
   );
   transform: translateX(-130%);
-  animation: fn-bubble-scan 560ms var(--fn-ease-expo) 90ms both;
+  /* 410 + 90 = 500, the arrival budget. The beam was the longest thing in the
+     set at 650ms and therefore the thing that decided when a message had
+     finished arriving; it is now level with the arc, which is also 500. */
+  animation: fn-bubble-scan 410ms var(--fn-ease-expo) 90ms both;
 }
 @keyframes fn-bubble-scan {
   to { transform: translateX(130%); }
@@ -5265,16 +5271,22 @@ span.fn-conn { cursor: default; }
    The bubble collapses to a bright horizontal line and snaps out — the
    silhouette of something being unmade rather than merely hidden. `blur` on
    the way out keeps the text from staying legible while the box shrinks,
-   which is what would otherwise read as a squash rather than a vanishing. */
+   which is what would otherwise read as a squash rather than a vanishing.
+
+   260ms, and `delete_message.rs::DISSOLVE_MS` has to be the same number: the
+   dialog sleeps that long before it calls the server, so a duration here that
+   the constant does not know about is either an effect cut off mid-collapse or
+   a row sitting invisible-but-present after it has finished. The pair is the
+   back half of the 500ms a deletion is allowed; PROC_MS is the front half. */
 .fn-msg--dissolving {
   pointer-events: none;
-  animation: fn-msg-dissolve 460ms var(--fn-ease-exit) both;
+  animation: fn-msg-dissolve 260ms var(--fn-ease-exit) both;
 }
 .fn-msg--dissolving .fn-bubble {
-  animation: fn-bubble-dissolve 460ms var(--fn-ease-exit) both;
+  animation: fn-bubble-dissolve 260ms var(--fn-ease-exit) both;
 }
 /* The debris: one element, many box-shadows, thrown outward as the bubble goes.
-   Cheaper than eighteen nodes for something on screen for a third of a
+   Cheaper than eighteen nodes for something on screen for a quarter of a
    second, and it composites as a single layer.
 
    Cast in the termination tone, not the system tone. The old ash was cyan,
@@ -5301,7 +5313,7 @@ span.fn-conn { cursor: default; }
     -25px 29px 0 -1px var(--term),
     44px -28px 0 -2px var(--term),
     -49px -22px 0 -2px var(--term);
-  animation: fn-debris 460ms var(--fn-ease-expo) both;
+  animation: fn-debris 260ms var(--fn-ease-expo) both;
 }
 @keyframes fn-msg-dissolve {
   to { opacity: 0; }
@@ -5457,16 +5469,22 @@ span.fn-conn { cursor: default; }
 }
 
 /* --- The processing readout (burst.rs::proc_hud) -------------------------
-   Three seconds of the machine thinking before it acts, then the particles.
-   Centred on the layer rather than pinned to whatever fired it: it is the
-   system's own display, it must not be clipped by a corner, and at this size
-   it would cover the thing it is talking about.
+   A beat of the machine thinking before it acts, then the particles. Centred
+   on the layer rather than pinned to whatever fired it: it is the system's own
+   display, it must not be clipped by a corner, and at this size it would cover
+   the thing it is talking about.
 
    Everything here is transform and opacity on a handful of nodes. The rings
    counter-rotate at different rates, which is what keeps a circle from reading
    as a loading spinner — a reticle *tracks* something, it does not just spin.
-   Durations are locked to burst.rs::PROC_MS (3000ms); the phase readout below
-   divides that by three, so the two constants have to move together. */
+
+   Durations are locked to burst.rs::PROC_MS, which is 240ms. It was 3000ms,
+   and the whole assembly was drawn for that: the *loops* below are the part
+   that does not survive a 12× cut on its own, because a period is not a
+   duration. A 2.4s ring turns 29° in 240ms and reads as a frozen graphic, not
+   a reticle. So every loop here is a ratio of PROC_MS rather than a wall time —
+   each one completes between a third of a turn and one and a half turns while
+   the readout is up, which is what makes it look alive at this length. */
 .fn-proc {
   position: absolute;
   inset-block-start: 50%;
@@ -5476,15 +5494,22 @@ span.fn-conn { cursor: default; }
   justify-items: center;
   gap: var(--fn-s3);
   pointer-events: none;
-  animation: fn-proc-in 3000ms linear both;
+  animation: fn-proc-in 240ms linear both;
 }
 /* The whole assembly arrives fast, holds, and implodes into the burst that
-   follows it — the last 8% is the handoff, so the particles appear to come
-   out of the collapse rather than after it. */
+   follows it — the last stretch is the handoff, so the particles appear to
+   come out of the collapse rather than after it.
+
+   The percentages widened when the run shortened. At 3000ms the arrival was 5%
+   and the collapse 8%, which bought 150ms and 240ms of real time; the same
+   percentages of 240ms are 12ms and 19ms, and a 132px reticle that appears in
+   twelve milliseconds does not arrive, it just *is* there — one frame of
+   nothing, then a full-size graphic. 15/78 restores roughly a fifth of the run
+   to each end: 36ms in, 53ms out, which are visible motions again. */
 @keyframes fn-proc-in {
   0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.82); }
-  5%   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  92%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  15%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  78%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   100% { opacity: 0; transform: translate(-50%, -50%) scale(0.55); }
 }
 
@@ -5504,23 +5529,27 @@ span.fn-conn { cursor: default; }
 }
 /* Dashed via a conic mask would cost a repaint per frame; four border colours
    with two set to transparent gives the same broken-arc reticle for free. */
+/* Periods are ~1.25×, ~0.83× and ~3.1× of PROC_MS, holding the 2.4 : 1.6 : 6
+   ratio the three rings had at three seconds. Keeping the ratio is what keeps
+   them from ever looking synchronised, which is the entire reason there are
+   three of them. */
 .fn-proc__ring--a {
   inline-size: 132px;
   block-size: 132px;
   border-block-color: var(--spark);
-  animation: fn-proc-spin 2.4s linear infinite;
+  animation: fn-proc-spin 300ms linear infinite;
 }
 .fn-proc__ring--b {
   inline-size: 102px;
   block-size: 102px;
   border-inline-color: color-mix(in srgb, var(--spark) 75%, transparent);
-  animation: fn-proc-spin 1.6s linear infinite reverse;
+  animation: fn-proc-spin 200ms linear infinite reverse;
 }
 .fn-proc__ring--c {
   inline-size: 72px;
   block-size: 72px;
   border: 1px dashed color-mix(in srgb, var(--spark) 45%, transparent);
-  animation: fn-proc-spin 6s linear infinite;
+  animation: fn-proc-spin 750ms linear infinite;
 }
 @keyframes fn-proc-spin { to { transform: rotate(1turn); } }
 
@@ -5533,7 +5562,7 @@ span.fn-conn { cursor: default; }
   box-shadow:
     0 0 12px 4px var(--spark),
     0 0 34px 12px color-mix(in srgb, var(--spark) 40%, transparent);
-  animation: fn-proc-core 480ms steps(2, end) infinite;
+  animation: fn-proc-core 160ms steps(2, end) infinite;
 }
 @keyframes fn-proc-core {
   0%   { opacity: 1;    transform: scale(1); }
@@ -5554,12 +5583,25 @@ span.fn-conn { cursor: default; }
     transparent 360deg
   );
   mask: radial-gradient(closest-side, transparent 32%, #000 36%, #000 99%, transparent);
-  animation: fn-proc-spin 1.15s linear infinite;
+  animation: fn-proc-spin 360ms linear infinite;
 }
 
-/* THE READOUT. All three phases are always in the DOM, each shown only during
-   its own second by a delay of `--i` seconds. `steps(1)` is the point: the
-   label must *switch*, never fade. */
+/* THE READOUT. One label, up for the whole of PROC_MS.
+
+   It was three, each shown during its own second by a delay of `--i` seconds,
+   stepped so the text switched like a machine's display instead of crossfading
+   like a slideshow. At 240ms that schedule gives each label 80ms — under six
+   frames — so the three did not read as a sequence, they read as one flickering
+   line. The scheduling went with them: nothing is being scheduled any more, so
+   there is no delay, no `steps()`, and no keyframes. The element is simply
+   visible, and the parent's `fn-proc-in` fades the assembly in and out around
+   it.
+
+   `position: absolute` inside a sized box stays, even for a single label: it is
+   what stops the readout from resizing the grid and shifting the rings and the
+   bar when a longer phase name is used. `min-inline-size` is the same
+   guarantee on the other axis — the widest label in burst.rs is 14 characters
+   ("PURGING RECORD"), and 15ch leaves it a hair of room. */
 .fn-proc__readout {
   position: relative;
   block-size: 1.1em;
@@ -5574,21 +5616,6 @@ span.fn-conn { cursor: default; }
   text-transform: uppercase;
   color: var(--spark);
   text-shadow: 0 0 10px color-mix(in srgb, var(--spark) 60%, transparent);
-  opacity: 0;
-  /* `forwards`, emphatically **not** `both`. Backwards fill applies the *first*
-     keyframe for the whole of the delay, so with `both` every phase sat at
-     opacity 1 from t=0 and all three labels rendered on top of each other.
-     With `forwards` the element keeps its own `opacity: 0` until its delay
-     elapses, and holds the final keyframe (also 0) afterwards. */
-  animation: fn-proc-phase 3000ms steps(1, end) forwards;
-  animation-delay: calc(var(--i) * 1000ms);
-}
-/* Visible for one second out of the three, starting at its own offset. Held
-   at 0 afterwards so the last phase does not linger past the collapse. */
-@keyframes fn-proc-phase {
-  0%     { opacity: 1; }
-  33.33% { opacity: 0; }
-  100%   { opacity: 0; }
 }
 
 .fn-proc__bar {
@@ -5605,8 +5632,10 @@ span.fn-conn { cursor: default; }
   transform-origin: 0 50%;
   background: linear-gradient(90deg, transparent, var(--spark) 60%, #fff);
   box-shadow: 0 0 8px 0 var(--spark);
-  /* Linear on purpose: a progress bar that eases is lying about the work. */
-  animation: fn-proc-fill 3000ms linear both;
+  /* Linear on purpose: a progress bar that eases is lying about the work. The
+     work is now 240ms of it, and the bar still has to be the honest length —
+     it is the one element here that claims to measure something. */
+  animation: fn-proc-fill 240ms linear both;
 }
 @keyframes fn-proc-fill {
   from { transform: scaleX(0); }

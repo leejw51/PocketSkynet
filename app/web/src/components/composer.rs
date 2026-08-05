@@ -76,14 +76,15 @@ pub fn composer(p: &ComposerProps) -> Html {
             text.set(String::new());
 
             // Order is the whole point — process, discharge, *then* the message
-            // exists. Sending first put the bubble on screen three seconds
-            // before the effect that was supposed to have produced it, which
-            // read as an unrelated animation playing over a done deal.
+            // exists. Sending first put the bubble on screen ahead of the
+            // effect that was supposed to have produced it, which read as an
+            // unrelated animation playing over a done deal.
             //
             // The cost is honest: the send really is held for PROC_MS, so the
             // message reaches the room that much later. That is the trade the
-            // sequence asks for, and on a LAN the request itself is noise next
-            // to it.
+            // sequence asks for, and it is why PROC_MS is budgeted rather than
+            // chosen — press to bubble is PROC_MS + SPARK_LEAD_MS, and on a LAN
+            // the request itself is noise next to it.
             let proc = super::burst::proc_start(super::burst::Variant::Pop);
             let send_btn = send_btn.clone();
             let on_send = on_send.clone();

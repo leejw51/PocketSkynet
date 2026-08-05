@@ -204,7 +204,8 @@ compositor runs CSS keyframes and Rust only computes endpoints.
 
 **Bubble bloom** (`bubbleBloomVariants` → `fn-bubble-bloom`, app.css §7). The newest
 message's bubble springs from its tail corner: scale `0 → 1.14 → 0.92 → 1.05 → 1` at the
-reference's own times `[0, .38, .62, .82, 1]` over 550ms, sharpening from a 5px blur.
+reference's own times `[0, .38, .62, .82, 1]` over 440ms (550ms until §7.1), sharpening from
+a 5px blur.
 Each swing is ~60% of the previous — a damped exponential by construction, so no bezier
 could carry it and the keyframes do (per-segment easing `--fn-spring-bouncy`, the §2
 convention). Bound to `.fn-msg:last-child` so displacement *removes* the animation rather
@@ -263,32 +264,57 @@ ordering as a test, since if a termination ever outlasts a transmission the two 
 have swapped character. The layer caps at 8 concurrent bursts and unmounts entirely under
 reduced motion.
 
-**Processing readout** (`burst.rs::proc_hud` + `.fn-proc`). Three seconds of the machine
-thinking before it acts, centred on the layer rather than pinned to whatever fired it: it is
-the system's own display, a corner would clip it, and at this size it would cover the thing
-it is talking about. Three counter-rotating reticle rings at different rates (a reticle
-*tracks* something; one spinning circle reads as a loading spinner), a conic sweep radius
-scanning the dish, a stepped core, a monospace phase readout on `steps(1)` so labels *switch*
-rather than crossfade (and `animation-fill-mode: forwards`, **not** `both` — backwards fill
-applies the first keyframe throughout the delay, which rendered all three labels stacked on
-top of each other), and a linear progress bar — easing it would lie about the work. The
-assembly implodes over its last 8% so the particles emerge from the collapse. Phases are
-`LINK ESTABLISHED → ENCRYPTING PAYLOAD → TRANSMITTING` (live) and `TARGET ACQUIRED → PURGING
-RECORD → TERMINATED` (term); untranslated on purpose, being machine readout rather than
-prose.
+**Processing readout** (`burst.rs::proc_hud` + `.fn-proc`). `PROC_MS` of the machine thinking
+before it acts, centred on the layer rather than pinned to whatever fired it: it is the
+system's own display, a corner would clip it, and at this size it would cover the thing it is
+talking about. Three counter-rotating reticle rings at different rates (a reticle *tracks*
+something; one spinning circle reads as a loading spinner), a conic sweep radius scanning the
+dish, a stepped core, a monospace phase label, and a linear progress bar — easing it would lie
+about the work. The assembly implodes over its last 22% so the particles emerge from the
+collapse. The label is `TRANSMITTING` (live) or `PURGING RECORD` (term); untranslated on
+purpose, being machine readout rather than prose.
+
+### 7.1 Retimed to 500ms (2026-08-05)
+
+`PROC_MS` was 3000ms. It is not an animation — it is a delay the person waits through, with
+the send held for it and the delete not touching the server until it elapses — so it was
+most of what sending and deleting *cost*: 3260ms to put a message on screen, 3460ms to take
+one off. It is 240ms now, budgeted so each whole sequence lands at 500ms
+(`PROC_MS + SPARK_LEAD_MS`, `PROC_MS + DISSOLVE_MS`), and the §7 arrival set is capped at the
+same 500 (bloom 550→440, charge 420→380, scan 650→500 including its delay, arc already 500).
+`DISSOLVE_MS` and `.fn-msg--dissolving` moved together, 460→260.
+
+Three things did not survive the cut as written, and they are the general lesson:
+
+- **A period is not a duration.** The ring loops were 2.4s/1.6s/6s against a 3000ms life. Left
+  alone, the outer ring turns 29° in 240ms — a frozen graphic where a reticle should be. They
+  are ratios of `PROC_MS` now (300/200/750ms), keeping the 2.4 : 1.6 : 6 relationship that is
+  the only reason there are three rings; the core and sweep the same.
+- **Percentage keyframes are not scale-free either.** `fn-proc-in` faded in over 5% and
+  collapsed over 8%, worth 150ms and 240ms at three seconds and 12ms and 19ms at 240 — an
+  appearance so abrupt it reads as a missing frame. Widened to 15/78.
+- **A stepped label needs about 250ms to be read rather than glimpsed.** Three phases over
+  240ms is 80ms each, which is not a sequence, it is a flicker. The readout is one label, and
+  the `--i` delay, the `steps(1)`, the `forwards`-not-`both` fill and `@keyframes
+  fn-proc-phase` all went with it — there is nothing left to schedule. The two labels dropped
+  from each set were the ones that were false while they were up anyway: `LINK ESTABLISHED`
+  and `TARGET ACQUIRED` describe an already-past moment, and `TERMINATED` describes one that
+  has not happened — nothing is destroyed until after this readout, which is exactly why a
+  failure during it can still restore the row.
 
 **Sequencing, and it is load-bearing.** Both paths run *process → discharge → outcome*, in
 that order, because the outcome arriving first reads as an unrelated animation playing over
 a done deal:
 
-- **Send** holds `on_send` for `PROC_MS`, fires the burst, then emits after `SPARK_LEAD_MS`
-  (260ms — tuned to the origin flash, not the full 1.3s particle flight) so the bubble blooms
-  *out of* the sparks while the streaks are still in the air. The send is genuinely delayed;
-  that is the trade the sequence asks for.
+- **Send** holds `on_send` for `PROC_MS` (240ms), fires the burst, then emits after
+  `SPARK_LEAD_MS` (260ms — tuned to the origin flash, not the full 1.3s particle flight) so
+  the bubble blooms *out of* the sparks while the streaks are still in the air. The send is
+  genuinely delayed; that is the trade the sequence asks for, and 240 + 260 is why the trade
+  costs 500ms.
 - **Delete** waits the full `PROC_MS` before anything is destroyed — a failure during the
   readout still has a row to restore — then dispatches `Dissolve` and the burst on the same
-  tick so the sparks read as the cause of the collapse, then waits `DISSOLVE_MS` before the
-  request.
+  tick so the sparks read as the cause of the collapse, then waits `DISSOLVE_MS` (260ms)
+  before the request. Same 500ms total.
 
 Positions are measured *after* the wait in both cases: the list may have scrolled or the
 composer reflowed, and a stale rect puts the blast where the message no longer is.
