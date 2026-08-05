@@ -10,6 +10,8 @@
 //! * `crypto` — policy over `pocketskynet_core`: key cache, fail-closed wraps.
 //! * `session`, `vault` — what survives a reload, and the one thing that only
 //!   survives it because the user asked for it to.
+//! * `asset` — the one place a `/static/img/…` URL is built, so a skin swap is
+//!   a lookup rather than a hunt through the markup for string literals.
 //! * `store`, `format`, `identity`, `route`, `realtime` — pure logic, host-tested.
 //!
 //! The crate is a binary rather than a library because Trunk expects one, but
@@ -21,6 +23,7 @@ mod actions;
 mod ai;
 mod api;
 mod app;
+mod asset;
 mod bank_agent;
 mod cache;
 mod components;

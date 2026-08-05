@@ -130,4 +130,10 @@ icons! {
     type_size => html! { <><path d="m3.5 18 4.5-11 4.5 11"/><path d="M5.4 14.4h5.2"/><path d="m14.5 18 3-7 3 7"/><path d="M15.9 15.6h3.2"/></> };
     // A capital T on a baseline: the typeface picker.
     type_face => html! { <><path d="M5 6.5V4.5h14v2"/><path d="M12 4.5V19"/><path d="M9 19h6"/></> };
+    // A painter's palette: the skin picker. Deliberately not a second
+    // brightness glyph — `moon_sun` next door already owns that idea, and two
+    // rows in the same list whose icons both mean "how it looks" is how a
+    // reader ends up clicking the wrong one. Three wells rather than four:
+    // at 18px a fourth becomes a smudge.
+    palette => html! { <><path d="M12 3.2a8.8 8.8 0 0 0 0 17.6 1.9 1.9 0 0 0 1.5-3.1 1.9 1.9 0 0 1 1.5-3.1h1.7a4 4 0 0 0 4-4.2c-.4-4-4-7-8.7-7z"/><path d="M7.4 12.2h.01"/><path d="M9.6 8.2h.01"/><path d="M14.2 7.6h.01"/></> };
 }

@@ -317,7 +317,7 @@ pub fn publish(p: &PublishProps) -> Html {
         </div>
         <div class="fn-scroll fn-publish">
             <div class="fn-publish__hero">
-                <img src="/static/img/publish-emblem.png" alt="" aria-hidden="true" />
+                <img src={crate::asset::img(store.skin, "publish-emblem")} alt="" aria-hidden="true" />
                 <p class="fn-muted">
                     { t(lang, Key::publish_hint).replace("{price}", &price_label) }
                 </p>

@@ -76,11 +76,13 @@ fn root() -> Html {
     // first paint settles.
     {
         let theme = store.theme;
+        let skin = store.skin;
         let language = store.language;
         let font_face = store.font_face;
         let font_scale = store.font_scale;
         use_effect_with((), move |_| {
             theme.apply();
+            skin.apply();
             // Stamps `<html lang>`, which is what a screen reader keys its
             // voice off — not merely a preference echo.
             language.apply();

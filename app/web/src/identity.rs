@@ -162,10 +162,10 @@ pub fn profile_art_label(slug: &str) -> String {
 /// same-origin `/api/images/…` URL. Everything else is refused *here as well
 /// as on the server*: a malicious or stale value must degrade to the default
 /// tile, never become a request to an attacker-chosen origin.
-pub fn avatar_src(profile_image: &str) -> Option<String> {
+pub fn avatar_src(skin: crate::session::Skin, profile_image: &str) -> Option<String> {
     if let Some(slug) = profile_image.strip_prefix("preset:") {
         if PROFILE_ART.contains(&slug) {
-            return Some(format!("/static/img/{slug}.png"));
+            return Some(crate::asset::img(skin, slug));
         }
         return None;
     }
@@ -315,13 +315,23 @@ mod tests {
     #[test]
     fn a_profile_image_resolves_only_to_known_presets_and_hosted_urls() {
         // A preset from the gallery resolves to its shipped file…
+        use crate::session::Skin;
         assert_eq!(
-            avatar_src("preset:tp-coder-f").as_deref(),
+            avatar_src(Skin::Skynet, "preset:tp-coder-f").as_deref(),
             Some("/static/img/tp-coder-f.png")
         );
         // …a hosted upload resolves to itself…
         let hosted = format!("/api/images/{}.png", "a".repeat(64));
-        assert_eq!(avatar_src(&hosted).as_deref(), Some(hosted.as_str()));
+        assert_eq!(
+            avatar_src(Skin::Skynet, &hosted).as_deref(),
+            Some(hosted.as_str())
+        );
+        // A hosted upload is the user's own picture and belongs to no skin,
+        // so the cute skin must not try to find a redrawn copy of it.
+        assert_eq!(
+            avatar_src(Skin::Cute, &hosted).as_deref(),
+            Some(hosted.as_str())
+        );
 
         // …and everything else degrades to the hash tile rather than
         // becoming a request to somewhere an attacker chose.
@@ -334,7 +344,7 @@ mod tests {
             "/api/images/../jwt.secret.png",
             "",
         ] {
-            assert_eq!(avatar_src(bad), None, "resolved {bad:?}");
+            assert_eq!(avatar_src(Skin::Skynet, bad), None, "resolved {bad:?}");
         }
     }
 

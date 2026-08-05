@@ -1,17 +1,31 @@
 #!/usr/bin/env python3
 """Generate PocketSkynet's graphical assets with Grok (xAI Imagine).
 
-Every illustration is produced twice — once for the light theme and once for
-the dark theme — because a flat PNG cannot adapt its own background. The two
-variants share a subject prompt and differ only in a palette clause, which is
-what keeps them recognisably the same artwork.
+Two dimensions, and they are not the same kind of thing.
 
-Requires GROK_API_KEY. Assets are written to web/static/img/ and checked in, so
-this only needs re-running when the manifest below changes:
+**Theme** is light or dark. Every illustration is produced twice, because a
+flat PNG cannot adapt its own background. The two variants share a subject
+prompt and differ only in a palette clause, which is what keeps them
+recognisably the same artwork.
 
-    make assets          # generate anything missing
-    make assets-force    # regenerate everything
-    tools/genart.py --only login-hero --variant dark
+**Skin** is the art direction — the product's whole visual identity. `skynet`
+is the machine-cinema set this file has always generated, and it writes to
+`web/static/img/`. `cuteskynet` is the friendly-mecha set, and it writes to
+`web/static/img/cute/`, where `web/src/asset.rs` looks for it.
+
+A skin does *not* have to redraw everything. Only assets carrying a `cute`
+prompt are generated for that skin, and `asset.rs::CUTE_ART` is the same list
+on the Rust side — anything missing falls back to the base artwork rather than
+rendering nothing. Keep the two in step; `cargo test` checks that every stem
+`CUTE_ART` promises is actually a file on disk.
+
+Requires GROK_API_KEY. Assets are checked in, so this only needs re-running
+when the manifest below changes:
+
+    make assets            # generate anything missing, both skins
+    make assets-force      # regenerate everything
+    make assets-cute       # only the cute skin
+    tools/genart.py --only empty-rooms --variant dark --skin cuteskynet
 """
 
 from __future__ import annotations
@@ -22,6 +36,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +47,54 @@ MODEL = "grok-imagine-image-quality"
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "web" / "static" / "img"
+
+# --- skins ------------------------------------------------------------------
+#
+# The base skin's prompts are the `prompt` key on each manifest entry; a second
+# skin supplies its own under `cute`. Deliberately a separate prompt rather than
+# the same subject with a style clause bolted on: "a chrome endoskeleton skull,
+# but cute" produces a chrome endoskeleton skull. The subject has to change too,
+# and the only way to say what it changes *to* is to write it out.
+#
+# `dir` is relative to OUT_DIR and matches `session.rs::Skin::art_dir`.
+SKIN_SKYNET = "skynet"
+SKIN_CUTE = "cuteskynet"
+SKINS = {
+    SKIN_SKYNET: {"dir": None, "key": "prompt"},
+    SKIN_CUTE: {"dir": "cute", "key": "cute"},
+}
+
+# The cute skin's shared spine, read off `cuteskynet.jpg`: one small blue-and-
+# white mecha, drawn in the flat cel style of modern anime rather than the
+# photoreal render the base set uses. Repeated verbatim in every cute prompt for
+# the same reason STYLE is — forty-two separate generations have to look
+# commissioned, not collected.
+CUTE_STYLE = (
+    "Cute chibi mecha in modern anime illustration style, thick confident dark "
+    "outlines, flat cel shading with one soft highlight, glossy moulded plastic "
+    "shell, rounded friendly proportions with no sharp edges, cobalt blue "
+    "#1F6FD0 armour panels over white ceramic plating, a warm gold #F2C230 "
+    "visor, one small red #E03A2F signal light, a slim antenna with a red bead "
+    "on top, calm and endearing rather than heroic, soft out-of-focus bokeh "
+    "circles in the background, no text, no letters, no numbers, no watermark, "
+    "no UI chrome."
+)
+
+# The cute skin's two backgrounds. Flat and edge-to-edge, like the base set's,
+# so the PNG can sit on a themed surface without a visible seam.
+CUTE_PALETTE = {
+    "light": (
+        "Palette: bright daylight, cobalt blue and gold reading clearly against "
+        "a flat pale cool grey-white #EDF2F5 background filling the whole "
+        "frame, soft diffused studio light, one gentle contact shadow."
+    ),
+    "dark": (
+        "Palette: cool night lighting, the cobalt armour deepened and the gold "
+        "visor glowing warmly from within, on a flat deep navy #16233A "
+        "background filling the whole frame, soft blue rim light along the top "
+        "edges, cosy rather than menacing."
+    ),
+}
 
 # Shared style spine. Repeated verbatim in every prompt so the set reads as one
 # system rather than six unrelated pictures.
@@ -120,6 +183,51 @@ PROFILE_CHARACTERS = [
 ]
 
 
+# The cute skin's read of the same gallery.
+#
+# The base set carries its characteristic on a *human face* — a coder's
+# glasses, a chef's flour. This one has no exposed human skin to hang that on,
+# so each characteristic becomes a worn object instead: the visor goes up, and
+# what identifies the pilot is what they are carrying. That is a translation of
+# the idea rather than a restyling of the picture, which is the whole reason
+# these are separate prompts and not the same prompt with a style clause.
+#
+# Each string is a complete sentence, appended after the shared helmet
+# description.
+CUTE_PROFILE_CHARACTERS = {
+    "coder": "It wears slim rectangular glasses over the visor, with a few "
+             "tiny glowing squares reflected in the lenses.",
+    "soldier": "It wears a small olive-green shoulder strap and has two soft "
+               "camouflage patches painted on the helmet.",
+    "medic": "It wears a teal cap over the helmet and a small white cross "
+             "badge on the chest plate.",
+    "pilot": "It wears round aviator goggles pushed up beside the visor and a "
+             "short white scarf around its neck.",
+    "artist": "It wears a soft tilted beret and has three small flecks of "
+              "bright paint on one cheek plate.",
+    "scientist": "It wears clear lab goggles over the visor and a small white "
+                 "collar, one eyebrow marking raised in curiosity.",
+    "chef": "It wears a tall white chef's toque on top of the helmet and has a "
+            "light dusting of flour on one cheek plate.",
+    "athlete": "It wears a bright sports sweatband across the helmet and has a "
+               "small stopwatch clipped to its chest plate.",
+    "musician": "It wears one round studio headphone cup over the side vent "
+                "and has a tiny note marking on its chest plate.",
+    "detective": "It wears a small dark fedora tilted over the helmet and a "
+                 "short trench collar.",
+}
+
+# The `m`/`f` split. The slugs are an API contract (`preset:tp-coder-f` is
+# stored on the wire), so both must exist for every character — but a chibi
+# mecha has no human features to carry the distinction, and inventing some
+# would be worse than the alternative. So it lands where it can be read at
+# 40px without caricature: build and helmet shape.
+CUTE_PROFILE_SUBJECT = {
+    "m": "a sturdier, broader-shouldered robot with a squarer helmet crown",
+    "f": "a slighter, narrower-shouldered robot with a rounder helmet crown",
+}
+
+
 def _profile_manifest() -> list[dict[str, object]]:
     """The chooseable terminator profile portraits, man and woman of each.
 
@@ -152,6 +260,18 @@ def _profile_manifest() -> list[dict[str, object]]:
                         f"under the skin. The human side is {look}. Calm, not "
                         "menacing. Head-on framing. " + IDENTITY_STYLE
                     ),
+                    "cute": (
+                        f"Close-up bust portrait of {CUTE_PROFILE_SUBJECT[sex]} "
+                        "as a small cute robot pilot, head and shoulders "
+                        "filling the frame: a glossy cobalt blue helmet over "
+                        "white ceramic plating with a wide warm gold visor "
+                        "pushed up onto the forehead, so the whole friendly "
+                        "cartoon face is visible underneath — two bright eyes "
+                        "and a small warm smile. A slim antenna with a red "
+                        "bead sits on top. "
+                        f"{CUTE_PROFILE_CHARACTERS[slug]} Head-on framing. "
+                        + CUTE_IDENTITY_STYLE
+                    ),
                 }
             )
     return out
@@ -180,6 +300,51 @@ IDENTITY_STYLE = (
 )
 
 
+# The cute skin's answer to the same two tables.
+#
+# The split that matters is preserved exactly: operators are *somebody*, rooms
+# are *somewhere*, and at 40px the silhouette alone has to say which. The base
+# set draws that as human-face-versus-machine-sigil; here it is a helmeted pilot
+# head — one visor, a face behind it — against a badge-shaped object with no
+# face at all. Same distinction, different vocabulary.
+#
+# Only the accent moves between entries, because ten cute robots that differ in
+# ten ways is a set nobody can tell apart at a glance, whereas ten that differ
+# in one are ten distinct colours.
+CUTE_OPERATOR_LOOKS = {
+    "amber": "a warm amber visor and honey-gold trim on the helmet",
+    "cyan": "a bright cyan visor and pale ice-blue trim on the helmet",
+    "crimson": "a deep crimson visor and dark red trim on the helmet",
+    "emerald": "a fresh emerald-green visor and mint trim on the helmet",
+    "violet": "a soft violet visor and lavender trim on the helmet",
+    "gold": "a rich gold visor and brass trim on the helmet",
+    "steel": "a cool silver visor and raw steel trim on the helmet",
+    "rose": "a rose-pink visor and blush trim on the helmet",
+    "teal": "a deep teal visor and sea-green trim on the helmet",
+    "bronze": "a warm bronze visor and copper trim on the helmet",
+}
+
+CUTE_ROOM_LOOKS = {
+    "skull": "a rounded friendly robot head badge with two big round lens eyes",
+    "visor": "a smooth helmet badge with one wide horizontal visor band",
+    "core": "a plump glowing orb held in a rounded cradle of soft metal ribs",
+    "sentinel": "a tall rounded sentry-post badge with two small vertical lights",
+    "hunter": "a rounded scout-drone badge with one large forward lens",
+    "relay": "a chubby signal node badge with concentric rings and a lit centre",
+    "warden": "a thick rounded shield badge with one square lit panel in it",
+    "cipher": "a soft-cornered polyhedral gem badge with many small lit facets",
+}
+
+CUTE_IDENTITY_STYLE = (
+    "Cute chibi mecha in modern anime illustration style, thick confident dark "
+    "outlines, flat cel shading, glossy moulded plastic, rounded proportions "
+    "with no sharp edges, cobalt blue and white ceramic shell, tight square "
+    "crop with the subject filling the frame, flat deep navy background, simple "
+    "bold shapes that stay readable at very small sizes, no text, no letters, "
+    "no numbers, no watermark, no UI chrome."
+)
+
+
 def _identity_manifest() -> list[dict[str, object]]:
     """The avatar sets, expanded from the two tables above.
 
@@ -201,6 +366,15 @@ def _identity_manifest() -> list[dict[str, object]]:
                     f"exposed chrome endoskeleton machinery. {look}. Calm, not "
                     "menacing. Symmetrical head-on framing. " + IDENTITY_STYLE
                 ),
+                "cute": (
+                    "Close-up of a small cute robot pilot's helmeted head, "
+                    "filling the frame: a rounded glossy helmet with a big "
+                    "curved visor, and behind the visor a friendly cartoon face "
+                    "with two bright eyes and a calm little smile. "
+                    f"{CUTE_OPERATOR_LOOKS[slug]}. A slim antenna with a small "
+                    "red bead sits on top. Symmetrical head-on framing. "
+                    + CUTE_IDENTITY_STYLE
+                ),
             }
         )
     for slug, look in ROOM_SIGILS:
@@ -214,6 +388,13 @@ def _identity_manifest() -> list[dict[str, object]]:
                     f"An emblem-like machine object centred in frame: {look}. "
                     "Entirely machine — no human features, no skin, no face. "
                     "Reads as an insignia at very small sizes. " + IDENTITY_STYLE
+                ),
+                "cute": (
+                    "A rounded emblem-like object centred in frame, drawn as a "
+                    f"soft enamel-pin badge: {CUTE_ROOM_LOOKS[slug]}. Entirely "
+                    "an object — no cartoon face, no eyes, no smile, nothing "
+                    "that reads as a character, so it can never be mistaken for "
+                    "somebody's avatar. " + CUTE_IDENTITY_STYLE
                 ),
             }
         )
@@ -588,13 +769,255 @@ MANIFEST: list[dict[str, str]] = [
     *_profile_manifest(),
 ]
 
+
+# --- the cute skin's prompts -------------------------------------------------
+#
+# Kept together rather than threaded through MANIFEST above, and that is the
+# point: an art direction is a thing you have to be able to read *as a whole*.
+# Forty-two prompts scattered one per entry through six hundred lines is how a
+# set drifts — the tenth one gets written without the first nine in view. The
+# eighteen identity prompts are the exception, because they are loop-generated
+# from their own tables and belong beside them.
+#
+# Every entry here is the same *screen* as its MANIFEST twin, never the same
+# picture restyled: the wallet's warden is a guard in both skins, but here it
+# guards a piggy bank rather than looming out of a dark hall. A skin that only
+# recolours the machine set is a filter, not a skin.
+#
+# A name absent from this dict is not generated for the cute skin and falls
+# back to the base artwork — see `asset.rs::CUTE_ART`, which lists exactly the
+# names present here plus the eighteen from `_identity_manifest`.
+CUTE_PROMPTS: dict[str, str] = {
+    # -- the mark ------------------------------------------------------------
+    # Themeless, like its twin, and for the same reason: it is the source for
+    # the favicon and the boot screen, neither of which has a theme.
+    "logo": (
+        "Sleek minimal app icon on a pure white rounded square: the head of a "
+        "small cute robot, seen head-on, glossy cobalt blue helmet over white "
+        "ceramic, one wide warm gold visor curving across it, a slim antenna "
+        "with a red bead on top. Thick dark outlines, flat cel shading, "
+        "perfectly symmetrical, instantly readable at 32 pixels, nothing else "
+        "in frame, no text."
+    ),
+    # -- the four movie moments ----------------------------------------------
+    # Themeless, and the only asset where that is genuinely hard: it is the
+    # sign-in backdrop, so one file has to sit under a near-white scrim and a
+    # navy one. The background is therefore pinned to a cool deep blue-grey and
+    # said twice — the first pass came back peach-pink, which read as a
+    # different product entirely the moment the cobalt scrim went over it.
+    "skynet-hero": (
+        "Wide illustration of a small friendly robot guardian standing calmly "
+        "with its hands at its sides, three-quarter view, looking slightly off "
+        "camera. Glossy cobalt blue and white ceramic shell, one wide gold "
+        "visor with a gentle light behind it, a red bead antenna. The "
+        "background is a cool deep blue-grey #24354F gradient — no warm "
+        "colours anywhere in it, no pink, no peach, no orange — carrying large "
+        "soft out-of-focus blue and white bokeh circles and a few faint "
+        "drifting motes. Plenty of empty space on the left third so text can "
+        "sit over it. Protective and unhurried. " + CUTE_STYLE
+    ),
+    "skynet-avatar": (
+        "Close-up of a small cute robot assistant's head and shoulders, "
+        "head-on, tilted very slightly as if listening. Glossy cobalt blue "
+        "helmet over white ceramic plating, one wide warm gold visor, a red "
+        "bead antenna, a round side-vent disc on each side of the head. Square "
+        "composition, the head filling the frame, soft bokeh behind. Attentive "
+        "and kind. " + CUTE_STYLE
+    ),
+    "skynet-grid": (
+        "Seamless wallpaper texture: a very soft field of rounded shapes — "
+        "gentle circles, pill outlines and a loose grid of dots — in slightly "
+        "lighter cobalt on a flat deep navy #16233A ground, plus a scatter of "
+        "large out-of-focus bokeh circles. Extremely low contrast and quiet so "
+        "interface text stays perfectly readable on top. No characters, no "
+        "text, no watermark."
+    ),
+    # -- the sign-in cold open -----------------------------------------------
+    # Two frames of one moment, same as the base set: the arrival field
+    # collapses, and what was inside it opens its eyes.
+    # Both boot frames sit on the cute skin's own page colour, not on black.
+    # The base set can use pitch black because the skynet page *is* pitch
+    # black; here the stage behind them is the navy grid, and a black plate
+    # under a centred `background: contain` shows as a hard square around the
+    # subject — the one seam a generated PNG cannot hide on a coloured page.
+    "boot-sphere": (
+        "A bright round ball of cartoon energy, perfectly centred on a flat "
+        "deep navy #16233A background filling the whole frame: a glowing "
+        "white-gold core wrapped in swirling cobalt blue ribbons of light, "
+        "with a ring of small round sparks thrown outward around it. Soft, "
+        "bouncy and joyful rather than violent. The navy reaches every edge "
+        "and corner evenly, with no vignette and no darkening toward the "
+        "border. Square composition, thick clean outlines, flat cel shading "
+        "with glow, no text, no characters."
+    ),
+    "boot-endoskull": (
+        "The head of a small cute robot waking up, head-on and perfectly "
+        "symmetrical, its wide gold visor lighting up brightly for the first "
+        "time and casting a warm glow forward. Glossy cobalt blue helmet over "
+        "white ceramic, red bead antenna, soft drifting motes around it, on a "
+        "flat deep navy #16233A background that reaches every edge and corner "
+        "evenly, with no vignette and no darkening toward the border. The "
+        "moment of waking up — pleased, not menacing. Centred, thick "
+        "outlines, flat cel shading, no text."
+    ),
+    # -- the sign-in artwork and the empty states ----------------------------
+    "empty-rooms": (
+        "Empty-state illustration: three rounded speech bubbles floating in a "
+        "loose cluster, the frontmost one drawn with a dashed cobalt outline "
+        "and empty inside. A small cute blue-and-white robot head peeks up "
+        "from behind the lowest bubble, only its gold visor and antenna "
+        "showing. Calm and inviting, not sad. " + CUTE_STYLE
+    ),
+    "empty-messages": (
+        "Empty-state illustration: one large rounded open speech bubble with a "
+        "little paper plane looping away from it along a dotted arc, and a "
+        "small friendly padlock character with a gold body resting at the "
+        "bubble's lower corner. A private conversation waiting to start. "
+        + CUTE_STYLE
+    ),
+    "empty-invitations": (
+        "Empty-state illustration: a plump rounded envelope tilted at a slight "
+        "angle, sealed with a round cobalt wax seal stamped with a tiny robot "
+        "face, resting on a soft contact shadow. Quiet and neutral — nothing "
+        "is waiting. " + CUTE_STYLE
+    ),
+    "empty-search": (
+        "Empty-state illustration: a chunky rounded magnifying glass with a "
+        "gold rim, held up by a very small cute blue-and-white robot standing "
+        "on tiptoe beneath it, peering through the empty lens. Three faint "
+        "rounded outlines float past unfound. " + CUTE_STYLE
+    ),
+    "empty-files": (
+        "Empty-state illustration: a rounded shelf of stacked flat plates seen "
+        "slightly from the side, like a rack of records, with one plate pulled "
+        "forward and glowing warm gold. Three small rounded tag shapes hang "
+        "from that plate on thin strings. A tiny cobalt robot hand reaches in "
+        "from the edge of the frame to touch it. " + CUTE_STYLE
+    ),
+    "empty-knowledge": (
+        "Empty-state illustration: a soft-cornered gem made of stacked "
+        "rounded plates, hovering above a little pedestal, with three thin "
+        "orbit lines carrying small round motes toward it. One facet glows "
+        "warm gold, as if a memory has just been tucked away. " + CUTE_STYLE
+    ),
+    "empty-publish": (
+        "Empty-state illustration: a stubby rounded lighthouse on a small "
+        "island platform, its lamp housing empty and drawn with a dashed "
+        "cobalt outline, one dotted signal arc sketched hopefully out into "
+        "empty space. Three faint rounded page shapes drift near the base, "
+        "waiting to be lit. " + CUTE_STYLE
+    ),
+    "pick-room": (
+        "Empty-state illustration: a neat vertical stack of three rounded "
+        "chat-room cards seen at a slight angle, the middle one glowing warm "
+        "gold with a soft halo and a tiny padlock badge, the other two quiet "
+        "cobalt outlines. A small cute blue-and-white robot floats beside the "
+        "stack, one hand reaching toward the lit card. Choosing one "
+        "conversation out of a list. " + CUTE_STYLE
+    ),
+    "encrypted-badge": (
+        "Icon: a chubby rounded padlock, closed, with a warm gold body and a "
+        "cobalt blue shackle formed from two interlocking rounded links. A "
+        "tiny content smile is embossed on the lock body. Extremely simple — "
+        "must stay legible at 24 pixels. " + CUTE_STYLE
+    ),
+    "error-offline": (
+        "Illustration of a lost connection: two rounded nodes joined by a "
+        "dashed line that has come apart in the middle, with one small round "
+        "spark at the break. A tiny cute blue-and-white robot sits beneath the "
+        "gap, antenna drooping, looking up at it. Rueful rather than alarming. "
+        + CUTE_STYLE
+    ),
+    # -- money -----------------------------------------------------------------
+    "bank-hero": (
+        "A friendly robot bank motif: a plump rounded vault door with a face "
+        "made of two big lens eyes and a coin slot for a mouth, flanked by two "
+        "small neat stacks of round gold coins. One cobalt ring around the "
+        "vault wheel glows softly. " + CUTE_STYLE
+    ),
+    "bank-banker": (
+        "A compact cute robot banker, head and shoulders: rounded cobalt "
+        "helmet over white ceramic, gold visor, a small flat necktie, holding "
+        "up one round gold coin between two fingers with visible pride. A soft "
+        "rounded speech-bubble outline floats beside its head. " + CUTE_STYLE
+    ),
+    "bank-vault-hall": (
+        "Wide illustration of a big friendly vault door at the end of a bright "
+        "rounded hall: a plump circular door with concentric rings and a warm "
+        "gold glowing centre, soft cobalt panel lines along the walls, round "
+        "lamps overhead, gentle haze. Darker and quieter toward the left and "
+        "right edges so a large number can sit on top. Cosy and safe rather "
+        "than imposing. " + CUTE_STYLE
+    ),
+    "bank-emblem": (
+        "Emblem, tight square crop: the head of a small cute blue-and-white "
+        "robot set into the centre of a plump round vault-door ring, with soft "
+        "rounded gear teeth radiating around it like a wheel. Wide warm gold "
+        "visor, red bead antenna, symmetrical head-on framing, reads clearly "
+        "as an icon at small sizes. " + CUTE_STYLE
+    ),
+    "banker-core": (
+        "Bust portrait of a small cute robot banker, head-on: glossy cobalt "
+        "helmet over white ceramic plating, wide warm gold visor, wearing a "
+        "neat dark collar and a small tie, one rounded hand holding up a "
+        "single glowing gold coin. Tight square crop, trustworthy and cheerful "
+        "rather than stern. " + CUTE_STYLE
+    ),
+    "wallet-warden": (
+        "Bust portrait of a small cute robot standing guard, head-on and "
+        "symmetrical: glossy cobalt helmet over white ceramic, wide warm gold "
+        "visor, chunky rounded shoulder pauldrons, a small glowing gold badge "
+        "set into the chest plate, and one arm holding a plump rounded shield "
+        "across its front. Tight square crop, dependable and calm. " + CUTE_STYLE
+    ),
+    "shout-herald": (
+        "Bust portrait of a small cute robot making an announcement, head-on: "
+        "glossy cobalt helmet over white ceramic, wide warm gold visor lit "
+        "bright, holding a chunky rounded megaphone up beside its head, with "
+        "three concentric sound rings radiating outward from it. Tight square "
+        "crop, enthusiastic and friendly, never shouty. " + CUTE_STYLE
+    ),
+    "publish-emblem": (
+        "Emblem, tight square crop: two rounded cobalt robot hands holding up "
+        "a plump translucent globe drawn as a few soft latitude and longitude "
+        "lines, with three small rounded page cards orbiting it. Symmetrical "
+        "composition, reads clearly as an icon at small sizes. " + CUTE_STYLE
+    ),
+}
+
+
+def _apply_cute_prompts() -> None:
+    """Fold `CUTE_PROMPTS` into MANIFEST, and refuse to run if it has drifted.
+
+    The dict is keyed by asset name rather than written inline, so a typo in a
+    key would otherwise be silent: the entry would simply never be generated,
+    the cute skin would fall back for that one asset, and nobody would notice
+    until they saw a chrome skull in the middle of the cute room list.
+    """
+    by_name = {a["name"]: a for a in MANIFEST}
+    unknown = sorted(set(CUTE_PROMPTS) - set(by_name))
+    if unknown:
+        raise SystemExit(f"CUTE_PROMPTS names no such asset: {', '.join(unknown)}")
+    for name, prompt in CUTE_PROMPTS.items():
+        by_name[name]["cute"] = prompt
+
+
+_apply_cute_prompts()
+
 VARIANTS = ("light", "dark")
 
 
-def dest_for(name: str, variant: str) -> Path:
-    """Light keeps the bare name so existing references keep working."""
+def dest_for(name: str, variant: str, skin: str = SKIN_SKYNET) -> Path:
+    """Light keeps the bare name so existing references keep working.
+
+    A non-default skin adds one directory level and nothing else — the file
+    names are identical, which is what lets `asset.rs::img` resolve a skin by
+    prefixing a directory instead of knowing a second set of names.
+    """
     suffix = "" if variant == "light" else "-dark"
-    return OUT_DIR / f"{name}{suffix}.png"
+    directory = SKINS[skin]["dir"]
+    base = OUT_DIR if directory is None else OUT_DIR / directory
+    return base / f"{name}{suffix}.png"
 
 
 def shrink(dest: Path, max_edge: int) -> None:
@@ -644,46 +1067,84 @@ def to_png(data: bytes, dest: Path, max_edge: int | None = None) -> None:
         shrink(dest, max_edge)
 
 
-def generate(prompt: str, api_key: str) -> bytes:
+def generate(prompt: str, api_key: str, attempts: int = 5) -> bytes:
+    """One image, retrying the transient failures.
+
+    A whole-set run is dozens of requests in parallel and the API rate-limits
+    under that load, so 429 is an ordinary event, not an error — a first run
+    left four holes in a set of fifty-four. It matters more here than in most
+    places because the failure is *quiet downstream*: a missing file is not a
+    crash, it is a broken image in one corner of one screen, and the run that
+    produced it printed "FAIL" fifty lines above the summary nobody re-reads.
+
+    Exponential backoff with a hard cap. 503 is included for the same reason;
+    every other status is a real error and is raised on the first try, because
+    retrying a 400 five times only delays reading the message.
+    """
     body = json.dumps(
         {"model": MODEL, "prompt": prompt, "n": 1, "response_format": "b64_json"}
     ).encode()
-    req = urllib.request.Request(
-        API_URL,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=240) as resp:
-        payload = json.load(resp)
-    return base64.b64decode(payload["data"][0]["b64_json"])
+    for attempt in range(attempts):
+        req = urllib.request.Request(
+            API_URL,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=240) as resp:
+                payload = json.load(resp)
+            return base64.b64decode(payload["data"][0]["b64_json"])
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 503) or attempt == attempts - 1:
+                raise
+            # 2s, 4s, 8s, 16s. `Retry-After` wins when the server sends one.
+            delay = exc.headers.get("Retry-After")
+            time.sleep(float(delay) if delay and delay.isdigit() else 2 ** (attempt + 1))
+    raise ValueError("unreachable: the loop either returns or raises")
 
 
 def build_jobs(args) -> list[tuple[str, str, Path, str]]:
     jobs = []
-    for asset in MANIFEST:
-        if args.only and asset["name"] != args.only:
-            continue
-        # A themeless asset carries its palette in its own prompt and is written
-        # once, under the bare name.
-        variants = ("light",) if asset.get("themeless") else VARIANTS
-        for variant in variants:
-            if args.variant and variant != args.variant and not asset.get("themeless"):
+    skins = [args.skin] if args.skin else list(SKINS)
+    for skin in skins:
+        prompt_key = SKINS[skin]["key"]
+        for asset in MANIFEST:
+            if args.only and asset["name"] != args.only:
                 continue
-            dest = dest_for(asset["name"], variant)
-            if dest.exists() and not args.force:
-                print(f"  skip  {dest.relative_to(ROOT)} (exists)")
+            # A skin that has no prompt for this asset does not draw it; the
+            # app falls back to the base artwork rather than to nothing.
+            if prompt_key not in asset:
                 continue
-            prompt = asset["prompt"]
-            if not asset.get("themeless"):
-                prompt = f"{prompt} {PALETTE[variant]}"
-            # Cinematic assets carry their whole art direction in their own
-            # prompt; the flat-vector spine would fight it.
-            if not asset.get("cinematic"):
-                prompt = f"{prompt} {STYLE}"
-            jobs.append((asset["name"], variant, dest, prompt, asset.get("max_edge")))
+            # A themeless asset carries its palette in its own prompt and is
+            # written once, under the bare name.
+            variants = ("light",) if asset.get("themeless") else VARIANTS
+            for variant in variants:
+                if (
+                    args.variant
+                    and variant != args.variant
+                    and not asset.get("themeless")
+                ):
+                    continue
+                dest = dest_for(asset["name"], variant, skin)
+                if dest.exists() and not args.force:
+                    print(f"  skip  {dest.relative_to(ROOT)} (exists)")
+                    continue
+                prompt = asset[prompt_key]
+                if not asset.get("themeless"):
+                    palette = PALETTE if skin == SKIN_SKYNET else CUTE_PALETTE
+                    prompt = f"{prompt} {palette[variant]}"
+                # Cinematic assets carry their whole art direction in their own
+                # prompt; the flat-vector spine would fight it. Every cute
+                # prompt already carries CUTE_STYLE for the same reason, so the
+                # base STYLE is never appended to one.
+                if not asset.get("cinematic") and skin == SKIN_SKYNET:
+                    prompt = f"{prompt} {STYLE}"
+                jobs.append(
+                    (asset["name"], variant, dest, prompt, asset.get("max_edge"))
+                )
     return jobs
 
 
@@ -692,6 +1153,9 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="regenerate existing assets")
     parser.add_argument("--only", help="generate a single asset by name")
     parser.add_argument("--variant", choices=VARIANTS, help="only one theme variant")
+    parser.add_argument(
+        "--skin", choices=list(SKINS), help="only one skin (default: all of them)"
+    )
     parser.add_argument(
         "--jobs", type=int, default=4, help="parallel requests (default 4)"
     )
@@ -702,7 +1166,9 @@ def main() -> int:
         print("GROK_API_KEY is not set; skipping asset generation.", file=sys.stderr)
         return 1
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    for spec in SKINS.values():
+        directory = OUT_DIR if spec["dir"] is None else OUT_DIR / spec["dir"]
+        directory.mkdir(parents=True, exist_ok=True)
     jobs = build_jobs(args)
     if not jobs:
         print("  nothing to generate")

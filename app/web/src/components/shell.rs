@@ -62,6 +62,7 @@ pub fn shell(p: &ShellProps) -> Html {
     // a silent copy-on-click ever was.
     let identity_click = {
         let store = store.clone();
+        let skin = store.skin;
         Callback::from(move |_: MouseEvent| {
             if let Some(a) = store.auth.address() {
                 let seed = a.to_string();
@@ -72,12 +73,13 @@ pub fn shell(p: &ShellProps) -> Html {
                     image: store
                         .auth
                         .profile_image()
-                        .and_then(crate::identity::avatar_src)
+                        .and_then(|i| crate::identity::avatar_src(skin, i))
                         .unwrap_or_else(|| {
-                            format!("/static/img/{}.png", crate::identity::art_for(&seed))
+                            crate::asset::img(skin, crate::identity::art_for(&seed))
                         }),
                     title: store.auth.username().unwrap_or_default().to_owned(),
-                    subtitle: Some(a.to_checksummed()),
+                    subtitle: None,
+                    address: Some(a.clone()),
                     copy: Some(a.to_checksummed()),
                     hue: crate::identity::hue_for(&seed),
                 });

@@ -1198,9 +1198,10 @@ pub fn banker_view(p: &BankerProps) -> Html {
                             aria-label={t(lang, Key::ai_banker)}
                             onclick={Callback::from(move |_: MouseEvent| {
                                 super::spotlight::show(super::spotlight::Spot {
-                                    image: "/static/img/banker-core.png".into(),
+                                    image: crate::asset::img(store.skin, "banker-core"),
                                     title: t(lang, Key::ai_banker).to_owned(),
                                     subtitle: None,
+                                    address: None,
                                     copy: None,
                                     hue: 190,
                                 });

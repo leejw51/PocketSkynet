@@ -1102,9 +1102,9 @@ fn room_row(p: &RoomRowProps) -> Html {
                     // styled here so the stylesheet keeps deciding *whether*
                     // imagery appears at all.
                     style={format!(
-                        "--i: {}; --row-art: url('/static/img/{}.png')",
+                        "--i: {}; --row-art: {}",
                         p.index,
-                        crate::identity::art_for(id.as_str()),
+                        crate::asset::img_url(store.skin, crate::identity::art_for(id.as_str())),
                     )}
                     role="option"
                     aria-selected={selected.to_string()}
@@ -1120,7 +1120,7 @@ fn room_row(p: &RoomRowProps) -> Html {
                         zoom={crate::components::common::Zoom {
                             title: r.room.name.clone(),
                             subtitle: None,
-                            copy: None,
+                            address: None,
                         }}
                     />
                     <div class="fn-room-row__title">

@@ -409,11 +409,13 @@ pub fn wallet(p: &WalletProps) -> Html {
     // copy button inside it copies the same value the ID row does.
     let spotlight_warden = {
         let me = me.clone();
+        let skin = store.skin;
         Callback::from(move |_: MouseEvent| {
             super::super::spotlight::show(super::super::spotlight::Spot {
-                image: "/static/img/wallet-warden.png".into(),
+                image: crate::asset::img(skin, "wallet-warden"),
                 title: t(lang, Key::warden_name).to_owned(),
-                subtitle: me.as_ref().map(WalletAddress::to_checksummed),
+                subtitle: None,
+                address: me.clone(),
                 copy: me.as_ref().map(WalletAddress::to_checksummed),
                 hue: 190,
             });
@@ -505,7 +507,7 @@ pub fn wallet(p: &WalletProps) -> Html {
                         onclick={spotlight_warden}
                     >
                         <span class="fn-warden__ring" aria-hidden="true"></span>
-                        <img src="/static/img/wallet-warden.png" alt="" />
+                        <img src={crate::asset::img(store.skin, "wallet-warden")} alt="" />
                     </button>
                     <div class="fn-warden__brief">
                         <span class="fn-warden__name">{ t(lang, Key::warden_name) }</span>

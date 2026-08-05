@@ -328,7 +328,7 @@ pub fn avatar_picker() -> Html {
                                 onclick={Callback::from(move |_: MouseEvent| pick.emit(slug))}
                             >
                                 <img
-                                    src={format!("/static/img/{slug}.png")}
+                                    src={crate::asset::img(store.skin, slug)}
                                     alt={label}
                                     loading="lazy"
                                     decoding="async"

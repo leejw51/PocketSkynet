@@ -112,7 +112,7 @@ pub fn shout_layer() -> Html {
                         <span class="fn-shout__scan" aria-hidden="true"></span>
                         <img
                             class="fn-shout__herald"
-                            src="/static/img/shout-herald.png"
+                            src={crate::asset::img(store.skin, "shout-herald")}
                             alt=""
                             aria-hidden="true"
                         />
@@ -236,7 +236,7 @@ pub fn shout_dialog(p: &ShoutDialogProps) -> Html {
         >
             <div class="fn-shoutdialog">
                 <div class="fn-shoutdialog__hero">
-                    <img src="/static/img/shout-herald.png" alt="" aria-hidden="true" />
+                    <img src={crate::asset::img(store.skin, "shout-herald")} alt="" aria-hidden="true" />
                     <p>{ hint }</p>
                 </div>
                 <label class="fn-field">

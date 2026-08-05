@@ -135,6 +135,48 @@ Dark mode resolves via `light-dark()` + `color-scheme`, which means:
 The Yew theme toggle sets/removes that one attribute and persists it to `localStorage`
 under `ps-theme`. Nothing else changes.
 
+### 2.1.1 Skins
+
+There is a **second, independent** attribute. `data-theme` answers *how bright is the
+room*; `data-skin` answers *what does the product look like*.
+
+| `<html>` attribute | Result |
+| --- | --- |
+| *(none)* | `skynet` — machine cinema; `app.css` §1 |
+| `data-skin="cuteskynet"` | Friendly mecha; `app.css` §1b |
+
+They compose: every skin has a light and a dark face, so the two axes give four
+appearances from one sheet. The picker is on the login screen and in Settings, and the
+choice persists under `ps-skin`.
+
+A skin is a **block of token overrides**, never a second stylesheet. Sections 2–18 of
+`app.css` are written entirely against `--fn-*`, so restating the tokens is what makes a
+skin complete — and a rule added to §7 next month is themed by both skins the day it
+lands. The rule for anyone editing below §1b: *a hex value or a pixel radius outside
+§1/§1b is a bug.* Two of them were, and the second skin is what exposed them — the CTA
+fill and the whole sign-in cold open had been literal `hsl(190 …)` since they were
+written, invisible for as long as the only accent happened to be that same cyan.
+
+Imagery is the other half. CSS cannot build a `url()` from parts, so every illustration
+is named once in the §1.1 art registry (`--img-*`) and a skin repoints the entries it
+redraws; `web/src/asset.rs::img` does the same job for `<img>` elements. A skin overrides
+only what it actually ships and everything else falls back to the base artwork, which is
+what lets a new skin start with a dozen pictures instead of sixty-two.
+
+Two things that look like conveniences and are not:
+
+* **The pre-paint script in `index.html`.** Both attributes are stamped from
+  `localStorage` before the body paints. The WASM bundle applies them too, but that is a
+  second or more after first paint — long enough to show the *other* skin's loading
+  screen every time the app opens.
+* **`asset.rs` as the only place a `/static/img/…` URL is built.** The literals it
+  replaced were each individually correct; what they could not be was correct *for the
+  skin in effect*, and that failure renders as the wrong picture rather than as an error.
+
+Generating a skin's art: `make assets-cute`, or `tools/genart.py --skin cuteskynet`. Its
+`CUTE_PROMPTS` and `asset.rs::CUTE_ART` are one contract in two files, and `cargo test`
+fails if they drift.
+
 ### 2.2 Colour tokens
 
 All are CSS custom properties on `:root`. Light value first, dark second.

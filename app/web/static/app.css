@@ -28,8 +28,14 @@
    no attribute follows the OS. A `@supports` fallback at the end of §1
    covers engines without `light-dark()`.
 
+   Two axes, two attributes. `data-theme` decides how bright the room is;
+   `data-skin` decides what the product looks like. Everything from §2 down is
+   written against `--fn-*` tokens and knows about neither — which is what
+   makes a skin a block of token overrides (§1b) rather than a second sheet.
+
    Contents
      1  Tokens            (colour, type, space, elevation, motion)
+     1b Skin: cuteskynet  (the same tokens, drawn as a friendly mecha)
      2  Reset & base
      3  Topcoat overrides (incl. the vendor-leak neutralisers)
      4  Primitives  (identity tile, mono address, lock, badges, pills, spinner)
@@ -325,6 +331,45 @@
   --fn-sh-glow: 0 1px 2px hsl(192 80% 24% / 0.26), 0 8px 22px -6px hsl(190 95% 44% / 0.52);
   --fn-sh-inset: inset 0 1px 2px light-dark(hsl(214 20% 20% / 0.18), hsl(0 0% 0% / 0.5));
 
+  /* --- The call to action, and the ignition ------------------------------
+     These two were written as literal `hsl(190 …)` inside §3 and §18, which
+     worked for exactly as long as there was one accent — and then read as a
+     bug the day a second skin arrived, because the loudest control on every
+     screen and the whole sign-in cold open stayed cyan while everything
+     around them turned cobalt.
+
+     They are tokens rather than derivations of `--fn-primary` because a CTA
+     fill is not one colour: it is a two-stop ramp inside a hue, a darker
+     line, and a sheen along the top edge, and the relationship between those
+     four is a judgement about how light falls on a raised object. `color-mix`
+     on the primary would produce four values that are arithmetically related
+     and visually wrong.
+
+     `cta-a` is the lit top of the ramp, `cta-b` its shaded bottom; the ink
+     clears AA against `cta-b`, so the gradient can only improve contrast. */
+  --fn-cta-a:      hsl(188 96% 52%);
+  --fn-cta-b:      hsl(191 95% 43%);
+  --fn-cta-a-hi:   hsl(188 96% 58%);
+  --fn-cta-b-hi:   hsl(191 95% 45%);
+  --fn-cta-press:  hsl(192 92% 40%);
+  --fn-cta-line:   hsl(192 92% 36%);
+  --fn-cta-sheen:    hsl(186 100% 82% / 0.5);
+  --fn-cta-sheen-hi: hsl(186 100% 84% / 0.55);
+
+  /* The cold open's light (§18.2). `spark` is the lit particle, `flare` the
+     near-white core of the discharge, `beam` the bright end of the progress
+     bar and the colour the boot title is set in. */
+  --fn-spark: hsl(186 100% 82%);
+  --fn-spark-halo: hsl(190 100% 60% / 0.9);
+  --fn-flare: #eafcff;
+  --fn-flare-mid: hsl(190 100% 62%);
+  --fn-bloom: hsl(188 100% 70% / 0.85);
+  --fn-beam: hsl(186 100% 72%);
+  --fn-beam-deep: hsl(190 95% 45%);
+  --fn-boot-title: hsl(188 95% 66%);
+  /* The sweep that plays across a dialog header when it opens. */
+  --fn-sweep: hsl(190 100% 70% / 0.10);
+
   /* --- Layout metrics ---------------------------------------------------- */
   --fn-list-w: 300px;
   --fn-topbar-h: 52px;
@@ -403,6 +448,57 @@
   --fn-mark-grid:   0.05;
   --fn-mark-vault:  0.08;
   --fn-mark-avatar: 0.10;
+
+  /* --- Art registry (§1.1) -----------------------------------------------
+     Every illustration this sheet paints, named once. Nothing below this
+     block writes a `/static/img/…` literal; §11 and §18 reach for `--img-*`
+     instead, and `src/asset.rs` does the same job for the `<img>` half.
+
+     The indirection exists for one reason: a skin cannot rewrite a `url()`
+     that is spelled out inside a rule. CSS has no string concatenation — you
+     cannot build `url("/static/img/" + var(--dir) + "/logo.png")` — so a
+     second art direction either restates every rule in §11 (and then drifts
+     the moment one is added) or the URLs become tokens. They became tokens.
+
+     A skin overrides only the entries it actually redraws; the rest keep
+     resolving to the base artwork, which is what lets a skin ship with a
+     few dozen pictures instead of eighty-seven. See `asset.rs`, whose
+     `CUTE_ART` is the same list on the Rust side. */
+  --img-logo:                url("/static/img/logo.png");
+  --img-skynet-hero:         url("/static/img/skynet-hero.png");
+  --img-skynet-avatar:       var(--img-skynet-avatar);
+  --img-skynet-grid:         var(--img-skynet-grid);
+  --img-boot-sphere:         var(--img-boot-sphere);
+  --img-boot-endoskull:      var(--img-boot-endoskull);
+  --img-bank-vault-hall:     var(--img-bank-vault-hall);
+  --img-bank-emblem:         url("/static/img/bank-emblem.png");
+  --img-banker-core:         url("/static/img/banker-core.png");
+  /* Themed pairs. The `-dark` half is a genuinely different file, not a
+     filter: a flat PNG cannot adapt its own baked-in background plate. */
+  --img-empty-rooms:         url("/static/img/empty-rooms.png");
+  --img-empty-rooms-dark:    url("/static/img/empty-rooms-dark.png");
+  --img-empty-messages:      url("/static/img/empty-messages.png");
+  --img-empty-messages-dark: url("/static/img/empty-messages-dark.png");
+  --img-empty-invitations:      url("/static/img/empty-invitations.png");
+  --img-empty-invitations-dark: url("/static/img/empty-invitations-dark.png");
+  --img-empty-search:        url("/static/img/empty-search.png");
+  --img-empty-search-dark:   url("/static/img/empty-search-dark.png");
+  --img-empty-files:         url("/static/img/empty-files.png");
+  --img-empty-files-dark:    url("/static/img/empty-files-dark.png");
+  --img-empty-knowledge:     url("/static/img/empty-knowledge.png");
+  --img-empty-knowledge-dark: url("/static/img/empty-knowledge-dark.png");
+  --img-empty-publish:       url("/static/img/empty-publish.png");
+  --img-empty-publish-dark:  url("/static/img/empty-publish-dark.png");
+  --img-pick-room:           url("/static/img/pick-room.png");
+  --img-pick-room-dark:      url("/static/img/pick-room-dark.png");
+  --img-encrypted-badge:     url("/static/img/encrypted-badge.png");
+  --img-encrypted-badge-dark: url("/static/img/encrypted-badge-dark.png");
+  --img-error-offline:       url("/static/img/error-offline.png");
+  --img-error-offline-dark:  url("/static/img/error-offline-dark.png");
+  --img-bank-hero:           url("/static/img/bank-hero.png");
+  --img-bank-hero-dark:      url("/static/img/bank-hero-dark.png");
+  --img-bank-banker:         url("/static/img/bank-banker.png");
+  --img-bank-banker-dark:    url("/static/img/bank-banker-dark.png");
 }
 
 @media (prefers-color-scheme: dark) {
@@ -426,6 +522,277 @@
 :root[data-theme="light"] { color-scheme: only light; }
 :root[data-theme="dark"]  { color-scheme: only dark;  }
 
+
+/* ==========================================================================
+   1b. SKIN — cuteskynet
+   ==========================================================================
+
+   The second art direction. Everything above is §1's machine cinema; this
+   block is the same product drawn as a small friendly mecha — the one in
+   `cuteskynet.jpg`: cobalt shell, gold visor, one red signal light, thick
+   confident outlines, nothing sharp.
+
+   # Why a skin is a second attribute, not four more themes
+
+   `data-theme` answers "how bright is the room". `data-skin` answers "what
+   does the product look like". They are genuinely independent — the cute skin
+   has a dark face and the skynet skin has a light one — so folding them into
+   one four-valued picker would force every future skin to double the list and
+   would make "follow the OS" meaningless for half of it.
+
+   # Why this is a token override and not a second stylesheet
+
+   Sections 2–18 below are written entirely against `--fn-*`. Not one of them
+   names a colour, a radius or a shadow directly. So a skin is complete when
+   it has restated the tokens, and a rule added to §7 next month is themed by
+   both skins the day it lands — which a parallel sheet could never promise.
+   The rule for anyone editing below: if you find yourself typing a hex value
+   or a pixel radius outside §1/§1b, that is the bug.
+
+   # What actually changes, and why each one earns its place
+
+   * Hue. Cyan-on-black is the guardian; cobalt-and-gold is the toy. The
+     accent moves from a *light source* to a *painted surface*, which is why
+     the primary fill here is dark enough to carry white text at AA where §1's
+     cyan needed a deep ink instead.
+   * Radius. The single loudest signal. §1 runs 7→20px on the theory that a
+     squared terminal reads as an instrument; this runs 10→28px, because the
+     reference has no corner you could cut yourself on.
+   * Type. Chakra Petch's engineering-drawing geometry *is* the skynet
+     register, so the display face steps aside for a rounded stack. Deliberately
+     a platform stack and not a vendored file: this app has to work on an
+     air-gapped LAN and a skin is not worth another 20 KB on the wire.
+   * Light. The HUD budget (§1's grid, vignette and bloom) gets turned down
+     rather than off — a cute robot still has a glowing visor, but it does not
+     live in a command center.
+
+   Specificity note: this block sits *above* the `data-font` rules on purpose.
+   Both are (0,2,0), so source order decides, and an explicit font choice in
+   Settings must beat the skin's default face — not the other way round. */
+:root[data-skin="cuteskynet"] {
+  /* --- Brand -------------------------------------------------------------
+     The shell's cobalt. Held at 46% lightness rather than the reference's
+     brighter mid-tone for one reason: this fill carries button labels, and
+     at 46% it clears 4.5:1 against white, so `--fn-primary-ink` can be white
+     — the natural ink for a blue button — instead of §1's dark abyss. The
+     *hover* step goes lighter here, not darker: on a painted surface the lit
+     state reads as the surface catching more light. */
+  --fn-primary:        hsl(214 84% 46%);
+  --fn-primary-hover:  hsl(212 86% 52%);
+  --fn-primary-active: hsl(216 84% 40%);
+  --fn-primary-ink:    hsl(0 0% 100%);
+  --fn-primary-text:   light-dark(hsl(216 84% 40%), hsl(209 92% 72%));
+  --fn-primary-soft:   light-dark(hsl(214 84% 50% / 0.12), hsl(210 90% 62% / 0.18));
+  --fn-primary-wash:   light-dark(hsl(214 84% 50% / 0.18), hsl(210 90% 62% / 0.24));
+  --fn-primary-line:   light-dark(hsl(214 70% 46% / 0.36), hsl(210 85% 66% / 0.40));
+  /* Softer and wider than §1's optic bloom: a painted highlight, not a lamp. */
+  --fn-glow:           hsl(210 95% 62% / 0.30);
+
+  /* --- Surfaces ----------------------------------------------------------
+     Both faces are blue, and neither is neutral. Light is the reference
+     image's own backdrop — a cool off-white with the faintest green cast,
+     the colour a studio wall takes behind a blue subject. Dark deliberately
+     stops well short of §1's near-black: at 4% lightness the cobalt has
+     nothing to sit against and the whole skin reads as the machine one with
+     the hue swapped. 11% keeps it a *night* rather than a void. */
+  --fn-bg:        light-dark(hsl(200 26% 95%), hsl(216 42% 11%));
+  --fn-surface:   light-dark(hsl(0 0% 100%),   hsl(216 36% 15%));
+  --fn-surface-2: light-dark(hsl(200 40% 98%), hsl(215 32% 19%));
+  --fn-surface-3: light-dark(hsl(200 24% 91%), hsl(215 28% 25%));
+  --fn-surface-4: light-dark(hsl(202 20% 85%), hsl(214 24% 32%));
+  --fn-overlay:   light-dark(hsl(215 40% 20% / 0.46), hsl(216 50% 6% / 0.72));
+
+  /* --- Ink --------------------------------------------------------------
+     Never pure black. The reference's line art is a very dark desaturated
+     navy, and using it for body text is what keeps a light cute surface from
+     going harsh — the same reason the dark face's white is tinted cool. */
+  --fn-fg:        light-dark(hsl(215 40% 18%), hsl(200 32% 96%));
+  --fn-fg-muted:  light-dark(hsl(215 16% 40%), hsl(210 18% 76%));
+  --fn-fg-faint:  light-dark(hsl(215 13% 44%), hsl(210 14% 70%));
+
+  /* --- Lines ------------------------------------------------------------
+     Heavier than §1 across the board, and that is the art direction rather
+     than a preference: §1 separates regions by *contrast between surfaces*
+     and treats a border as the fallback. Cel-shaded artwork does the
+     opposite — the outline is the drawing. So the hairline stays quiet but
+     every real edge gains weight. */
+  --fn-hair:          light-dark(hsl(200 22% 88%), hsl(0 0% 100% / 0.07));
+  --fn-border:        light-dark(hsl(202 22% 82%), hsl(0 0% 100% / 0.12));
+  --fn-border-strong: light-dark(hsl(206 22% 66%), hsl(0 0% 100% / 0.24));
+  --fn-field-line:    light-dark(hsl(206 20% 64%), hsl(0 0% 100% / 0.22));
+  --fn-rim: light-dark(hsl(0 0% 100% / 0), hsl(0 0% 100% / 0.07));
+
+  /* --- Materials ---------------------------------------------------------
+     The gradient stays — a moulded plastic shell has a lit top edge for the
+     same reason a dark panel does — but the highlight is stronger, because
+     glossy is the point here where in §1 it was restraint. */
+  --fn-raise-a: light-dark(hsl(0 0% 100%),   hsl(215 34% 20%));
+  --fn-raise-b: light-dark(hsl(200 34% 97%), hsl(216 38% 16%));
+  --fn-sunk-a:  light-dark(hsl(200 26% 94%), hsl(217 44% 12%));
+  --fn-sunk-b:  light-dark(hsl(0 0% 100%),   hsl(216 36% 16%));
+  --fn-hi: light-dark(inset 0 1px 0 hsl(0 0% 100%), inset 0 1px 0 hsl(0 0% 100% / 0.09));
+
+  /* --- Semantic ---------------------------------------------------------
+     Same jobs, repainted from the reference's own three lights: the visor
+     gold, the antenna's red bead, and a mint that belongs beside them. The
+     contrast contract from §1 is unchanged — marks clear 3:1, `-text` labels
+     clear 4.5:1 — because that is accessibility, not art direction. */
+  --fn-encrypt:      light-dark(hsl(158 72% 30%), hsl(156 66% 56%));
+  --fn-encrypt-text: light-dark(hsl(160 80% 24%), hsl(156 66% 60%));
+  --fn-encrypt-soft: light-dark(hsl(158 72% 36% / 0.14), hsl(156 66% 54% / 0.18));
+  --fn-crown:        light-dark(hsl(40 94% 38%), hsl(44 96% 62%));
+  --fn-crown-text:   light-dark(hsl(37 92% 28%), hsl(44 96% 66%));
+  --fn-crown-soft:   light-dark(hsl(42 95% 50% / 0.22), hsl(44 96% 58% / 0.20));
+  --fn-danger:       light-dark(hsl(4 74% 45%), hsl(6 88% 68%));
+  --fn-danger-text:  light-dark(hsl(4 76% 42%), hsl(6 92% 76%));
+  --fn-danger-fill:  light-dark(hsl(4 72% 47%), hsl(5 74% 60%));
+  --fn-danger-ink:   light-dark(hsl(0 0% 100%), hsl(6 60% 10%));
+  --fn-danger-soft:  light-dark(hsl(4 74% 52% / 0.12), hsl(6 82% 62% / 0.18));
+  --fn-online:       light-dark(hsl(145 72% 31%), hsl(142 62% 58%));
+  --fn-online-text:  light-dark(hsl(147 78% 24%), hsl(142 60% 64%));
+  --fn-info:         light-dark(hsl(205 86% 42%), hsl(203 88% 70%));
+  --fn-info-text:    light-dark(hsl(206 88% 38%), hsl(203 88% 74%));
+  --fn-info-fill:    light-dark(hsl(205 86% 44%), hsl(203 82% 66%));
+  --fn-info-ink:     light-dark(hsl(0 0% 100%), hsl(212 70% 10%));
+  --fn-info-soft:    light-dark(hsl(205 86% 50% / 0.12), hsl(203 88% 62% / 0.18));
+
+  --fn-focus:      light-dark(hsl(214 88% 40%), hsl(206 94% 68%));
+  --fn-focus-halo: light-dark(hsl(0 0% 100%), hsl(216 42% 11%));
+
+  /* --- HUD, turned down --------------------------------------------------
+     §1 spends its whole machine budget on four cues. This skin keeps two of
+     them at a whisper: the lattice is halved, and the stage's corner falloff
+     goes to nothing in light and stays faint in dark. A vignette is how a
+     command center looks; a toy is lit evenly. */
+  --fn-grid:     light-dark(hsl(214 30% 30% / 0.018), hsl(0 0% 100% / 0.014));
+  --fn-vignette: light-dark(hsl(214 30% 10% / 0), hsl(218 50% 6% / 0.30));
+
+  /* The login scrim. Lighter than §1's — the cute artwork is the point of
+     that screen, and burying it under 96% page colour wastes it. */
+  --fn-scrim-a: light-dark(hsl(200 26% 95% / 0.95), hsl(216 42% 10% / 0.93));
+  --fn-scrim-b: light-dark(hsl(200 26% 95% / 0.80), hsl(216 42% 10% / 0.78));
+  --fn-scrim-c: light-dark(hsl(200 26% 95% / 0.32), hsl(216 42% 10% / 0.34));
+
+  /* --- Type -------------------------------------------------------------
+     A rounded stack, and a platform one. `ui-rounded` is the generic keyword
+     that resolves to SF Pro Rounded on Apple platforms; the named entries
+     behind it cover the rest, and the §1 stack is the final fallback so no
+     script loses its face. Nothing is fetched — see §1's note on the
+     air-gapped LAN; a skin does not get to add 20 KB to the wire.
+
+     The display face changes too, which §1's does not: Chakra Petch's squared
+     terminals *are* the machine register. Keeping it here would leave every
+     room name and dialog title still speaking in the other skin's voice. */
+  --fn-font-ui: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN",
+                "Varela Round", "Quicksand", "Nunito", system-ui,
+                -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto,
+                "Helvetica Neue", Arial, sans-serif;
+  --fn-font-display: var(--fn-font-ui);
+  /* Rounded faces are wider; the display tracking that keeps Chakra Petch
+     from looking loose makes this one look cramped. */
+  --fn-tr-display: -0.012em;
+  --fn-tr-tight:   -0.004em;
+
+  /* --- Radius ------------------------------------------------------------
+     The loudest change in the whole block. Every step up from §1, and the
+     ratio between them widened: a 28px panel around a 16px control is the
+     proportion the reference's own shapes use — a big soft shell with smaller
+     soft parts set into it. */
+  --fn-r-xs:    10px;
+  --fn-r-ctl:   16px;
+  --fn-r-field: 16px;
+  --fn-r-card:  20px;
+  --fn-r-panel: 28px;
+
+  /* --- Elevation ---------------------------------------------------------
+     Same 0–4 geometry, softer ink and a blue cast. §1 leans on `--fn-rim`
+     because a black blur is invisible on a near-black page; this skin's dark
+     face is light enough that the shadows do their own work again, so the
+     rim can go back to being a hairline instead of the mechanism. */
+  --fn-ink-key: light-dark(hsl(214 45% 30% / 0.10), hsl(217 60% 3% / 0.50));
+  --fn-ink-amb: light-dark(hsl(214 45% 30% / 0.14), hsl(217 60% 3% / 0.40));
+  --fn-sh-cta:  0 1px 2px hsl(216 70% 26% / 0.26), 0 6px 14px -4px hsl(214 84% 46% / 0.38);
+  --fn-sh-glow: 0 1px 2px hsl(216 70% 26% / 0.26), 0 10px 26px -6px hsl(212 88% 54% / 0.50);
+  --fn-sh-inset: inset 0 1px 2px light-dark(hsl(214 30% 26% / 0.16), hsl(217 60% 3% / 0.45));
+
+  /* --- The call to action, and the ignition ------------------------------
+     The cobalt read of §1's ramp. Two things move beyond the hue.
+
+     The ramp is *wider* — 12% of lightness rather than 9% — because a matte
+     cobalt shell needs more of a gradient than a self-luminous cyan does to
+     read as a lit object rather than a flat rectangle. And the sheen is a
+     near-white rather than a pale tint of the hue, which is what a glossy
+     moulded surface actually does with a light source: it reflects it.
+
+     The cold open's light warms to the visor's gold at its brightest point.
+     A blue flash on a blue robot is a flash you cannot see; the gold is the
+     one colour in this palette that can go to white without disappearing. */
+  --fn-cta-a:      hsl(211 86% 54%);
+  --fn-cta-b:      hsl(217 84% 42%);
+  --fn-cta-a-hi:   hsl(210 88% 59%);
+  --fn-cta-b-hi:   hsl(216 84% 46%);
+  --fn-cta-press:  hsl(218 82% 38%);
+  --fn-cta-line:   hsl(219 80% 34%);
+  --fn-cta-sheen:    hsl(205 100% 92% / 0.55);
+  --fn-cta-sheen-hi: hsl(205 100% 94% / 0.62);
+
+  --fn-spark: hsl(45 100% 82%);
+  --fn-spark-halo: hsl(41 100% 62% / 0.9);
+  --fn-flare: #fffaec;
+  --fn-flare-mid: hsl(44 100% 66%);
+  --fn-bloom: hsl(43 100% 72% / 0.85);
+  --fn-beam: hsl(45 100% 74%);
+  --fn-beam-deep: hsl(211 90% 52%);
+  --fn-boot-title: hsl(207 92% 74%);
+  --fn-sweep: hsl(205 100% 76% / 0.12);
+
+  /* --- Motion ------------------------------------------------------------
+     One change: the press is deeper and the hover lifts further. Squash and
+     stretch is what makes a rounded shape feel like an object you touched;
+     §1's 0.97 is the restraint an instrument panel wants. */
+  --fn-tap-hover: 1.035;
+  --fn-tap-press: 0.95;
+
+  /* --- Art ---------------------------------------------------------------
+     The registry from §1.1, repointed at `static/img/cute/`. Only the stems
+     this skin actually redraws appear here; everything omitted keeps
+     resolving to §1's entry and renders the base artwork, which is the same
+     contract `asset.rs::CUTE_ART` implements for `<img>` elements. */
+  --img-logo:                url("/static/img/cute/logo.png");
+  --img-skynet-hero:         url("/static/img/cute/skynet-hero.png");
+  --img-skynet-avatar:       url("/static/img/cute/skynet-avatar.png");
+  --img-skynet-grid:         url("/static/img/cute/skynet-grid.png");
+  --img-boot-sphere:         url("/static/img/cute/boot-sphere.png");
+  --img-boot-endoskull:      url("/static/img/cute/boot-endoskull.png");
+  --img-bank-vault-hall:     url("/static/img/cute/bank-vault-hall.png");
+  --img-bank-emblem:         url("/static/img/cute/bank-emblem.png");
+  --img-banker-core:         url("/static/img/cute/banker-core.png");
+  --img-empty-rooms:         url("/static/img/cute/empty-rooms.png");
+  --img-empty-rooms-dark:    url("/static/img/cute/empty-rooms-dark.png");
+  --img-empty-messages:      url("/static/img/cute/empty-messages.png");
+  --img-empty-messages-dark: url("/static/img/cute/empty-messages-dark.png");
+  --img-empty-invitations:      url("/static/img/cute/empty-invitations.png");
+  --img-empty-invitations-dark: url("/static/img/cute/empty-invitations-dark.png");
+  --img-empty-search:        url("/static/img/cute/empty-search.png");
+  --img-empty-search-dark:   url("/static/img/cute/empty-search-dark.png");
+  --img-empty-files:         url("/static/img/cute/empty-files.png");
+  --img-empty-files-dark:    url("/static/img/cute/empty-files-dark.png");
+  --img-empty-knowledge:     url("/static/img/cute/empty-knowledge.png");
+  --img-empty-knowledge-dark: url("/static/img/cute/empty-knowledge-dark.png");
+  --img-empty-publish:       url("/static/img/cute/empty-publish.png");
+  --img-empty-publish-dark:  url("/static/img/cute/empty-publish-dark.png");
+  --img-pick-room:           url("/static/img/cute/pick-room.png");
+  --img-pick-room-dark:      url("/static/img/cute/pick-room-dark.png");
+  --img-encrypted-badge:     url("/static/img/cute/encrypted-badge.png");
+  --img-encrypted-badge-dark: url("/static/img/cute/encrypted-badge-dark.png");
+  --img-error-offline:       url("/static/img/cute/error-offline.png");
+  --img-error-offline-dark:  url("/static/img/cute/error-offline-dark.png");
+  --img-bank-hero:           url("/static/img/cute/bank-hero.png");
+  --img-bank-hero-dark:      url("/static/img/cute/bank-hero-dark.png");
+  --img-bank-banker:         url("/static/img/cute/bank-banker.png");
+  --img-bank-banker-dark:    url("/static/img/cute/bank-banker-dark.png");
+}
+
 /* --- Type preferences (Settings → Font / Text size) ------------------------
    `ps-font` swaps the UI stack; `ps-font-scale` scales the root em, which
    every type token above is measured in. Standard/System carry no attribute
@@ -447,6 +814,43 @@
 [data-font-sample="skynet"] { font-family: "Chakra Petch", sans-serif; }
 [data-font-sample="mono"]   { font-family: var(--fn-font-mono); }
 [data-font-sample="serif"]  { font-family: Georgia, "Times New Roman", serif; }
+
+/* The skin buttons do the same job, and they are the one place in this sheet
+   allowed to name colours and radii outright. Every `--fn-*` token resolves to
+   the skin *in effect*, so a swatch built from tokens would paint both buttons
+   identically — the preview has to describe a skin that is not currently on.
+
+   Two literals each, because two is what identifies a palette: the accent
+   you press and the surface it sits on. The corner radius is part of the
+   preview too — it is the loudest difference between the two skins, and a
+   square chip beside a pill says more than either colour does. */
+[data-skin-sample] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fn-s1);
+}
+[data-skin-sample]::after {
+  content: "";
+  inline-size: 15px;
+  block-size: 11px;
+  flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px hsl(0 0% 50% / 0.35);
+}
+[data-skin-sample="skynet"]::after {
+  border-radius: 3px;
+  background: linear-gradient(135deg, hsl(190 95% 50%) 50%, hsl(214 32% 8%) 50%);
+}
+[data-skin-sample="cuteskynet"]::after {
+  border-radius: 999px;
+  background: linear-gradient(135deg, hsl(214 84% 46%) 50%, hsl(44 96% 58%) 50%);
+}
+/* The narrow-screen rule above hides `.fn-seg__btn > span`, leaving the glyph
+   to carry the meaning. For the skin buttons the swatch *is* the meaning, so
+   it survives where the label does not — and the palette glyph goes instead,
+   since two marks in a 26px button at that width is one too many. */
+@media (max-width: 380px) {
+  .fn-seg__btn[data-skin-sample] > svg { display: none; }
+}
 /* Non-colour scheme values (poster strength) branch the same three ways. */
 @media (prefers-color-scheme: light) {
   :root {
@@ -464,6 +868,63 @@
   --fn-poster-rest: 0.14;
   --fn-poster-hover: 0.26;
   --fn-poster-lit: 0.38;
+}
+
+/* §1b, continued — the tokens that are plain numbers.
+   These have to live down here rather than in the skin block above, because
+   the three rules they override are themselves (0,2,0) and come later in the
+   sheet. Adding `[data-theme]` (or the `:not()` the OS-follow branch uses)
+   takes each to (0,3,0), which wins on specificity rather than on order, so
+   this stays correct even if the blocks are ever reordered.
+
+   Both values move the same way and for the same reason: §1's artwork is a
+   photoreal watermark that has to stay *under* the interface, while the cute
+   set is flat, bright, and drawn to be looked at. So the rack's posters come
+   up a step, and the HUD lattice — a machine cue this skin has no use for —
+   drops to almost nothing.
+
+   Only a step, though. The first pass took the lit row to 0.52/0.68 on the
+   theory that brighter art deserves more presence, and it was wrong in a way
+   that only shows on a real row: flat cel art has *hard edges and solid
+   fills*, where the photoreal set is soft and tonal, so the same opacity
+   costs far more legibility. At 0.52 the sigil's outline cut straight through
+   "Encrypted message". These are the values where the poster still reads as
+   artwork and the row still reads as text. */
+@media (prefers-color-scheme: light) {
+  :root[data-skin="cuteskynet"]:not([data-theme="dark"]) {
+    --fn-poster-rest: 0.14;
+    --fn-poster-hover: 0.24;
+    --fn-poster-lit: 0.32;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-skin="cuteskynet"]:not([data-theme="light"]) {
+    --fn-poster-rest: 0.20;
+    --fn-poster-hover: 0.34;
+    --fn-poster-lit: 0.46;
+    --fn-mark-grid:   0.10;
+    --fn-mark-avatar: 0.22;
+  }
+}
+:root[data-skin="cuteskynet"][data-theme="light"] {
+  --fn-poster-rest: 0.14;
+  --fn-poster-hover: 0.24;
+  --fn-poster-lit: 0.32;
+  --fn-mark-grid:   0.03;
+  --fn-mark-avatar: 0.14;
+}
+:root[data-skin="cuteskynet"][data-theme="dark"] {
+  --fn-poster-rest: 0.20;
+  --fn-poster-hover: 0.34;
+  --fn-poster-lit: 0.46;
+  --fn-mark-grid:   0.10;
+  --fn-mark-avatar: 0.22;
+}
+/* The unforced case in an OS-light session: the skin block alone, no
+   `[data-theme]`, so this needs only to beat `:root` (0,1,0). */
+:root[data-skin="cuteskynet"] {
+  --fn-mark-grid:   0.03;
+  --fn-mark-avatar: 0.14;
 }
 
 /* Fallback for engines without light-dark(): only the tokens that would
@@ -573,6 +1034,121 @@
       --fn-scrim-a: hsl(214 30% 3% / 0.96);
       --fn-scrim-b: hsl(214 30% 3% / 0.84);
       --fn-scrim-c: hsl(214 30% 3% / 0.42);
+    }
+  }
+
+  /* The same restatement for §1b. Without it a legacy engine gets the cute
+     skin's radii, face and artwork over §1's near-black cyan surfaces — every
+     `light-dark()` declaration in the skin block drops, and what is left is a
+     mix that belongs to neither skin. The tokens that are already plain
+     values up there (the primary ramp, `--fn-sh-cta`, the radii) need no
+     entry here; they survived. */
+  :root[data-skin="cuteskynet"] {
+    --fn-primary-text: hsl(216 84% 40%);
+    --fn-primary-soft: hsl(214 84% 50% / 0.12);
+    --fn-primary-wash: hsl(214 84% 50% / 0.18);
+    --fn-primary-line: hsl(214 70% 46% / 0.36);
+    --fn-bg: hsl(200 26% 95%);
+    --fn-surface: hsl(0 0% 100%);
+    --fn-surface-2: hsl(200 40% 98%);
+    --fn-surface-3: hsl(200 24% 91%);
+    --fn-surface-4: hsl(202 20% 85%);
+    --fn-overlay: hsl(215 40% 20% / 0.46);
+    --fn-fg: hsl(215 40% 18%);
+    --fn-fg-muted: hsl(215 16% 40%);
+    --fn-fg-faint: hsl(215 13% 44%);
+    --fn-hair: hsl(200 22% 88%);
+    --fn-border: hsl(202 22% 82%);
+    --fn-border-strong: hsl(206 22% 66%);
+    --fn-field-line: hsl(206 20% 64%);
+    --fn-rim: hsl(0 0% 100% / 0);
+    --fn-raise-a: hsl(0 0% 100%);
+    --fn-raise-b: hsl(200 34% 97%);
+    --fn-sunk-a: hsl(200 26% 94%);
+    --fn-sunk-b: hsl(0 0% 100%);
+    --fn-hi: inset 0 1px 0 hsl(0 0% 100%);
+    --fn-encrypt: hsl(158 72% 30%);
+    --fn-encrypt-text: hsl(160 80% 24%);
+    --fn-encrypt-soft: hsl(158 72% 36% / 0.14);
+    --fn-crown: hsl(40 94% 38%);
+    --fn-crown-text: hsl(37 92% 28%);
+    --fn-crown-soft: hsl(42 95% 50% / 0.22);
+    --fn-danger: hsl(4 74% 45%);
+    --fn-danger-text: hsl(4 76% 42%);
+    --fn-danger-fill: hsl(4 72% 47%);
+    --fn-danger-ink: hsl(0 0% 100%);
+    --fn-danger-soft: hsl(4 74% 52% / 0.12);
+    --fn-online: hsl(145 72% 31%);
+    --fn-online-text: hsl(147 78% 24%);
+    --fn-info: hsl(205 86% 42%);
+    --fn-info-text: hsl(206 88% 38%);
+    --fn-info-fill: hsl(205 86% 44%);
+    --fn-info-ink: hsl(0 0% 100%);
+    --fn-info-soft: hsl(205 86% 50% / 0.12);
+    --fn-focus: hsl(214 88% 40%);
+    --fn-focus-halo: hsl(0 0% 100%);
+    --fn-ink-key: hsl(214 45% 30% / 0.10);
+    --fn-ink-amb: hsl(214 45% 30% / 0.14);
+    --fn-sh-inset: inset 0 1px 2px hsl(214 30% 26% / 0.16);
+    --fn-grid: hsl(214 30% 30% / 0.018);
+    --fn-vignette: hsl(214 30% 10% / 0);
+    --fn-scrim-a: hsl(200 26% 95% / 0.95);
+    --fn-scrim-b: hsl(200 26% 95% / 0.80);
+    --fn-scrim-c: hsl(200 26% 95% / 0.32);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root[data-skin="cuteskynet"]:not([data-theme="light"]) {
+      --fn-primary-text: hsl(209 92% 72%);
+      --fn-primary-soft: hsl(210 90% 62% / 0.18);
+      --fn-primary-wash: hsl(210 90% 62% / 0.24);
+      --fn-primary-line: hsl(210 85% 66% / 0.40);
+      --fn-bg: hsl(216 42% 11%);
+      --fn-surface: hsl(216 36% 15%);
+      --fn-surface-2: hsl(215 32% 19%);
+      --fn-surface-3: hsl(215 28% 25%);
+      --fn-surface-4: hsl(214 24% 32%);
+      --fn-overlay: hsl(216 50% 6% / 0.72);
+      --fn-fg: hsl(200 32% 96%);
+      --fn-fg-muted: hsl(210 18% 76%);
+      --fn-fg-faint: hsl(210 14% 70%);
+      --fn-hair: hsl(0 0% 100% / 0.07);
+      --fn-border: hsl(0 0% 100% / 0.12);
+      --fn-border-strong: hsl(0 0% 100% / 0.24);
+      --fn-field-line: hsl(0 0% 100% / 0.22);
+      --fn-rim: hsl(0 0% 100% / 0.07);
+      --fn-raise-a: hsl(215 34% 20%);
+      --fn-raise-b: hsl(216 38% 16%);
+      --fn-sunk-a: hsl(217 44% 12%);
+      --fn-sunk-b: hsl(216 36% 16%);
+      --fn-hi: inset 0 1px 0 hsl(0 0% 100% / 0.09);
+      --fn-encrypt: hsl(156 66% 56%);
+      --fn-encrypt-text: hsl(156 66% 60%);
+      --fn-encrypt-soft: hsl(156 66% 54% / 0.18);
+      --fn-crown: hsl(44 96% 62%);
+      --fn-crown-text: hsl(44 96% 66%);
+      --fn-crown-soft: hsl(44 96% 58% / 0.20);
+      --fn-danger: hsl(6 88% 68%);
+      --fn-danger-text: hsl(6 92% 76%);
+      --fn-danger-fill: hsl(5 74% 60%);
+      --fn-danger-ink: hsl(6 60% 10%);
+      --fn-danger-soft: hsl(6 82% 62% / 0.18);
+      --fn-online: hsl(142 62% 58%);
+      --fn-online-text: hsl(142 60% 64%);
+      --fn-info: hsl(203 88% 70%);
+      --fn-info-text: hsl(203 88% 74%);
+      --fn-info-fill: hsl(203 82% 66%);
+      --fn-info-ink: hsl(212 70% 10%);
+      --fn-info-soft: hsl(203 88% 62% / 0.18);
+      --fn-focus: hsl(206 94% 68%);
+      --fn-focus-halo: hsl(216 42% 11%);
+      --fn-ink-key: hsl(217 60% 3% / 0.50);
+      --fn-ink-amb: hsl(217 60% 3% / 0.40);
+      --fn-sh-inset: inset 0 1px 2px hsl(217 60% 3% / 0.45);
+      --fn-grid: hsl(0 0% 100% / 0.014);
+      --fn-vignette: hsl(218 50% 6% / 0.30);
+      --fn-scrim-a: hsl(216 42% 10% / 0.93);
+      --fn-scrim-b: hsl(216 42% 10% / 0.78);
+      --fn-scrim-c: hsl(216 42% 10% / 0.34);
     }
   }
 }
@@ -917,21 +1493,21 @@ img { max-inline-size: 100%; }
 .topcoat-button--cta,
 .topcoat-button--large--cta {
   background-color: var(--fn-primary);
-  background-image: linear-gradient(180deg, hsl(188 96% 52%), hsl(191 95% 43%));
-  border: 1px solid hsl(192 92% 36%);
+  background-image: linear-gradient(180deg, var(--fn-cta-a), var(--fn-cta-b));
+  border: 1px solid var(--fn-cta-line);
   color: var(--fn-primary-ink);
   font-weight: 700;
   letter-spacing: var(--fn-tr-label);
-  box-shadow: inset 0 1px 0 hsl(186 100% 82% / 0.5), var(--fn-sh-cta);
+  box-shadow: inset 0 1px 0 var(--fn-cta-sheen), var(--fn-sh-cta);
 }
 .topcoat-button--cta:hover,
 .topcoat-button--large--cta:hover {
-  background-image: linear-gradient(180deg, hsl(188 96% 58%), hsl(191 95% 45%));
-  box-shadow: inset 0 1px 0 hsl(186 100% 84% / 0.55), var(--fn-sh-glow);
+  background-image: linear-gradient(180deg, var(--fn-cta-a-hi), var(--fn-cta-b-hi));
+  box-shadow: inset 0 1px 0 var(--fn-cta-sheen-hi), var(--fn-sh-glow);
 }
 .topcoat-button--cta:active,
 .topcoat-button--large--cta:active {
-  background-image: linear-gradient(180deg, hsl(192 92% 40%), hsl(192 92% 40%));
+  background-image: linear-gradient(180deg, var(--fn-cta-press), var(--fn-cta-press));
   box-shadow: var(--fn-sh-inset);
 }
 
@@ -1390,6 +1966,65 @@ input.fn-mono, textarea.fn-mono { color: var(--fn-fg); }
   color: var(--fn-encrypt-text);
   background: var(--fn-encrypt-soft);
 }
+
+/* An address with a reveal beside it (`revealable`, common.rs).
+
+   `inline-flex`, not flex: this lands mid-sentence inside a message bubble,
+   and a block would break the line either side of it. `baseline` alignment
+   for the same reason — a 14px glyph centred on a line of 15px text sits
+   visibly high, and the eye has to look like punctuation next to the address
+   rather than a control parked beside it.
+
+   `align-items` is the one thing that cannot be inherited from the bubble: an
+   inline-flex container establishes its own formatting context, so without
+   this the two children align to each other and the group as a whole drifts
+   off the text baseline. */
+.fn-addr-group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  max-inline-size: 100%;
+  /* The group may wrap as a unit, but never *between* the address and its
+     eye — an eye alone on the next line belongs to nothing. */
+  white-space: nowrap;
+}
+.fn-addr__reveal {
+  flex: 0 0 auto;
+  /* Overriding the icon-button's 36px standing height: this one is inside a
+     line of text, and a 36px control in a 20px line pushes the whole line
+     apart. The tap target is restored below on coarse pointers, where it
+     actually matters. */
+  min-block-size: 0;
+  min-inline-size: 0;
+  padding: 2px;
+  align-self: center;
+  color: var(--fn-fg-faint);
+  opacity: 0.75;
+  transition: opacity var(--fn-dur-fast) var(--fn-ease),
+              color var(--fn-dur-fast) var(--fn-ease);
+}
+.fn-addr__reveal:hover,
+.fn-addr__reveal[aria-pressed="true"] {
+  color: var(--fn-primary-text);
+  opacity: 1;
+}
+/* A thumb cannot hit an 18px glyph. The button keeps its typographic size —
+   the layout depends on it — and grows a transparent target around itself
+   instead, which is what `::after` is for. */
+@media (pointer: coarse) {
+  .fn-addr__reveal { position: relative; }
+  .fn-addr__reveal::after {
+    content: "";
+    position: absolute;
+    inset: -11px;
+  }
+}
+/* Revealed, the address wraps; the group must let it. */
+.fn-addr-group:has(.fn-addr--full) {
+  white-space: normal;
+  align-items: flex-start;
+}
+.fn-addr-group:has(.fn-addr--full) .fn-addr__reveal { align-self: flex-start; }
 /* A members row is a copy target in its own right (members.rs). The pointer
    says so; the address inside it is the named, focusable version for everyone
    not using one. */
@@ -3211,58 +3846,58 @@ span.fn-conn { cursor: default; }
 }
 
 .fn-art--rooms {
-  --fn-art-light: url("/static/img/empty-rooms.png");
-  --fn-art-dark:  url("/static/img/empty-rooms-dark.png");
+  --fn-art-light: var(--img-empty-rooms);
+  --fn-art-dark: var(--img-empty-rooms-dark);
 }
 .fn-art--messages {
-  --fn-art-light: url("/static/img/empty-messages.png");
-  --fn-art-dark:  url("/static/img/empty-messages-dark.png");
+  --fn-art-light: var(--img-empty-messages);
+  --fn-art-dark: var(--img-empty-messages-dark);
 }
 .fn-art--invitations {
-  --fn-art-light: url("/static/img/empty-invitations.png");
-  --fn-art-dark:  url("/static/img/empty-invitations-dark.png");
+  --fn-art-light: var(--img-empty-invitations);
+  --fn-art-dark: var(--img-empty-invitations-dark);
 }
 .fn-art--search {
-  --fn-art-light: url("/static/img/empty-search.png");
-  --fn-art-dark:  url("/static/img/empty-search-dark.png");
+  --fn-art-light: var(--img-empty-search);
+  --fn-art-dark: var(--img-empty-search-dark);
 }
 .fn-art--pick {
-  --fn-art-light: url("/static/img/pick-room.png");
-  --fn-art-dark:  url("/static/img/pick-room-dark.png");
+  --fn-art-light: var(--img-pick-room);
+  --fn-art-dark: var(--img-pick-room-dark);
 }
 .fn-art--encrypted {
-  --fn-art-light: url("/static/img/encrypted-badge.png");
-  --fn-art-dark:  url("/static/img/encrypted-badge-dark.png");
+  --fn-art-light: var(--img-encrypted-badge);
+  --fn-art-dark: var(--img-encrypted-badge-dark);
 }
 .fn-art--offline {
-  --fn-art-light: url("/static/img/error-offline.png");
-  --fn-art-dark:  url("/static/img/error-offline-dark.png");
+  --fn-art-light: var(--img-error-offline);
+  --fn-art-dark: var(--img-error-offline-dark);
 }
 .fn-art--bank {
-  --fn-art-light: url("/static/img/bank-hero.png");
-  --fn-art-dark:  url("/static/img/bank-hero-dark.png");
+  --fn-art-light: var(--img-bank-hero);
+  --fn-art-dark: var(--img-bank-hero-dark);
 }
 /* Cinematic, themeless (they live on dark plates in both themes), like the
    login hero: the Bank page's vault backdrop and the executing AI Banker. */
 .fn-art--vault-hall {
-  --fn-art-light: url("/static/img/bank-vault-hall.png");
-  --fn-art-dark:  url("/static/img/bank-vault-hall.png");
+  --fn-art-light: var(--img-bank-vault-hall);
+  --fn-art-dark: var(--img-bank-vault-hall);
 }
 .fn-art--banker-core {
-  --fn-art-light: url("/static/img/banker-core.png");
-  --fn-art-dark:  url("/static/img/banker-core.png");
+  --fn-art-light: var(--img-banker-core);
+  --fn-art-dark: var(--img-banker-core);
 }
 .fn-art--bank-emblem {
-  --fn-art-light: url("/static/img/bank-emblem.png");
-  --fn-art-dark:  url("/static/img/bank-emblem.png");
+  --fn-art-light: var(--img-bank-emblem);
+  --fn-art-dark: var(--img-bank-emblem);
 }
 .fn-art--banker {
-  --fn-art-light: url("/static/img/bank-banker.png");
-  --fn-art-dark:  url("/static/img/bank-banker-dark.png");
+  --fn-art-light: var(--img-bank-banker);
+  --fn-art-dark: var(--img-bank-banker-dark);
 }
 .fn-art--knowledge {
-  --fn-art-light: url("/static/img/empty-knowledge.png");
-  --fn-art-dark:  url("/static/img/empty-knowledge-dark.png");
+  --fn-art-light: var(--img-empty-knowledge);
+  --fn-art-dark: var(--img-empty-knowledge-dark);
 }
 /* Full-bleed, used as the login screen's backdrop rather than as a plate.
    Dark gets the cinematic guardian portrait — the one place the app spends
@@ -3276,8 +3911,8 @@ span.fn-conn { cursor: default; }
    sits on the dark it was lit against no matter what the rest of the UI is
    doing. */
 .fn-art--login {
-  --fn-art-light: url("/static/img/skynet-hero.png");
-  --fn-art-dark:  url("/static/img/skynet-hero.png");
+  --fn-art-light: var(--img-skynet-hero);
+  --fn-art-dark: var(--img-skynet-hero);
 }
 
 /* An illustrated empty state: the emoji tile becomes a plate. The glyph is
@@ -4731,6 +5366,44 @@ span.fn-conn { cursor: default; }
   overflow-wrap: anywhere;
   max-inline-size: min(80vw, 480px);
 }
+
+/* The address, abbreviated until asked for.
+   `overflow-wrap: anywhere` on the revealed state and not on the short one:
+   forty-two mono characters have no break opportunity of their own, so on a
+   phone they would otherwise run off the stage rather than wrap. The
+   abbreviation is eleven characters and must never break — a `0x742d…` split
+   across two lines stops reading as one address.
+
+   The size step between the two states is deliberate. Revealed, this is the
+   longest string in the product and it is competing with a full-screen
+   portrait for the same eye; dropping it a step is what keeps three lines of
+   hex from becoming the subject of the picture. */
+.fn-spot__addr {
+  font-family: var(--fn-font-mono);
+  font-size: var(--fn-t-sm);
+  letter-spacing: 0.02em;
+  color: hsl(var(--spot-h) 40% 82%);
+  white-space: nowrap;
+  max-inline-size: min(86vw, 520px);
+  transition: color var(--fn-dur) var(--fn-ease);
+}
+.fn-spot__addr[data-revealed="true"] {
+  font-size: var(--fn-t-xs);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* Revealed, it is being read character by character against something else,
+     so it gets the brightest ink on the stage rather than the quiet one. */
+  color: hsl(var(--spot-h) 30% 92%);
+}
+.fn-spot__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--fn-s2);
+}
+/* The reveal button carries a glyph and a label; the icon alone would be one
+   more thing to decode on a stage that is already mostly picture. */
+.fn-spot__actions .topcoat-button > svg { margin-inline-end: 2px; }
 .fn-spot__close {
   position: absolute;
   inset-block-start: calc(var(--fn-s4) + var(--fn-safe-top, 0px));
@@ -5353,7 +6026,15 @@ span.fn-conn { cursor: default; }
   font-size: var(--fn-t-sm);
   text-align: center;
 }
-.ps-boot img {
+/* Painted from `--img-logo` rather than being an `<img src>`, so the mark the
+   loading screen shows is the one belonging to the skin stamped on `<html>`
+   by the pre-paint script in index.html. The `clip-path` trims the generated
+   art's own plate edge; `border-radius` alone would leave it visible under
+   the corners. */
+.ps-boot__mark {
+  inline-size: 72px;
+  block-size: 72px;
+  background: var(--img-logo) center / cover no-repeat;
   opacity: 0.9;
   border-radius: 22%;
   clip-path: inset(6% round 22%);
@@ -5420,7 +6101,7 @@ span.fn-conn { cursor: default; }
   position: fixed;
   inset: 0;
   z-index: -1;
-  background: url("/static/img/skynet-grid.png") center / cover no-repeat;
+  background: var(--img-skynet-grid) center / cover no-repeat;
   opacity: var(--fn-mark-grid);
   pointer-events: none;
 }
@@ -5459,7 +6140,7 @@ span.fn-conn { cursor: default; }
   position: absolute;
   inset: 0;
   background: linear-gradient(105deg,
-      transparent 30%, hsl(190 100% 70% / 0.10) 48%, transparent 64%);
+      transparent 30%, var(--fn-sweep) 48%, transparent 64%);
   transform: translateX(-110%);
   animation: fn-warden-sweep 1100ms var(--fn-ease-expo) 180ms forwards;
   pointer-events: none;
@@ -5781,7 +6462,7 @@ span.fn-conn { cursor: default; }
   inset-inline-end: 0;
   inline-size: 120px;
   block-size: 120px;
-  background: url("/static/img/skynet-avatar.png") center / cover no-repeat;
+  background: var(--img-skynet-avatar) center / cover no-repeat;
   border-radius: 0 var(--fn-r, 12px) 0 60%;
   opacity: var(--fn-mark-avatar);
   pointer-events: none;
@@ -6001,8 +6682,8 @@ span.fn-conn { cursor: default; }
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 50% 46%, hsl(190 95% 50% / 0.16), transparent 58%),
-    url("/static/img/skynet-grid.png") center / cover no-repeat;
+    radial-gradient(circle at 50% 46%, var(--fn-primary-wash), transparent 58%),
+    var(--img-skynet-grid) center / cover no-repeat;
   opacity: 0;
   animation: fn-boot-sky 4300ms var(--fn-ease-cosine) forwards;
 }
@@ -6030,7 +6711,7 @@ span.fn-conn { cursor: default; }
 .fn-boot__sphere {
   inline-size: 100%;
   aspect-ratio: 1;
-  background: url("/static/img/boot-sphere.png") center / contain no-repeat;
+  background: var(--img-boot-sphere) center / contain no-repeat;
   /* `screen` drops the source's black, but its background is near-black
      rather than pure, so the frame edge survives as a faint box. The radial
      mask removes it and tapers the outermost arcs into the dark, which is
@@ -6072,8 +6753,8 @@ span.fn-conn { cursor: default; }
   inline-size: 3px;
   block-size: 3px;
   border-radius: 50%;
-  background: hsl(186 100% 82%);
-  box-shadow: 0 0 8px 2px hsl(190 100% 60% / 0.9);
+  background: var(--fn-spark);
+  box-shadow: 0 0 8px 2px var(--fn-spark-halo);
   opacity: 0;
   transform: rotate(var(--a)) translateX(0);
   animation: fn-boot-spark 900ms var(--fn-ease-expo) var(--d) forwards;
@@ -6089,7 +6770,7 @@ span.fn-conn { cursor: default; }
 .fn-boot__flash {
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 50% 46%, #eafcff, hsl(190 100% 62%) 42%, transparent 72%);
+  background: radial-gradient(circle at 50% 46%, var(--fn-flare), var(--fn-flare-mid) 42%, transparent 72%);
   opacity: 0;
   pointer-events: none;
   animation: fn-boot-flash 620ms var(--fn-ease-exit) 1100ms forwards;
@@ -6108,7 +6789,7 @@ span.fn-conn { cursor: default; }
 .fn-boot__skull {
   inline-size: 86%;
   block-size: 100%;
-  background: url("/static/img/boot-endoskull.png") center / contain no-repeat;
+  background: var(--img-boot-endoskull) center / contain no-repeat;
   /* Same reason as the sphere, shaped to the portrait crop: it has to look
      like it is standing *in* the dark, not pasted onto it. */
   /* A long, early falloff rather than a tight one: the source's lower half is
@@ -6135,7 +6816,7 @@ span.fn-conn { cursor: default; }
 .fn-boot__bloom {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse 46% 12% at 50% 46%, hsl(188 100% 70% / 0.85), transparent 70%);
+  background: radial-gradient(ellipse 46% 12% at 50% 46%, var(--fn-bloom), transparent 70%);
   mix-blend-mode: screen;
   opacity: 0;
   animation: fn-boot-bloom 3000ms var(--fn-ease-cosine) 1300ms forwards;
@@ -6175,7 +6856,7 @@ span.fn-conn { cursor: default; }
   font-weight: 700;
   letter-spacing: 0.34em;
   text-indent: 0.34em; /* balances the trailing letter-space */
-  color: hsl(188 95% 66%);
+  color: var(--fn-boot-title);
   text-shadow: 0 0 18px var(--fn-glow);
   animation: fn-boot-title 1.6s var(--fn-ease-cosine) 2600ms infinite;
 }
@@ -6229,7 +6910,7 @@ span.fn-conn { cursor: default; }
   display: block;
   block-size: 100%;
   inline-size: 0;
-  background: linear-gradient(90deg, hsl(190 95% 45%), hsl(186 100% 72%));
+  background: linear-gradient(90deg, var(--fn-beam-deep), var(--fn-beam));
   box-shadow: 0 0 12px var(--fn-glow);
   animation: fn-boot-bar 1700ms var(--fn-ease-expo) 2600ms forwards;
 }
@@ -6490,7 +7171,7 @@ span.fn-conn { cursor: default; }
       hsl(214 45% 7% / 0.92) 32%,
       hsl(214 45% 7% / 0.55) 62%,
       hsl(214 45% 7% / 0.15)),
-    url("/static/img/bank-vault-hall.png");
+    var(--img-bank-vault-hall);
   background-size: cover;
   background-position: center;
   background-color: var(--fn-surface-2);
@@ -6920,8 +7601,8 @@ span.fn-conn { cursor: default; }
 
 /* The empty state's artwork, generated to match the family (tools/genart.py). */
 .fn-art--files {
-  --fn-art-light: url("/static/img/empty-files.png");
-  --fn-art-dark:  url("/static/img/empty-files-dark.png");
+  --fn-art-light: var(--img-empty-files);
+  --fn-art-dark: var(--img-empty-files-dark);
 }
 
 /* THE TAG RAIL. A horizontal scroller rather than a wrapping cloud: a room
@@ -7746,8 +8427,8 @@ span.fn-conn { cursor: default; }
    ========================================================================== */
 
 .fn-art--publish {
-  --fn-art-light: url("/static/img/empty-publish.png");
-  --fn-art-dark:  url("/static/img/empty-publish-dark.png");
+  --fn-art-light: var(--img-empty-publish);
+  --fn-art-dark: var(--img-empty-publish-dark);
 }
 
 .fn-publish {

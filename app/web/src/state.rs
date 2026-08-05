@@ -21,7 +21,7 @@ use crate::api::{BlockchainInfo, BlockedUser, Client, Invitation, Message, RoomW
 use crate::crypto::RoomKeyBundle;
 use crate::i18n::Lang;
 use crate::realtime::{ConnStatus, Transport, TypingTracker};
-use crate::session::{Auth, ConnectionMode, FontFace, FontScale, ShellLayout, Theme};
+use crate::session::{Auth, ConnectionMode, FontFace, FontScale, ShellLayout, Skin, Theme};
 use crate::store::{BlockSet, RoomState};
 
 /// A four-state async result. `Idle` and `Loading` render differently — the
@@ -189,6 +189,9 @@ pub struct AppState {
     pub typing: TypingTracker,
     pub mode: ConnectionMode,
     pub theme: Theme,
+    /// The art direction (`ps-skin`) — palette, geometry and imagery.
+    /// Independent of [`Theme`]: every skin has a light and a dark face.
+    pub skin: Skin,
     /// Two-pane arrangement on wide viewports (`ps-shell-layout`).
     pub shell_layout: ShellLayout,
     pub language: Lang,
@@ -270,6 +273,7 @@ impl AppState {
             typing: TypingTracker::default(),
             mode: ConnectionMode::WebSocket,
             theme: Theme::System,
+            skin: Skin::load(),
             shell_layout: ShellLayout::load(),
             language: Lang::load(),
             font_face: FontFace::load(),
@@ -510,6 +514,7 @@ pub enum Action {
     ClearTyping(RoomId),
     SetMode(ConnectionMode),
     SetTheme(Theme),
+    SetSkin(Skin),
     SetShellLayout(ShellLayout),
     SetFontFace(FontFace),
     SetFontScale(FontScale),
@@ -550,6 +555,7 @@ impl Reducible for AppState {
             typing: self.typing.clone(),
             mode: self.mode,
             theme: self.theme,
+            skin: self.skin,
             shell_layout: self.shell_layout,
             language: self.language,
             font_face: self.font_face,
@@ -790,6 +796,10 @@ impl Reducible for AppState {
             Action::SetTheme(t) => {
                 t.apply();
                 s.theme = t;
+            }
+            Action::SetSkin(k) => {
+                k.apply();
+                s.skin = k;
             }
             Action::SetFontFace(f) => {
                 f.apply();

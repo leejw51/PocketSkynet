@@ -79,10 +79,54 @@
          it has no staleness to cause and no reason to be rehashed. -->
     <link rel="stylesheet" href="/static/vendor/topcoat/css/topcoat-desktop-light.css" />
     <link data-trunk rel="css" href="static/app.css" />
+
+    <!-- Stamp the stored appearance before the first paint.
+
+         The WASM bundle applies these itself on boot (`app.rs`), but that is
+         one to two seconds after the browser has already painted the loading
+         screen below. Without this the app opens on the *default* skin and
+         theme for the whole of that time and then swaps — which on the cute
+         skin means a near-black screen with a chrome skull, followed by a
+         blue one with a mascot. A skin that announces itself by flashing the
+         other skin first is not a skin anyone would keep on.
+
+         Deliberately tiny, synchronous and last in `<head>`: it must run
+         before the body paints, so it cannot be deferred, and anything that
+         throws here would block the app entirely — hence the try/catch and
+         the complete absence of anything that could fail interestingly.
+
+         The values are JSON-encoded because `gloo_storage` writes them that
+         way (`"dark"`, quotes included), so a bare `getItem` comparison would
+         never match. Anything unparseable is ignored and the app corrects it
+         a second later, which is exactly the pre-existing behaviour. -->
+    <script>
+      (function () {
+        try {
+          var read = function (key) {
+            var raw = localStorage.getItem(key);
+            if (!raw) return null;
+            try { return JSON.parse(raw); } catch (e) { return raw; }
+          };
+          var root = document.documentElement;
+          var theme = read("ps-theme");
+          if (theme === "light" || theme === "dark") {
+            root.setAttribute("data-theme", theme);
+          }
+          if (read("ps-skin") === "cuteskynet") {
+            root.setAttribute("data-skin", "cuteskynet");
+          }
+        } catch (e) {
+          /* Private mode, or storage disabled. The app applies both itself. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app-loading" class="ps-boot">
-      <img src="/static/img/logo.png" alt="" width="72" height="72" />
+      <!-- A background rather than an `<img>`, so the mark follows the skin
+           through `--img-logo` (§1.1) with no second copy of the resolution
+           logic in the script above. -->
+      <div class="ps-boot__mark" role="img" aria-label="PocketSkynet"></div>
       <p>Loading PocketSkynet…</p>
       <noscript>PocketSkynet needs JavaScript and WebAssembly enabled.</noscript>
     </div>

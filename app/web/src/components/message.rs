@@ -144,8 +144,8 @@ pub fn message_row(p: &MessageProps) -> Html {
                     image={m.sender.as_ref().and_then(|u| u.profile_image.clone())}
                     zoom={crate::components::common::Zoom {
                         title: sender_name.clone(),
-                        subtitle: Some(m.sender_address.to_checksummed()),
-                        copy: Some(m.sender_address.to_checksummed()),
+                        subtitle: None,
+                        address: Some(m.sender_address.clone()),
                     }}
                 />
             }
@@ -291,9 +291,15 @@ fn render_content(lang: Lang, text: &str, on_tag: &Callback<String>) -> Html {
             // A pasted wallet address is the one piece of message content
             // people reliably want *back out* of the conversation, and it is
             // also the one piece nobody can select accurately with a thumb.
-            // Rendered full-length, so the text still says what was typed —
-            // only now tapping it copies the checksummed form.
-            out.push(html! { <Addr address={addr} full=true /> });
+            // Tapping it copies the checksummed form.
+            //
+            // Shown abbreviated, with the eye beside it. This used to render
+            // full-length on the argument that the text should still say what
+            // was typed — but a bubble is not a transcript, it is a reading
+            // surface, and forty-two mono characters mid-sentence break the
+            // line they are in and dominate every message around them. What
+            // was typed is one tap away and on the clipboard either way.
+            out.push(html! { <Addr address={addr} revealable=true /> });
             if !tail.is_empty() {
                 out.push(html! { { tail.to_owned() } });
             }

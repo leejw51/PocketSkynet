@@ -302,7 +302,7 @@ pub fn chat(p: &ChatProps) -> Html {
                     zoom={crate::components::common::Zoom {
                         title: room.room.name.clone(),
                         subtitle: None,
-                        copy: None,
+                        address: None,
                     }}
                 />
                 <div class="fn-chat__title fn-grow">

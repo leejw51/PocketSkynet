@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | `ps-session` | JWT, wallet address, username | The JWT is a bearer credential the server issued and can be re-issued; storing it is what makes a reload not a sign-in. It grants **read** access to the account's rooms but, on its own, decrypts nothing. |
 //! | `ps-theme` | `light` \| `dark` \| absent | Cosmetic. |
+//! | `ps-skin` | `skynet` \| `cuteskynet` | Cosmetic; the art direction, independent of light/dark. Written before authentication like `ps-lang`, so the sign-in screen wears the chosen skin. |
 //! | `ps-lang` | language tag | Cosmetic; deliberately written *before* authentication so the login screen itself remembers. |
 //! | `ps-connection-mode` | `websocket` \| `sse` \| `polling` | A user preference about transport, not a secret. |
 //! | `ps-login-layout` | `auto` \| `vertical` \| `horizontal` | Cosmetic; written before authentication, like `ps-lang`, so the sign-in screen itself remembers. |
@@ -46,6 +47,7 @@ use crate::crypto::SessionKeys;
 
 const KEY_SESSION: &str = "ps-session";
 const KEY_THEME: &str = "ps-theme";
+const KEY_SKIN: &str = "ps-skin";
 const KEY_CONNECTION: &str = "ps-connection-mode";
 const KEY_LOGIN_LAYOUT: &str = "ps-login-layout";
 const KEY_SHELL_LAYOUT: &str = "ps-shell-layout";
@@ -306,6 +308,69 @@ impl Theme {
             Theme::System => "system",
             Theme::Light => "light",
             Theme::Dark => "dark",
+        }
+    }
+}
+
+/// The art direction. Orthogonal to [`Theme`], and that separation is the
+/// whole design: a skin decides *what the product looks like* — palette,
+/// radii, type, imagery — while the theme decides only *how bright the room
+/// is*. Every skin therefore has to work in light and in dark, which is why
+/// this is a second attribute rather than two more entries in `Theme`.
+///
+/// Applied as `data-skin` on `<html>`, the same one-attribute mechanism the
+/// theme and the font use. `Skynet` is the default and writes no attribute at
+/// all, so a fresh install renders byte-identically to the sheet's `:root`
+/// block and the skin costs nothing until someone chooses one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Skin {
+    /// Machine cinema: near-black, optic cyan, squared geometry. §1 of app.css.
+    #[default]
+    Skynet,
+    /// The same product drawn as a friendly mecha: primary blue, visor gold,
+    /// signal red, generous radii, soft shadows. §1b of app.css.
+    Cute,
+}
+
+impl Skin {
+    pub const ALL: [Skin; 2] = [Skin::Skynet, Skin::Cute];
+
+    pub fn load() -> Self {
+        match backend::get::<String>(KEY_SKIN).as_deref() {
+            Some("cuteskynet") => Skin::Cute,
+            _ => Skin::Skynet,
+        }
+    }
+
+    /// The value `app.css` selects on, and the value stored. One string for
+    /// both, so a rename cannot desynchronise the sheet from the store.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Skin::Skynet => "skynet",
+            Skin::Cute => "cuteskynet",
+        }
+    }
+
+    /// The directory under `static/img/` this skin's overrides live in.
+    /// `None` for the default skin, whose art *is* the bare directory.
+    pub fn art_dir(self) -> Option<&'static str> {
+        match self {
+            Skin::Skynet => None,
+            Skin::Cute => Some("cute"),
+        }
+    }
+
+    /// Persist and apply. The default removes the attribute, so nothing on a
+    /// fresh install advertises a skin that is only the baseline.
+    pub fn apply(self) {
+        backend::set(KEY_SKIN, &self.as_str());
+        #[cfg(target_arch = "wasm32")]
+        if let Some(root) = backend::root_element() {
+            if self == Skin::Skynet {
+                let _ = root.remove_attribute("data-skin");
+            } else {
+                let _ = root.set_attribute("data-skin", self.as_str());
+            }
         }
     }
 }
@@ -671,6 +736,44 @@ mod tests {
         assert_eq!(Theme::Light.as_str(), "light");
         assert_eq!(Theme::Dark.as_str(), "dark");
         assert_eq!(Theme::System.as_str(), "system");
+    }
+
+    // ---- skin (`ps-skin`) --------------------------------------------------
+
+    #[test]
+    fn skin_strings_are_the_values_app_css_matches_on() {
+        // §1b selects on `:root[data-skin="cuteskynet"]`. If this string and
+        // that selector ever disagree the app renders the base skin with the
+        // picker insisting the other one is chosen — a silent failure, since
+        // nothing errors and every asset still resolves.
+        assert_eq!(Skin::Cute.as_str(), "cuteskynet");
+        assert_eq!(Skin::Skynet.as_str(), "skynet");
+    }
+
+    #[test]
+    fn the_default_skin_is_the_one_that_writes_no_attribute() {
+        // With nothing stored, a fresh install must render byte-identically to
+        // the app before skins existed — which means `Skynet`, whose `apply`
+        // removes `data-skin` rather than setting it, so §1b never matches.
+        assert_eq!(Skin::load(), Skin::Skynet);
+        assert_eq!(Skin::default(), Skin::Skynet);
+        assert!(Skin::Skynet.art_dir().is_none());
+    }
+
+    #[test]
+    fn only_the_cute_skin_reaches_into_a_subdirectory() {
+        // `asset::img` keys off `art_dir`, so a skin that claims a directory
+        // it has no files in would render nothing at all.
+        assert_eq!(Skin::Cute.art_dir(), Some("cute"));
+    }
+
+    #[test]
+    fn every_skin_is_in_the_picker() {
+        // Both pickers (login and Settings) iterate `ALL`; a variant missing
+        // from it is a skin nobody can choose.
+        assert_eq!(Skin::ALL.len(), 2);
+        assert!(Skin::ALL.contains(&Skin::Skynet));
+        assert!(Skin::ALL.contains(&Skin::Cute));
     }
 
     // ---- type preferences (`ps-font` / `ps-font-scale`) --------------------
