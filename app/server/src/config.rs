@@ -248,6 +248,24 @@ impl Config {
         self.data_dir.join("sites")
     }
 
+    /// Scratch space for in-flight resumable uploads, one `.part` file per
+    /// session (`routes/uploads.rs`).
+    ///
+    /// Its own directory rather than a prefix inside `files_dir` for two
+    /// reasons. A half-written file must never be reachable by the routes that
+    /// serve finished ones — a `.part` in the attachment store is one careless
+    /// `read_dir` away from being served — and finishing an upload is a
+    /// `rename`, which is only atomic *within a filesystem*. Both directories
+    /// hang off `data_dir`, so that holds by construction here and would stop
+    /// holding the moment someone mounted one of them elsewhere. If you move
+    /// this, move `files_dir` with it.
+    ///
+    /// Nothing here is worth backing up: an interrupted upload resumes from the
+    /// client's copy, which is the only complete one until it finishes.
+    pub fn uploads_dir(&self) -> PathBuf {
+        self.data_dir.join("uploads")
+    }
+
     fn secret_path(data_dir: &Path) -> PathBuf {
         data_dir.join("jwt.secret")
     }

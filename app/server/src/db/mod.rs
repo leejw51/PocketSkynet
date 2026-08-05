@@ -36,6 +36,7 @@ pub mod rooms;
 pub mod shouts;
 pub mod sites;
 pub mod storage;
+pub mod uploads;
 pub mod users;
 
 use std::path::{Path, PathBuf};

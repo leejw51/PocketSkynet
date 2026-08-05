@@ -169,6 +169,61 @@ async fn store(state: &AppState, ext: &str, body: &[u8]) -> ApiResult<String> {
     Ok(format!("/api/images/{name}"))
 }
 
+/// Commit a finished upload session as an image or video.
+///
+/// The counterpart to [`store`] for bytes that arrived in chunks. It cannot
+/// call `store`: that takes `&[u8]`, which is the thing a 4 GB upload does not
+/// have. So the shared parts are re-expressed against a path — the media type
+/// comes from the session's declared `mime` rather than a `Content-Type`
+/// header, the digest was computed by the uploads route while it verified the
+/// assembly, and the bytes move by `rename` instead of being written again.
+///
+/// The per-type ceilings still apply and are still the real limit: chunking
+/// makes a 4 GB *transfer* possible, it does not make a 4 GB profile picture
+/// sensible.
+pub(crate) async fn finalize_upload(
+    state: &AppState,
+    session: &crate::db::uploads::Session,
+    temp_path: &std::path::Path,
+    digest: &str,
+) -> ApiResult<Response> {
+    let Some(ext) = extension_for(&session.mime) else {
+        return Err(ApiError::bad_request(
+            "mime must be image/png, image/jpeg, image/webp, image/gif, \
+             video/mp4, or video/webm",
+        ));
+    };
+    let cap = cap_for(ext);
+    if session.declared_size as usize > cap {
+        return Err(ApiError::bad_request(format!(
+            "File is larger than the {} MB limit for this media type",
+            cap / (1024 * 1024)
+        )));
+    }
+
+    let name = format!("{digest}.{ext}");
+    let dir = state.cfg.images_dir();
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let path = dir.join(&name);
+
+    // Content-addressed, so an existing file is the same file.
+    if path.exists() {
+        let _ = tokio::fs::remove_file(temp_path).await;
+    } else {
+        tokio::fs::rename(temp_path, &path)
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))?;
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "url": format!("/api/images/{name}") })),
+    )
+        .into_response())
+}
+
 #[derive(Debug, Deserialize)]
 struct ImportRequest {
     url: String,

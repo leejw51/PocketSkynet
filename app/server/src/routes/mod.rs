@@ -23,6 +23,7 @@ pub mod search;
 pub mod shout;
 pub mod sites;
 pub mod sync;
+pub mod uploads;
 pub mod users;
 
 use std::path::Path;
@@ -150,6 +151,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(keys::router())
         .merge(messages::router())
         .merge(files::router())
+        .merge(uploads::router())
         .merge(images::router())
         .merge(search::router())
         .merge(operators::router())
