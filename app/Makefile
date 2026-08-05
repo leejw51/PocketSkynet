@@ -90,7 +90,7 @@ endif
 .PHONY: help start https http http3 stop restart refresh build gui package test \
         web server tools dev \
         test-unit test-web test-integration test-wasm \
-        package-installer verify fmt format fmt-check lint clean distclean assets assets-force assets-cute db-reset
+        package-installer verify fmt format fmt-check lint clean distclean assets assets-force assets-cute assets-human db-reset
 
 ## ----------------------------------------------------------------- help ----
 
@@ -296,6 +296,9 @@ assets-force: ## Regenerate all imagery, every skin
 
 assets-cute: ## Generate missing imagery for the cuteskynet skin only
 	python3 tools/genart.py --skin cuteskynet
+
+assets-human: ## Generate missing imagery for the humanskynet skin only
+	python3 tools/genart.py --skin humanskynet
 
 ## --------------------------------------------------------------- chores ----
 

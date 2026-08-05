@@ -112,8 +112,14 @@
           if (theme === "light" || theme === "dark") {
             root.setAttribute("data-theme", theme);
           }
-          if (read("ps-skin") === "cuteskynet") {
-            root.setAttribute("data-skin", "cuteskynet");
+          // Allow-listed rather than passed through, because this value is
+          // written straight into an attribute the sheet selects on and it
+          // comes out of storage any page on this origin could have set. The
+          // list is `session.rs::Skin::as_str` minus the default, which writes
+          // no attribute at all; a test there pins those strings.
+          var skin = read("ps-skin");
+          if (skin === "cuteskynet" || skin === "humanskynet") {
+            root.setAttribute("data-skin", skin);
           }
         } catch (e) {
           /* Private mode, or storage disabled. The app applies both itself. */

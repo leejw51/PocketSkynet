@@ -1,1 +1,7 @@
 .DS_Store
+
+# Browser-verification artifacts: the MCP Playwright driver writes console logs,
+# page snapshots and screenshots here, and the skin work drops screenshots at the
+# repo root. Both are evidence for a single review, not part of the tree.
+.playwright-mcp/
+/*.png
