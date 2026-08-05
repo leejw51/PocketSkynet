@@ -63,7 +63,20 @@ fn send(op: Op) {
 }
 
 /// How long the machine visibly thinks before it acts.
-pub const PROC_MS: u32 = 3_000;
+///
+/// This is a delay the person actually waits through — the send is held for it
+/// and the delete does not touch the server until it elapses — so it is the
+/// dominant term in how fast sending and deleting *feel*. It was three seconds,
+/// which is a long time to watch a progress bar fill before a one-line message
+/// leaves the composer. Budgeted now so that each whole sequence lands at
+/// 500ms: `PROC_MS + SPARK_LEAD_MS` for a send, `PROC_MS + DISSOLVE_MS` for a
+/// delete.
+///
+/// The readout is a single phase because of this number, not by preference:
+/// three stepped labels inside 240ms is 80ms each, which strobes rather than
+/// reads. Anything that wants the three-phase version back has to buy the time
+/// for it — roughly 250ms per label before they are legible.
+pub const PROC_MS: u32 = 240;
 
 /// How long after a discharge the thing it produced should appear.
 ///
@@ -210,7 +223,7 @@ fn centre_of(el: &web_sys::Element) -> (f64, f64) {
 /// matches — an effect must never be the thing that panics.
 ///
 /// Worth capturing separately from firing when a delay sits between the two: a
-/// position read three seconds late is a position read after the layout moved.
+/// position read after `PROC_MS` is a position read after the layout moved.
 pub fn centre_of_selector(selector: &str) -> Option<(f64, f64)> {
     web_sys::window()
         .and_then(|w| w.document())
@@ -546,18 +559,19 @@ fn tx_hud(t: &TxHud) -> Html {
     }
 }
 
-/// The readout. Three phases at a second each, stepped so the text changes
-/// like a machine's display rather than crossfading like a slideshow.
+/// The readout. One phase, because [`PROC_MS`] is 240ms and a label needs
+/// roughly a quarter second on screen before it is read rather than glimpsed.
+///
+/// It was three stepped labels over three seconds. The two that went are the
+/// two that were claims about a *past* moment (`LINK ESTABLISHED`,
+/// `TARGET ACQUIRED`) or about a moment that has not happened yet
+/// (`TERMINATED` — nothing is destroyed until after this readout, which is the
+/// whole reason a failure here can still restore the row). What is left is the
+/// one label that is true for the entire time it is up.
 fn proc_hud(p: &Proc) -> Html {
-    let (tone, phases) = match p.variant {
-        Variant::Pop => (
-            "fn-burst--live",
-            ["LINK ESTABLISHED", "ENCRYPTING PAYLOAD", "TRANSMITTING"],
-        ),
-        Variant::Poof => (
-            "fn-burst--term",
-            ["TARGET ACQUIRED", "PURGING RECORD", "TERMINATED"],
-        ),
+    let (tone, phase) = match p.variant {
+        Variant::Pop => ("fn-burst--live", "TRANSMITTING"),
+        Variant::Poof => ("fn-burst--term", "PURGING RECORD"),
     };
     html! {
         <div key={p.id} class={classes!("fn-proc", tone)}>
@@ -569,12 +583,7 @@ fn proc_hud(p: &Proc) -> Html {
                 <i class="fn-proc__sweep" />
             </div>
             <div class="fn-proc__readout">
-                { for phases.iter().enumerate().map(|(i, label)| html! {
-                    <span
-                        class="fn-proc__phase"
-                        style={format!("--i:{i};")}
-                    >{ *label }</span>
-                }) }
+                <span class="fn-proc__phase">{ phase }</span>
             </div>
             <div class="fn-proc__bar"><i /></div>
         </div>

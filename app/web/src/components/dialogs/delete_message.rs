@@ -7,7 +7,11 @@ use crate::i18n::{t, Key};
 use crate::state::use_store;
 
 /// Must match `.fn-msg--dissolving` in app.css §7.
-const DISSOLVE_MS: u32 = 460;
+///
+/// Sized against [`PROC_MS`](crate::components::burst::PROC_MS) rather than on
+/// its own: the two run back to back and their sum is what a deletion costs, so
+/// 240 + 260 puts the whole thing at 500ms.
+const DISSOLVE_MS: u32 = 260;
 
 #[cfg(target_arch = "wasm32")]
 async fn dissolve_sleep(ms: u32) {
@@ -76,9 +80,9 @@ pub fn delete_message(p: &DeleteMessageProps) -> Html {
                 // 2. Then it destroys. The dissolve and the discharge start on
                 //    the same tick so the sparks look like the cause of the
                 //    collapse rather than a garnish on it. The bubble is
-                //    measured here, not three seconds ago: the list may have
-                //    scrolled while the readout was up, and a stale position
-                //    would put the blast somewhere the message never was.
+                //    measured here, not before the readout: the list may have
+                //    scrolled while it was up, and a stale position would put
+                //    the blast somewhere the message never was.
                 store.dispatch(crate::state::Action::Dissolve(id.clone()));
                 crate::components::burst::burst_from_selector(
                     &format!("[data-id=\"{id}\"] .fn-bubble"),
@@ -89,10 +93,10 @@ pub fn delete_message(p: &DeleteMessageProps) -> Html {
                 // 3. Let the disintegration play before asking the server. The
                 // request is what causes the row to be removed — on a LAN it
                 // answers in a couple of milliseconds, and `/sync` then
-                // unmounted the message about 450ms before its own send-off
-                // had finished. Waiting first means the effect is always seen;
-                // the delete is a few hundred milliseconds later, which is
-                // invisible because the row already reads as gone.
+                // unmounted the message before its own send-off had finished.
+                // Waiting first means the effect is always seen; the delete is
+                // a quarter second later, which is invisible because the row
+                // already reads as gone.
                 dissolve_sleep(DISSOLVE_MS).await;
                 match store.client.delete_message(&id).await {
                     Ok(()) => on_deleted.emit(()),
