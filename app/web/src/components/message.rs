@@ -515,6 +515,7 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
     let meta = use_state(|| Option::<crate::api::FileMeta>::None);
     let blob = use_state(|| Option::<String>::None);
     let load = use_state(|| MediaLoad::Loading);
+    let img = use_node_ref();
 
     {
         let store = store.clone();
@@ -575,6 +576,19 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
         };
     };
 
+    // Tapping the picture zooms it in place. It used to open a new window,
+    // which is the heavier of the two gestures pointing at the same wish — to
+    // see the thing bigger — and the one that costs a tab. The new window is
+    // still on the toolbar for anyone who wanted the window itself.
+    let open_zoom = {
+        let img = img.clone();
+        let filename = file.filename.clone();
+        Callback::from(move |e: MouseEvent| {
+            e.stop_propagation();
+            super::lightbox::zoom(&img, Some(filename.clone()));
+        })
+    };
+
     // Open in a real new window rather than navigating: the person is in the
     // middle of a conversation, and a preview should never cost them their
     // place in it. `noopener` because the blob document has no business
@@ -616,11 +630,16 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
             <button
                 type="button"
                 class="fn-attach__shot"
-                aria-label={t(lang, Key::open_in_new_window)}
-                title={t(lang, Key::open_in_new_window)}
-                onclick={open.clone()}
+                aria-label={t(lang, Key::image_zoom)}
+                title={t(lang, Key::image_zoom)}
+                onclick={open_zoom}
             >
-                <img class="fn-attach__media" src={url.clone()} alt={file.filename.clone()} />
+                <img
+                    ref={img}
+                    class="fn-attach__media"
+                    src={url.clone()}
+                    alt={file.filename.clone()}
+                />
             </button>
         },
         (None, _) => Html::default(),
@@ -675,10 +694,16 @@ struct ImageEmbedProps {
 
 /// An inline image: lazy, a spinner where the image will land, and a failure
 /// row that keeps the URL clickable (DESIGN.md §7.2 "Content").
+///
+/// Tapping it raises the lightbox. The picture is capped at 400px in the
+/// bubble — which is the right size for a conversation and the wrong size for
+/// reading a screenshot — so the zoom is not a flourish, it is the only way to
+/// actually see what somebody posted.
 #[function_component(ImageEmbed)]
 fn image_embed(p: &ImageEmbedProps) -> Html {
     let lang = crate::state::use_store().language;
     let load = use_state(|| MediaLoad::Loading);
+    let img = use_node_ref();
 
     if *load == MediaLoad::Failed {
         return html! {
@@ -698,6 +723,17 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
         let load = load.clone();
         Callback::from(move |_: Event| load.set(MediaLoad::Failed))
     };
+    // A button, not a bare `onclick` on the image: this is a control, and a
+    // control that only a mouse can reach is not one. The whole picture is the
+    // hit area, because on a phone that is the only hit area there is.
+    let zoom = {
+        let img = img.clone();
+        Callback::from(move |e: MouseEvent| {
+            e.stop_propagation();
+            super::lightbox::zoom(&img, None);
+        })
+    };
+
     let mut class = classes!("fn-media");
     if *load == MediaLoad::Loading {
         class.push("fn-media--loading");
@@ -707,13 +743,22 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
             if *load == MediaLoad::Loading {
                 <span class="fn-spinner" aria-hidden="true"></span>
             }
-            <img
-                src={p.url.clone()}
-                alt={t(lang, Key::image_alt)}
-                loading="lazy"
-                {onload}
-                {onerror}
-            />
+            <button
+                type="button"
+                class="fn-media__zoom"
+                aria-label={t(lang, Key::image_zoom)}
+                title={t(lang, Key::image_zoom)}
+                onclick={zoom}
+            >
+                <img
+                    ref={img}
+                    src={p.url.clone()}
+                    alt={t(lang, Key::image_alt)}
+                    loading="lazy"
+                    {onload}
+                    {onerror}
+                />
+            </button>
         </span>
     }
 }

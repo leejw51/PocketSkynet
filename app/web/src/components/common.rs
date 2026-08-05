@@ -983,8 +983,13 @@ pub fn popover(p: &PopoverProps) -> Html {
     }
 }
 
+/// Hold a leaving node for the length of its exit animation.
+///
+/// Shared with the lightbox, which has the same problem the popover does: Yew
+/// unmounts between two frames, so anything that animates *out* has to be kept
+/// mounted by Rust for exactly as long as CSS says the exit runs.
 #[cfg(target_arch = "wasm32")]
-async fn exit_sleep(ms: u32) {
+pub(super) async fn exit_sleep(ms: u32) {
     // Reduced motion: §17 flattens the animation, so waiting for it would be
     // waiting for nothing. Same reasoning as `modal.rs::exit_delay_ms`.
     let reduced = web_sys::window()
@@ -1000,4 +1005,4 @@ async fn exit_sleep(ms: u32) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn exit_sleep(_ms: u32) {}
+pub(super) async fn exit_sleep(_ms: u32) {}

@@ -13,8 +13,8 @@ use yew::prelude::*;
 use crate::actions;
 use crate::api::Client;
 use crate::components::{
-    bank, boot, burst, chat, dialogs, invitations, knowledge, login, members, operator, publish,
-    room_list, settings, shell, shout, spotlight, toast,
+    bank, boot, burst, chat, dialogs, invitations, knowledge, lightbox, login, members, operator,
+    publish, room_list, settings, shell, shout, spotlight, toast,
 };
 use crate::format;
 use crate::i18n::{t, Key};
@@ -614,6 +614,9 @@ fn root() -> Html {
             <burst::BurstLayer />
             // The portrait spotlight (spotlight.rs): same singleton shape.
             <spotlight::SpotlightLayer />
+            // The image lightbox (lightbox.rs): a picture in a room, tapped,
+            // taking the screen. Same singleton shape again.
+            <lightbox::LightboxLayer />
             // Paid broadcasts (shout.rs): same singleton shape, fed by
             // `actions::refresh_shouts`.
             <shout::ShoutLayer />
