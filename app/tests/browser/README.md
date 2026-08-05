@@ -29,6 +29,8 @@ npm install           # playwright
 npx playwright install chromium
 node upload.js        # round trip, progress, digest
 node resume.js        # interrupted transfer, then resume
+node movie.js         # a real film: thumbnail cost, click-to-play, seeking
+node storm.js         # 150-range playback storm must not burn the rate limit
 ```
 
 Both accept `SIZE_MB` (default 120) and `BIG` (the scratch file path);
@@ -41,6 +43,19 @@ log it prints, which is what tells you whether a change quietly went back to
 sending the file in one request.
 
 ## What they assert
+
+`movie.js`
+
+* the message shows a thumbnail costing ~nothing, not a player and not the file
+* clicking produces exactly one player, playback reaches `readyState 4`, and
+  seeking is served by `206 Partial Content` — a film that was never downloaded
+
+`storm.js`
+
+* after uploading a video, 150 Range requests all answer 206 **and the session
+  still works** — a message posts, no "too many requests" toast. Transcribed
+  from a live failure: playback used to drain the general per-IP budget and
+  429 everything after it, including sign-in.
 
 `upload.js`
 

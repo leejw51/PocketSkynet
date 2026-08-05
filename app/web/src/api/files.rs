@@ -4,12 +4,13 @@
 //! server's decision that an attachment is as private as its room:
 //!
 //! * **Upload sends raw bytes**, not JSON, with the metadata in the query
-//!   string — the same shape `upload_image` uses, because base64 in a JSON body
-//!   costs a third of the payload for nothing.
-//! * **Download cannot be an `href`.** `/api/files/{id}/raw` demands a bearer
-//!   token, so the bytes are fetched here and handed to the page as an
-//!   object URL. That is the price of attachments not being a public
-//!   capability-URL space like `/api/images`.
+//!   string — though the app itself now uploads through `api/uploads.rs`,
+//!   which chunks; the raw route here is the legacy single-shot path.
+//! * **Download is a capability URL.** `/api/files/{id}/raw` demands a bearer
+//!   token, an `<img src>` cannot send one, and a 4 GB body cannot pass
+//!   through the page — so [`Client::download_link`] mints a short-lived
+//!   single-file token and everything (previews, players, saves) points at
+//!   the URL carrying it. The server streams and honours `Range`.
 
 use gloo_net::http::Method;
 
@@ -105,12 +106,15 @@ impl Client {
         .await
     }
 
-    /// Fetch an attachment's bytes with the caller's token.
+    /// Fetch an attachment's whole body into memory with the caller's token.
     ///
-    /// Returns the raw bytes rather than a URL because only the caller knows
-    /// what it wants them for — a preview needs a typed object URL, a save
-    /// needs an anchor click, and building both here would mean leaking one
-    /// object URL per call with nobody to revoke it.
+    /// **Nothing in the app calls this any more.** Previews and saves moved to
+    /// capability URLs (`download_link`) when the size ceiling moved to 4 GB,
+    /// because this path buffers the entire file in the wasm heap. It stays
+    /// for the same reason the rest of the unused protocol surface does (see
+    /// `api/mod.rs`), and because a future small-file consumer — hashing a
+    /// kilobyte attachment inline, say — is legitimate. Do not point anything
+    /// large at it.
     pub async fn download_file(&self, id: &str) -> ApiResult<Vec<u8>> {
         let path = format!("/api/files/{}/raw", encode(id));
         let resp = self
