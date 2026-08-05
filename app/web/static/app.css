@@ -8334,3 +8334,176 @@ span.fn-conn { cursor: default; }
   padding-inline: 6px;
 }
 .fn-op-rung.is-me .fn-op-rung-load { color: var(--fn-primary-text); }
+
+
+/* ------------------------------------------------------------------ §23 --
+   IMAGE LIGHTBOX (components/lightbox.rs)
+
+   A picture in a bubble is capped at 400px, which is the right size for a
+   conversation and the wrong size for reading a screenshot. Tapping one lifts
+   it onto a blurred scrim at whatever size the viewport can give it.
+
+   The zoom is a FLIP: the picture is laid out at its resting size, measured
+   by Rust, and then handed the transform that puts it back exactly over its
+   thumbnail — same place, same size — which the entrance removes. So what
+   travels is *the picture*, not a copy of it fading in over the top. The
+   endpoints arrive as `--lb-dx/--lb-dy/--lb-s`, set on the scrim in one style
+   attribute and inherited down.
+
+   `--lb-ar` and `--lb-cap` are the resting geometry. Giving CSS the aspect
+   ratio rather than a pixel size means the box is definite on the frame it
+   mounts (so it can be measured before the bytes land) *and* still the
+   browser's to re-fit when the window resizes. `--lb-cap` is twice the
+   picture's own pixels: fitting the viewport unconditionally turns a 96px
+   sticker into a wall of mush.
+
+   Layered at 380: above every screen, below the portrait spotlight (400),
+   which is the one thing that outranks it. */
+
+/* The picture is the control. A 16px icon would be a poor hit area for
+   something 400px wide, and on a phone it is the only hit area there is. */
+.fn-media__zoom {
+  display: block;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  border-radius: 10px;
+  transition: filter var(--fn-dur-fast) var(--fn-ease);
+}
+@media (hover: hover) {
+  .fn-media__zoom:hover img { filter: brightness(1.06); }
+}
+.fn-media__zoom:focus-visible {
+  outline: 2px solid var(--fn-focus);
+  outline-offset: 3px;
+}
+
+.fn-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 380;
+  /* An explicit single-cell track, not `place-items: center` on an implicit
+     one: an auto-sized row is indefinite, so the frame's `block-size: 100%`
+     would resolve against the *picture* and `max-block-size` would clamp
+     nothing. `minmax(0, 1fr)` is the definite area the picture is fitted
+     into, and without it a tall picture runs off both ends of the screen. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  padding-block: max(var(--fn-s4), var(--fn-safe-top)) max(var(--fn-s4), var(--fn-safe-bottom));
+  padding-inline: max(var(--fn-s4), var(--fn-safe-left)) max(var(--fn-s4), var(--fn-safe-right));
+  background: var(--fn-overlay);
+  /* The same scrim pair the modal raises (§9): the page goes soft as the
+     picture takes over, which is the depth cue that says *above* rather than
+     merely on top. */
+  animation: fn-fade var(--fn-dur) var(--fn-ease-cosine) both,
+             fn-backdrop-blur var(--fn-dur-cosine) var(--fn-ease-cosine) both;
+  cursor: zoom-out;
+}
+.fn-lightbox[data-closing] {
+  animation: fn-fade-out var(--fn-dur-exit) var(--fn-ease-exit) both;
+}
+
+.fn-lightbox__frame {
+  position: relative;
+  margin: 0;
+  inline-size: 100%;
+  /* Definite, so the picture's `max-block-size: 100%` has something to
+     resolve against — an auto-height flex line would give it nothing and the
+     picture would run off the bottom of tall screens. */
+  block-size: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The box is definite from `--lb-ar` alone, so it exists at full size on the
+   frame it mounts — before any of the picture has arrived — which is what
+   makes the entrance measurable that early. When `max-block-size` then clamps
+   a tall picture, the width is *not* recomputed from the ratio (a specified
+   inline size does not transfer back), so the element box can be wider than
+   the picture inside it. `object-fit` keeps that invisible, and `lightbox.rs`
+   measures the painted rect rather than the box, so the travel is exact
+   either way. */
+.fn-lightbox__img {
+  aspect-ratio: var(--lb-ar, 1);
+  inline-size: min(100%, var(--lb-cap, 100%));
+  block-size: auto;
+  max-block-size: 100%;
+  object-fit: contain;
+  border-radius: var(--fn-r-card);
+  box-shadow: var(--fn-elev-4);
+}
+/* Laid out but unpainted until Rust has measured it — one frame, and the only
+   state in which no transform is known. `visibility`, not `display`, because
+   a picture with no box is a picture that cannot be measured. */
+.fn-lightbox:not([data-ready]) .fn-lightbox__img { visibility: hidden; }
+/* Attribute-scoped so the animation *starts* when the endpoints arrive.
+   Declared unconditionally it would begin during the unmeasured frame and
+   then have its own keyframes swapped underneath it mid-flight. */
+.fn-lightbox[data-ready] .fn-lightbox__img {
+  animation: fn-lb-in var(--fn-dur-expo) var(--fn-ease-expo) both;
+}
+@keyframes fn-lb-in {
+  from {
+    transform: translate(var(--lb-dx, 0px), var(--lb-dy, 0px)) scale(var(--lb-s, 0.92));
+    /* 1 when there is a thumbnail to travel from: the picture is already on
+       screen, and fading it in would say "two pictures". 0 when there is
+       not, where the fade is the whole entrance. */
+    opacity: var(--lb-o, 0);
+  }
+}
+/* Exit reverses the travel but not the curve — it leaves on `--fn-ease-exit`,
+   accelerating away rather than easing to a stop (MOTION.md §4). 140ms here
+   and in `lightbox.rs::EXIT_MS`; the two are one timeline. */
+.fn-lightbox[data-closing] .fn-lightbox__img {
+  animation: fn-lb-out var(--fn-dur-exit) var(--fn-ease-exit) both;
+}
+@keyframes fn-lb-out {
+  to {
+    transform: translate(var(--lb-dx, 0px), var(--lb-dy, 0px)) scale(var(--lb-s, 0.92));
+    opacity: var(--lb-o, 0);
+  }
+}
+
+/* The filename, floated over the foot of the picture rather than laid out
+   under it: a caption in the flow would take height away from the thing it is
+   describing. Delayed so it arrives after the travel has landed. */
+.fn-lightbox__caption {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline: 0;
+  margin-inline: auto;
+  inline-size: fit-content;
+  max-inline-size: min(100%, 620px);
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--fn-rim);
+  background: color-mix(in srgb, var(--fn-surface-2) 84%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-size: var(--fn-t-sm);
+  color: var(--fn-fg-muted);
+  animation: fn-fade var(--fn-dur-cosine) var(--fn-ease-cosine) both;
+  animation-delay: 120ms;
+}
+
+.fn-lightbox__close {
+  position: absolute;
+  inset-block-start: max(var(--fn-s3), var(--fn-safe-top));
+  inset-inline-end: max(var(--fn-s3), var(--fn-safe-right));
+  color: var(--fn-fg);
+  background: color-mix(in srgb, var(--fn-surface-2) 76%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* §17 already flattens the durations. This is the *hover* growth, which is
+     a resting transform-adjacent effect and has to be removed outright. */
+  .fn-media__zoom:hover img { filter: none; }
+}

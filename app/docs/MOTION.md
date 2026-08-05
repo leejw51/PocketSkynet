@@ -298,3 +298,47 @@ crossing — overshoot 2%, counter-swing 0.5%, settle — at 300ms, per-segment
 `--fn-spring-bouncy`. One crossing at 200ms read as a bump; the settle is what makes the
 danger confirm feel deliberate rather than sprung. Exit is unchanged: something arriving
 should settle, something leaving should just go (§4).
+
+## 8. The image zoom (2026-08-05)
+
+**Lightbox travel** (`fn-lb-in` / `fn-lb-out`, app.css §23, `components/lightbox.rs`). Tapping
+a picture in a room lifts it to the full viewport. This is the first effect in the sheet
+whose *endpoints are measured rather than authored*, and it is worth naming why.
+
+Everything else here animates between two states CSS already knows: a bubble from 26px below
+to zero, a dialog from 98% to 100%. A zoom has no such pair — where the picture starts is
+wherever its bubble happens to be, which depends on the scroll position, the window width and
+which message it was. So the full-screen picture is laid out first, measured, and handed the
+transform that puts it back exactly over its thumbnail:
+
+```
+dx = thumb.cx − full.cx      dy = thumb.cy − full.cy      s = thumb.w / full.w
+```
+
+which the entrance removes over `--fn-dur-expo` on `--fn-ease-expo`. Rust computes the three
+numbers and writes them as `--lb-dx/--lb-dy/--lb-s`; CSS owns the curve and the timing, per
+the division the rest of this document keeps. The exit animates *to* the same transform on
+`--fn-ease-exit` (§4: arriving settles, leaving goes), which is why the picture lands back in
+the bubble it came from rather than shrinking into the middle of the screen.
+
+Three things about that measurement are load-bearing:
+
+* **Both rects are painted rects, not element boxes.** An attachment thumbnail is
+  `object-fit: contain` in a 420px card, so a 3:4 picture in it paints 240px wide inside a
+  420px box. Zooming from the box would start the picture 75% too wide and snap on the first
+  frame — the one frame the effect exists to make invisible.
+* **The transform is a difference between two `getBoundingClientRect` reads**, which makes it
+  immune to the iOS visual-vs-layout viewport split that `burst.rs::to_layer` documents at
+  length. Whichever viewport the browser reports against, it cancels.
+* **The picture's resting box comes from `aspect-ratio`, not from its bytes.** `--lb-ar` gives
+  it full size on the frame it mounts, so the measurement does not wait on the network, and a
+  window resize still re-fits it with no Rust involved. It is held `visibility: hidden` for
+  that single unmeasured frame, so no state exists in which a stale transform paints.
+
+Opacity is 1 throughout when there is a thumbnail to travel from. A crossfade would say *two
+pictures*; there is one, and it is moving. Only the fallback path — no usable origin, because
+the picture was raised from something that has since gone — swells from 92% and fades.
+
+No burst, no rings, no readout, deliberately. The [portrait spotlight](../web/src/components/spotlight.rs)
+is theatre because a face is a moment; this is somebody trying to read a screenshot, and
+anything on top of it is in the way.

@@ -326,6 +326,7 @@ strings! {
     (cancel_edit, "Cancel edit", "편집 취소", "編集をキャンセル", "取消編輯", "Zrušit úpravu", "Cancelar edición", "取消编辑", "Bearbeitung abbrechen"),
     (image_alt, "Image", "이미지", "画像", "圖片", "Obrázek", "Imagen", "图片", "Bild"),
     (image_failed, "Image failed to load", "이미지를 불러오지 못했습니다", "画像を読み込めませんでした", "圖片載入失敗", "Obrázek se nepodařilo načíst", "No se pudo cargar la imagen", "图片加载失败", "Bild konnte nicht geladen werden"),
+    (image_zoom, "View full screen", "전체 화면으로 보기", "全画面で表示", "全螢幕檢視", "Zobrazit na celou obrazovku", "Ver a pantalla completa", "全屏查看", "Im Vollbild ansehen"),
     (video_alt, "Video", "동영상", "動画", "影片", "Video", "Vídeo", "视频", "Video"),
     (video_failed, "Video failed to load", "동영상을 불러오지 못했습니다", "動画を読み込めませんでした", "影片載入失敗", "Video se nepodařilo načíst", "No se pudo cargar el vídeo", "视频加载失败", "Video konnte nicht geladen werden"),
     (youtube_video, "YouTube video", "YouTube 동영상", "YouTube動画", "YouTube影片", "Video YouTube", "Vídeo de YouTube", "YouTube 视频", "YouTube-Video"),

@@ -755,6 +755,15 @@ click opens the explorer.
 an "Image failed to load" fallback that keeps the URL clickable); embed YouTube as a 16:9
 `youtube-nocookie` iframe. Everything else is text — no markdown, no HTML.
 
+**Zoom.** An inline picture is capped at 400px and an attachment preview at 320px, which is
+the right size for a conversation and the wrong size for reading a screenshot. Tapping
+either raises the lightbox (`.fn-lightbox`, components/lightbox.rs): the picture travels
+from the bubble to the full viewport under a blurred scrim, with the filename beneath it for
+an attachment. The scrim, the picture, `Esc` and the ✕ all dismiss it, and the picture
+travels back to the bubble it came from. The whole picture is the control — a 16px icon is
+not a hit area on a phone. Attachments keep "Open in a new window" on the card's toolbar for
+anyone who wanted the window rather than the size.
+
 **System events** — `.fn-sysmsg`, centred pill: joins, leaves, kicks, renames.
 `.fn-sysmsg--rotation` (yellow) for "Room key rotated to epoch {n}". Reaction and
 delete-all events are not rendered as messages.
