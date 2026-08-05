@@ -67,3 +67,35 @@ sending the file in one request.
   through it rather than around it.
 * They leave their scratch files in `/tmp` and their screenshots in the working
   directory; neither is committed (see the repo `.gitignore`).
+
+## `ignoreHTTPSErrors` hides a real bug — know what it costs you
+
+Both scripts pass `ignoreHTTPSErrors`, because the server generates its own CA
+and a test that stopped at a certificate warning would test nothing. That flag
+also conceals the single hardest bug found in this work, so it is worth writing
+down what it hides.
+
+**iOS plays `<video>` in a different process from the page.** That media process
+does not inherit a certificate exception you accepted in Safari. So against a
+server with an untrusted self-signed certificate, on an iPhone:
+
+* the page loads — you tapped through the warning;
+* `fetch` works, so metadata, listings and the download button are all fine;
+* `<video>` fails **silently**, showing `--:--` forever and reporting nothing.
+
+Nothing in the app is wrong, no console error appears, and every desktop browser
+plays it perfectly — because `ignoreHTTPSErrors` puts the test on the other side
+of exactly the trust decision that is failing.
+
+Four rounds of code changes went looking for this in the wrong place. What
+found it was running the server with `make restart TLS=0 HTTP3=0` and loading it
+over plain `http://` from the phone, where it played immediately.
+
+The fix is not in the code. Install the server's CA on the device:
+`https://<server>/ca.crt`, then **Settings → General → VPN & Device
+Management** to install the profile, then **Settings → General → About →
+Certificate Trust Settings** to grant it full trust. HTTP/3 needs this too —
+QUIC has no plaintext mode, so an untrusted certificate takes it out entirely.
+
+If a media element ever "does nothing" on a device again, check the padlock
+before reading any Rust.
