@@ -19,7 +19,9 @@ pub mod error;
 pub mod types;
 
 mod auth;
-mod files;
+/// Public for [`downloads::Support`], which the save action branches on.
+pub mod downloads;
+pub mod files;
 mod invitations;
 mod keys;
 pub mod messages;

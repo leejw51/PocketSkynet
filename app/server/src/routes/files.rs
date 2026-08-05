@@ -10,13 +10,27 @@
 //! * `GET /api/images/{hash}` is *public*, because an `<img src>` cannot send
 //!   an `Authorization` header and the unguessable hash is the capability. An
 //!   attachment is room-scoped, so its download demands a bearer token and a
-//!   membership check. The cost is that clients cannot use a bare `href` — they
-//!   fetch with the token and build a blob URL. That is the intended trade.
+//!   membership check — or, for a browser that cannot send headers, a
+//!   short-lived single-file capability minted by `download-token`.
 //! * Images are served with their real `Content-Type` for inline rendering.
-//!   Attachments are **always** `application/octet-stream` with
-//!   `Content-Disposition: attachment`, whatever the uploader declared, so a
-//!   `text/html` upload can never execute on this origin. The declared type is
-//!   stored and returned as metadata; the client decides whether to preview it.
+//!   Attachments are `application/octet-stream` with `Content-Disposition:
+//!   attachment`, whatever the uploader declared, so a `text/html` upload can
+//!   never execute on this origin.
+//!
+//! # The one exception, and why it is not a hole
+//!
+//! `?inline=1` serves a real media `Content-Type` so a `<video>` can play an
+//! attachment. Without it a two-hour film has to be downloaded into the page
+//! before the first frame, which at this size is not a slow experience, it is an
+//! impossible one — so this is what "upload a movie and watch it" rests on,
+//! together with `Range`.
+//!
+//! It is bounded three ways. The type comes from the **stored extension**, which
+//! `extension_of` has already reduced to at most eight lowercase alphanumerics;
+//! it is looked up in a closed table of formats that decode to pixels or audio
+//! and cannot carry script; and `nosniff` stops a browser second-guessing the
+//! answer. An uploader never names the type, so `text/html` is not reachable —
+//! it is not in the table, and nothing can put it there.
 //!
 //! Metadata arrives as query parameters rather than multipart: axum's multipart
 //! feature is not enabled, headers would need their own encoding scheme for
@@ -67,11 +81,25 @@ pub const MAX_FILE_BYTES: usize = 25 * 1024 * 1024;
 /// once per request.
 const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
-/// Per-room ceiling. The images route shipped with no quota at all, which made
-/// unbounded disk fill a documented finding; repeating that here knowingly
-/// would be worse than the original. A room is the right unit because that is
-/// the boundary a member can already fill with messages.
-const MAX_FILES_PER_ROOM: i64 = 500;
+// There is deliberately **no** per-room file count and no per-room byte quota.
+//
+// There used to be a 500-file ceiling, added because the images route shipped
+// with no quota at all and unbounded disk fill was a documented finding. It is
+// gone at the operator's explicit instruction: the only limit is 4 GB per file
+// (`routes/uploads.rs::MAX_UPLOAD_BYTES`).
+//
+// The reasoning, which is the deployment and not an oversight: this server runs
+// on its owner's own computer. The disk being filled is *theirs*, the people in
+// the rooms are people they invited, and a quota in that setting does not
+// protect anybody — it only stops the owner storing their own films on their own
+// machine. Freedom is the product here, so the only ceiling is per-file.
+//
+// What follows from that, stated plainly so nobody has to rediscover it: **any
+// member of any room can fill this server's disk**, and nothing here will stop
+// them. That is fine for a box you own and share with people you know. It is not
+// fine for a server open to strangers, and if this is ever pointed at one, the
+// bound belongs here — per-room bytes is the right shape, because a room is the
+// boundary a member can already fill with messages.
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -140,8 +168,6 @@ async fn upload(
     let ext = extension_of(&filename);
     let stored_name = format!("{}.{ext}", hex::encode(Sha256::digest(&body)));
 
-    check_room_capacity(&state, &room).await?;
-
     // Bytes before the row: a file with no row is an invisible orphan, but a
     // row with no file is a broken download every client has to handle.
     let dir = state.cfg.files_dir();
@@ -177,33 +203,6 @@ async fn upload(
     Ok((StatusCode::CREATED, Json(file)).into_response())
 }
 
-/// Refuse a room that is already at its attachment ceiling.
-///
-/// Shared with `routes/uploads.rs`, which calls it at `begin` — the check is
-/// worth almost nothing at the end of a 4 GB transfer and everything before it
-/// starts. The room can still fill up during the upload, in which case `finish`
-/// is where it is caught and the bytes are kept for a retry.
-pub(crate) async fn check_room_capacity(state: &AppState, room: &RoomId) -> ApiResult<()> {
-    let room_id = room.as_str().to_owned();
-    let count = state
-        .db
-        .call(move |conn| {
-            let n: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM files WHERE room_id = ?1",
-                rusqlite::params![room_id],
-                |r| r.get(0),
-            )?;
-            Ok(n)
-        })
-        .await?;
-    if count >= MAX_FILES_PER_ROOM {
-        return Err(ApiError::bad_request(format!(
-            "This room has reached its limit of {MAX_FILES_PER_ROOM} attachments"
-        )));
-    }
-    Ok(())
-}
-
 /// Turn a finished upload session into an attachment.
 ///
 /// Called by `routes/uploads.rs::finish` once the assembled file has been
@@ -232,7 +231,6 @@ pub(crate) async fn finalize_upload(
     // and a room can fill while a long upload runs, and this is the moment the
     // attachment would actually become visible to the room.
     require_member(state, &room, caller).await?;
-    check_room_capacity(state, &room).await?;
 
     let ext = extension_of(&session.filename);
     let stored_name = format!("{digest}.{ext}");
@@ -423,6 +421,14 @@ async fn download(
     } else {
         StatusCode::OK
     };
+    // Playback, if asked for and if the type is one that can be played. This is
+    // what lets a two-hour film be watched without being downloaded first: the
+    // `<video>` element issues its own `Range` requests as the viewer seeks,
+    // which the branch above already answers, so nothing ever holds the film —
+    // not the server, not the page.
+    let stored_ext = stored.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    let inline = params.inline.is_some() && inline_media_mime(stored_ext).is_some();
+
     let mut response = (status, body).into_response();
     let headers = response.headers_mut();
 
@@ -452,11 +458,17 @@ async fn download(
     if let Ok(v) = HeaderValue::from_str(&digest) {
         headers.insert(HeaderName::from_static("x-content-sha256"), v);
     }
-    // Always octet-stream, always an attachment: see the module docs. The
-    // uploader's declared type never reaches a browser's sniffer.
+    // Octet-stream and an attachment by default: see the module docs. The
+    // uploader's declared type never reaches a browser's sniffer — note this
+    // is derived from the *stored extension*, which `extension_of` has already
+    // reduced to at most eight lowercase alphanumerics, and matched against a
+    // closed table of inert types. An uploader cannot name a type here.
     headers.insert(
         CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
+        HeaderValue::from_static(match inline_media_mime(stored_ext) {
+            Some(mime) if inline => mime,
+            _ => "application/octet-stream",
+        }),
     );
     // Two parameters, and the split matters. `filename=` is a quoted-string in
     // a header, so it must be **ASCII** — a raw UTF-8 byte there is not a legal
@@ -467,8 +479,14 @@ async fn download(
     //
     // The filename is already validated to hold no quote, control character or
     // separator, so the quoted-string cannot be broken out of.
+    //
+    // `inline` for playback, because `attachment` on a `<video src>` is at best
+    // ignored and at worst treated as a download by a middlebox. The filename
+    // is carried either way so a viewer who chooses "save video as" gets the
+    // real name rather than the opaque id.
     if let Ok(value) = HeaderValue::from_str(&format!(
-        "attachment; filename=\"{}\"; filename*=UTF-8''{}",
+        "{}; filename=\"{}\"; filename*=UTF-8''{}",
+        if inline { "inline" } else { "attachment" },
         ascii_fallback(&file.filename),
         percent_encode(&file.filename)
     )) {
@@ -492,6 +510,44 @@ struct DownloadParams {
     /// A capability minted by [`download_token`]. Present when a browser is
     /// fetching the file directly.
     dl: Option<String>,
+    /// Serve this as playable media rather than as a download.
+    ///
+    /// Only honoured for the extensions in [`inline_media_mime`], and the
+    /// reason it is a *parameter* rather than the default is that the default
+    /// is the safe one: everything is `application/octet-stream` with
+    /// `Content-Disposition: attachment` unless a caller explicitly asks for
+    /// playback and the file is a type that can be played.
+    inline: Option<String>,
+}
+
+/// The media types an attachment may be served as, keyed by its stored
+/// extension.
+///
+/// This is the one place the module's "always octet-stream" rule bends, so it
+/// is an **allow-list of inert types** and nothing else. Every entry is a
+/// format a browser decodes as pixels or audio; none of them can carry script,
+/// which is what makes serving them on this origin sound. `text/html` is the
+/// type this whole module exists to keep out, and the way it stays out is that
+/// it is not in this table and cannot be added by an uploader — the extension
+/// comes from `extension_of`, which has already reduced it to at most eight
+/// lowercase alphanumerics.
+///
+/// Mirrors `web/src/api/types.rs::preview_mime`. The two are one contract in
+/// two places: a type the client will render but the server will not serve
+/// inline is a video that silently does not play.
+fn inline_media_mime(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        "jpg" | "jpeg" => "image/jpeg",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        _ => return None,
+    })
 }
 
 /// Work out who is asking, from a header or a capability.

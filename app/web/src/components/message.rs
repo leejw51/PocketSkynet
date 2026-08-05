@@ -505,15 +505,19 @@ struct AttachmentEmbedProps {
 
 /// An attachment inside a message.
 ///
-/// Everything here follows from one constraint: `/api/files/{id}/raw` requires a
-/// bearer token, so unlike `ImageEmbed` this cannot simply point an `<img src>`
-/// at a URL. The metadata is fetched, and for an image or a video the bytes are
-/// fetched too and wrapped in an object URL. That is also why a preview costs
-/// the whole file — there is no Range support anywhere in this server, so a
-/// video cannot be streamed, only downloaded and then played.
+/// A preview is a **URL**, not a buffer.
 ///
-/// The object URL is revoked on unmount. Without that, scrolling a room with
-/// twenty videos pins twenty copies of them for the life of the document.
+/// It used to be the other way round: `/api/files/{id}/raw` needs a bearer
+/// token, an `<img src>` cannot send one, so the bytes were fetched and wrapped
+/// in an object URL — which meant a preview cost the whole file, and a film
+/// could not be previewed at all, only downloaded and then played.
+///
+/// Now the component asks for a short-lived single-file capability and points
+/// the element straight at it with `?inline=1`. The server streams and honours
+/// `Range`, so a `<video>` fetches what it is playing and seeks by asking for
+/// the byte range it lands on. A two-hour film costs the page nothing, there is
+/// no object URL to revoke, and the size cap that used to guard the buffer is
+/// gone with the buffer.
 #[function_component(AttachmentEmbed)]
 fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
     let store = crate::state::use_store();
@@ -521,6 +525,9 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
     let meta = use_state(|| Option::<crate::api::FileMeta>::None);
     let blob = use_state(|| Option::<String>::None);
     let load = use_state(|| MediaLoad::Loading);
+    // False until the viewer asks for the film. See the render below for why a
+    // video is a still first.
+    let playing = use_state(|| false);
     let img = use_node_ref();
 
     {
@@ -535,26 +542,23 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
                     load.set(MediaLoad::Failed);
                     return;
                 };
-                // Previewing pulls the bytes into the page; above the cap that
-                // is a tab-killer rather than a courtesy. The card still shows
-                // its type plate and a Save button, which streams.
-                let previewable = (file.is_previewable_image() || file.is_previewable_video())
-                    && (file.size_bytes as f64) <= crate::actions::MAX_PREVIEW_BYTES;
-                let mime = file.preview_mime();
+                // No size test: streaming costs the page nothing, so a 4 GB
+                // film is as previewable as a thumbnail.
+                let previewable = file.is_previewable_image() || file.is_previewable_video();
                 meta.set(Some(file));
                 if !previewable {
-                    // Nothing to fetch: the card is the whole render.
+                    // Nothing to point at: the card is the whole render.
                     load.set(MediaLoad::Loaded);
                     return;
                 }
-                match store.client.download_file(&id).await {
-                    Ok(bytes) => match super::common::object_url(&bytes, mime) {
-                        Some(url) => {
-                            blob.set(Some(url));
-                            load.set(MediaLoad::Loaded);
-                        }
-                        None => load.set(MediaLoad::Failed),
-                    },
+                match store.client.download_link(&id).await {
+                    Ok(link) => {
+                        // `inline=1` asks the server for a real media
+                        // Content-Type; without it the element is handed
+                        // octet-stream and plays nothing.
+                        blob.set(Some(store.client.url(&format!("{}&inline=1", link.url))));
+                        load.set(MediaLoad::Loaded);
+                    }
                     Err(_) => load.set(MediaLoad::Failed),
                 }
             });
@@ -562,16 +566,11 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
         });
     }
 
-    {
-        let blob = blob.clone();
-        use_effect_with((), move |_| {
-            move || {
-                if let Some(url) = blob.as_deref() {
-                    let _ = web_sys::Url::revoke_object_url(url);
-                }
-            }
-        });
-    }
+    // No unmount cleanup any more, and its absence is the point. This used to
+    // revoke an object URL, because without that a room with twenty videos
+    // pinned twenty copies of them for the life of the document. There is
+    // nothing to pin now — the element holds a URL, and the browser drops
+    // whatever it had buffered when the element goes.
 
     if *load == MediaLoad::Failed {
         return html! {
@@ -628,10 +627,45 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
     };
 
     let media = match (&*blob, file.is_previewable_video()) {
+        // A video in the stream is a **still**, not a player, until it is
+        // asked for. `preload="metadata"` fetches the header and one frame —
+        // a few hundred kilobytes of a film that may be gigabytes — so a room
+        // full of videos costs a room full of thumbnails.
+        //
+        // Clicking swaps in the real player: `controls`, `autoplay`, and
+        // `preload="auto"`, which is the point at which the browser actually
+        // starts pulling the film down. Nothing plays until then, so scrolling
+        // past a video never makes noise and never spends anyone's bandwidth.
+        (Some(url), true) if !*playing => html! {
+            <button
+                type="button"
+                class="fn-attach__shot fn-attach__play"
+                aria-label={t(lang, Key::video_play)}
+                title={t(lang, Key::video_play)}
+                onclick={{
+                    let playing = playing.clone();
+                    Callback::from(move |_: MouseEvent| playing.set(true))
+                }}
+            >
+                <video
+                    class="fn-attach__media"
+                    src={url.clone()}
+                    muted=true
+                    preload="metadata"
+                />
+                <span class="fn-attach__play-badge" aria-hidden="true">
+                    { icons::play(22) }
+                </span>
+            </button>
+        },
         (Some(url), true) => html! {
-            // `controls` and no autoplay: an attachment that starts making
-            // noise when it scrolls into view is a hostile attachment.
-            <video class="fn-attach__media" src={url.clone()} controls=true preload="metadata" />
+            <video
+                class="fn-attach__media"
+                src={url.clone()}
+                controls=true
+                autoplay=true
+                preload="auto"
+            />
         },
         (Some(url), false) => html! {
             <button

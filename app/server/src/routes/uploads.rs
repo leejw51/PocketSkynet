@@ -207,7 +207,6 @@ async fn begin(
             let room = pocketskynet_core::RoomId::new(raw)
                 .map_err(|_| ApiError::not_found("Room not found"))?;
             crate::routes::messages::require_member(&state, &room, &caller).await?;
-            crate::routes::files::check_room_capacity(&state, &room).await?;
             Some(room.as_str().to_owned())
         }
         // Images and sites are per-user, not per-room. Sites additionally

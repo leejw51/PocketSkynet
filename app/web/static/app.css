@@ -9850,3 +9850,48 @@ span.fn-conn { cursor: default; }
   outline-offset: 2px;
   border-radius: var(--fn-radius-sm, 6px);
 }
+
+/* A video in the stream is a thumbnail until it is asked for
+   (message.rs::AttachmentEmbed). The poster is a `<video preload="metadata">`
+   rather than a generated image: the browser already decodes a frame to
+   satisfy `metadata`, so this costs the header of the file and no more — a few
+   hundred kilobytes of a film that may be gigabytes.
+
+   The badge is what makes it read as clickable. A still with no affordance
+   looks like an image that failed to load, which is the exact impression a
+   film should not give. */
+.fn-attach__play {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.fn-attach__play-badge {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  inline-size: 48px;
+  block-size: 48px;
+  border-radius: 50%;
+  color: #fff;
+  /* Its own scrim: a bright frame behind a white glyph would swallow it. */
+  background: color-mix(in srgb, #000 55%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+  transition: transform var(--fn-dur) var(--fn-ease), background var(--fn-dur) var(--fn-ease);
+}
+.fn-attach__play:hover .fn-attach__play-badge {
+  transform: translate(-50%, -50%) scale(var(--fn-tap-hover));
+  background: color-mix(in srgb, var(--fn-primary) 70%, #000);
+}
+.fn-attach__play:active .fn-attach__play-badge {
+  transform: translate(-50%, -50%) scale(var(--fn-tap-press));
+}
+@media (prefers-reduced-motion: reduce) {
+  .fn-attach__play-badge { transition: none; }
+}

@@ -1004,15 +1004,6 @@ pub const MAX_ATTACHMENT_BYTES: f64 = crate::api::uploads::MAX_UPLOAD_BYTES;
 /// how an attachment gets its `#hashtags`, and it is why there is no separate
 /// tagging dialog. An empty caption is fine: the filename is indexed too, so an
 /// untagged attachment is still findable.
-/// How large an attachment may be before the app stops trying to *preview* it.
-///
-/// Previewing means pulling the bytes into the page to build an object URL,
-/// which is the one download path that still costs memory. It is the right
-/// trade for a photo and the wrong one for a two-hour video: a 4 GB preview
-/// would take the tab down. Above this, the card shows its type plate and the
-/// Save button — which streams, and has no ceiling.
-pub const MAX_PREVIEW_BYTES: f64 = 64.0 * 1024.0 * 1024.0;
-
 /// Save an attachment to disk, by handing the browser a URL it can fetch
 /// itself.
 ///
@@ -1027,6 +1018,70 @@ pub const MAX_PREVIEW_BYTES: f64 = 64.0 * 1024.0 * 1024.0;
 /// [`verify_downloaded_file`] will check a file you pick back.
 pub async fn save_attachment(store: Store, file_id: String, filename: String) {
     let lang = store.language;
+
+    // Where the browser allows it, the app does the fetching: that is the only
+    // way it can show progress, check the checksum, and resume — all three of
+    // which are invisible when the browser owns the transfer.
+    if crate::api::downloads::support() == crate::api::downloads::Support::Streaming {
+        let transfer_id = crate::state::next_local_id();
+        let mut started = false;
+        let progress_store = store.clone();
+        let name = filename.clone();
+
+        let result = store
+            .client
+            .download_to_disk(&file_id, move |p| {
+                // Registered on the first report rather than before the call,
+                // because the save dialog sits in front of it: a bar that
+                // appears while someone is still choosing a folder is a bar
+                // that lies about what is happening.
+                if !started {
+                    started = true;
+                    progress_store.dispatch(Action::TransferStarted(crate::state::Transfer {
+                        id: transfer_id,
+                        name: name.clone(),
+                        direction: crate::state::TransferDirection::Download,
+                        stage: crate::state::TransferStage::Moving,
+                        done: p.done,
+                        total: p.total,
+                    }));
+                }
+                progress_store.dispatch(Action::TransferProgress {
+                    id: transfer_id,
+                    done: p.done,
+                    stage: crate::state::TransferStage::Moving,
+                });
+            })
+            .await;
+        store.dispatch(Action::TransferEnded(transfer_id));
+
+        match result {
+            Ok((crate::api::downloads::Outcome::Verified, _)) => {
+                toast::success(
+                    &store,
+                    t(lang, Key::attach_downloaded_ok).replace("{name}", &filename),
+                );
+            }
+            // The bytes are on disk and they are wrong. Say so loudly: a
+            // silent corrupt file is worse than a failed download, because it
+            // will be discovered by whatever tries to open it, much later.
+            Ok((crate::api::downloads::Outcome::Corrupt, _)) => {
+                toast::error(&store, t(lang, Key::attach_verify_failed), None);
+            }
+            // Cancelling the save dialog is not a failure worth shouting
+            // about; anything else is.
+            Err(e) => {
+                let msg = e.user_message();
+                if !msg.contains("cancelled") {
+                    toast::error(&store, msg, None);
+                }
+            }
+        }
+        return;
+    }
+
+    // Everywhere else: hand the URL to the browser. It streams to disk and
+    // resumes, and its own download UI is where the progress shows.
     let link = match store.client.download_link(&file_id).await {
         Ok(link) => link,
         Err(e) => {

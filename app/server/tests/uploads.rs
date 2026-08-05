@@ -678,3 +678,126 @@ impl Raw {
         String::from_utf8_lossy(&self.bytes).contains(needle)
     }
 }
+
+// --- inline media ---------------------------------------------------------
+
+#[tokio::test]
+async fn a_video_is_served_as_playable_media_but_only_when_asked() {
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    let room = create_room(&alice.api, "ops").await;
+
+    // Not a real mp4 — the server never parses content, which is itself the
+    // point: the type comes from the stored extension, not from sniffing.
+    let data = payload(9_000);
+    let meta = upload_in_chunks(&server, &alice, &room, "holiday.mp4", &data, 4_096).await;
+    let id = meta["id"].as_str().unwrap();
+
+    let plain = send(
+        &server,
+        Some(&alice),
+        reqwest::Method::GET,
+        &format!("/api/files/{id}/raw"),
+        None,
+        None,
+    )
+    .await;
+    let ct = |r: &Raw| {
+        r.headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_owned()
+    };
+    let cd = |r: &Raw| {
+        r.headers
+            .get("content-disposition")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_owned()
+    };
+
+    // The default is unchanged and still the safe one.
+    assert_eq!(ct(&plain), "application/octet-stream");
+    assert!(cd(&plain).starts_with("attachment"));
+
+    let inline = send(
+        &server,
+        Some(&alice),
+        reqwest::Method::GET,
+        &format!("/api/files/{id}/raw?inline=1"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(inline.status, 200);
+    assert_eq!(
+        ct(&inline),
+        "video/mp4",
+        "a <video> handed octet-stream plays nothing"
+    );
+    assert!(cd(&inline).starts_with("inline"));
+    // Still nosniff, and still resumable — seeking is Range requests.
+    assert_eq!(
+        inline
+            .headers
+            .get("x-content-type-options")
+            .and_then(|v| v.to_str().ok()),
+        Some("nosniff")
+    );
+    assert_eq!(
+        inline
+            .headers
+            .get("accept-ranges")
+            .and_then(|v| v.to_str().ok()),
+        Some("bytes")
+    );
+}
+
+#[tokio::test]
+async fn inline_cannot_be_used_to_execute_an_upload_on_this_origin() {
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    let room = create_room(&alice.api, "ops").await;
+
+    // The whole reason attachments are octet-stream. Every one of these asks
+    // to be served as something a browser would run or render as markup, and
+    // `inline=1` must not grant any of them: the extension is not in the
+    // allow-list, so the answer stays octet-stream + attachment.
+    for name in [
+        "payload.html",
+        "payload.htm",
+        "payload.svg",
+        "payload.xml",
+        "payload.js",
+        "payload.mjs",
+        "payload.pdf",
+        "payload.xhtml",
+    ] {
+        let data = payload(1_200);
+        let meta = upload_in_chunks(&server, &alice, &room, name, &data, 1_024).await;
+        let id = meta["id"].as_str().unwrap();
+        let r = send(
+            &server,
+            Some(&alice),
+            reqwest::Method::GET,
+            &format!("/api/files/{id}/raw?inline=1"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            r.headers.get("content-type").and_then(|v| v.to_str().ok()),
+            Some("application/octet-stream"),
+            "{name} was served as something other than octet-stream"
+        );
+        assert!(
+            r.headers
+                .get("content-disposition")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .starts_with("attachment"),
+            "{name} was served inline"
+        );
+    }
+}

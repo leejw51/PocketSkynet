@@ -22,13 +22,17 @@ use crate::api::FileMeta;
 use crate::i18n::{t, Key};
 use crate::state::{use_store, Load};
 
-use super::super::common::{object_url, Empty};
+use super::super::common::Empty;
 use super::super::icons;
 use super::super::modal::Modal as Dialog;
 use super::super::toast;
 
-/// How many previews one drawer will fetch. Each one costs its whole file, so
-/// this is a bandwidth ceiling, not a rendering one.
+/// How many thumbnails one drawer will ask for.
+///
+/// It used to be a memory budget — each preview cost its whole file — and is
+/// now a round-trip budget: a thumbnail is a capability URL, and minting one is
+/// a request. Forty rows would be forty requests to draw forty 42px squares.
+/// The rest keep their type plate, which is a perfectly good identifier.
 const MAX_PREVIEWS: usize = 12;
 
 #[derive(Properties, PartialEq)]
@@ -45,7 +49,12 @@ pub fn files(p: &FilesProps) -> Html {
     let load = use_state(Load::default);
     let filter = use_state(|| Option::<String>::None);
     let error = use_state(|| Option::<String>::None);
-    // id → object URL for the thumbnails fetched so far.
+    // id → capability URL for the thumbnails asked for so far.
+    //
+    // A URL, not an object URL, and that is what makes a thumbnail cheap: with
+    // `preload="metadata"` the browser fetches the header and enough to decode
+    // one frame, then stops. Drawing a poster for a 900 MB film costs a few
+    // hundred kilobytes rather than 900 MB.
     let thumbs = use_state(HashMap::<String, String>::new);
 
     // Load the listing, and reload when the tag filter changes.
@@ -102,15 +111,17 @@ pub fn files(p: &FilesProps) -> Html {
                     wasm_bindgen_futures::spawn_local(async move {
                         let mut next = (*thumbs).clone();
                         for f in wanted {
-                            // A thumbnail is not worth a gigabyte of heap; the
-                            // type plate is a perfectly good identifier.
-                            if (f.size_bytes as f64) > crate::actions::MAX_PREVIEW_BYTES {
-                                continue;
-                            }
-                            if let Ok(bytes) = store.client.download_file(&f.id).await {
-                                if let Some(url) = object_url(&bytes, f.preview_mime()) {
-                                    next.insert(f.id.clone(), url);
-                                }
+                            // A capability URL, not the bytes. The drawer used
+                            // to download every preview in full to draw a 42px
+                            // square, which was merely wasteful at 25 MB and is
+                            // impossible now — and an `<img>` pointed at a URL
+                            // lets the browser fetch only what it needs and
+                            // cache it.
+                            if let Ok(link) = store.client.download_link(&f.id).await {
+                                next.insert(
+                                    f.id.clone(),
+                                    store.client.url(&format!("{}&inline=1", link.url)),
+                                );
                             }
                         }
                         thumbs.set(next);
@@ -121,18 +132,8 @@ pub fn files(p: &FilesProps) -> Html {
         );
     }
 
-    // Revoke every object URL on unmount. Without this each open/close cycle
-    // pins another copy of every thumbnail for the life of the document.
-    {
-        let thumbs = thumbs.clone();
-        use_effect_with((), move |_| {
-            move || {
-                for url in thumbs.values() {
-                    let _ = web_sys::Url::revoke_object_url(url);
-                }
-            }
-        });
-    }
+    // Nothing to revoke on unmount any more: these are URLs the browser
+    // manages, not object URLs pinning bytes in this document.
 
     // The tag rail is derived from what is on screen rather than fetched: the
     // listing already carries every file's tags, so a second round trip to
