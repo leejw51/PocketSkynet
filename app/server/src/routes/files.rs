@@ -106,7 +106,16 @@ pub fn router() -> Router<AppState> {
         .route("/rooms/{roomId}/files", post(upload).get(list))
         .route("/files/{id}", get(detail).delete(remove))
         .route("/files/{id}/raw", get(download))
-        .route("/files/{id}/download-token", post(download_token))
+        // GET as well as POST, and GET is what clients should use. Minting a
+        // capability reads state and changes none, so it was only ever a POST
+        // out of habit — and a request with a body is exactly what fails from
+        // iOS Safari over HTTP/3, which took the video thumbnail, playback and
+        // the download button with it. A bodiless GET sidesteps that whether or
+        // not the underlying transport bug is ever found.
+        .route(
+            "/files/{id}/download-token",
+            get(download_token).post(download_token),
+        )
         // Innermost wins, so the 100 KB API-wide default is lifted here only.
         // It applies to the GETs in this router too, which is harmless.
         .layer(DefaultBodyLimit::max(MAX_FILE_BYTES))
@@ -684,7 +693,7 @@ fn base64_standard(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// `POST /api/files/{id}/download-token`
+/// `GET` (preferred) or `POST /api/files/{id}/download-token`
 ///
 /// Hands back a URL the browser can be pointed at, plus the digest to check
 /// what it saved. Separate from the download itself so the capability is minted

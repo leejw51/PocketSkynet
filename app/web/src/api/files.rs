@@ -94,10 +94,13 @@ impl Client {
     /// writing the response straight to disk has no such ceiling and gets
     /// resume, pause and its own progress for free.
     pub async fn download_link(&self, id: &str) -> ApiResult<DownloadLink> {
-        self.send_json(
-            Method::POST,
+        // GET, not POST, and with no body. A POST carrying `{}` is what this
+        // was, and it fails outright from iOS Safari over HTTP/3 — which is
+        // how a video lost its thumbnail, its playback and its download button
+        // all at once, with only "Can't reach the server" to show for it.
+        self.send(
+            Method::GET,
             &format!("/api/files/{}/download-token", encode(id)),
-            &serde_json::json!({}),
         )
         .await
     }

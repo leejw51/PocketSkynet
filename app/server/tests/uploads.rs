@@ -508,12 +508,15 @@ async fn a_download_token_opens_its_own_file_without_a_header() {
     let meta = upload_in_chunks(&server, &alice, &room, "token.bin", &data, 4_096).await;
     let id = meta["id"].as_str().unwrap();
 
+    // GET, which is what the client uses: minting a capability changes
+    // nothing, and a request with a body is what fails from iOS Safari over
+    // HTTP/3.
     let minted = send(
         &server,
         Some(&alice),
-        reqwest::Method::POST,
+        reqwest::Method::GET,
         &format!("/api/files/{id}/download-token"),
-        Some(Vec::new()),
+        None,
         None,
     )
     .await;
