@@ -114,6 +114,31 @@ pub fn quic_config(chain: &Path, key: &Path) -> Result<quinn::ServerConfig, Http
 
     let transport = Arc::get_mut(&mut config.transport)
         .expect("the transport config is not shared before the endpoint exists");
+    // Flow-control windows sized for the upload protocol, explicitly.
+    //
+    // quinn's defaults are tuned for request/response traffic and sit far
+    // below one upload chunk (routes/uploads.rs suggests 8 MB and caps at
+    // 16 MB). A sender pushing a body larger than the stream window must
+    // pause mid-chunk and wait for MAX_STREAM_DATA credit — a dance our own
+    // h3 test client performs correctly, and which shipped WebKit did not
+    // survive on real devices: the first 8 MB PATCH from an iPhone or iPad
+    // wedged, and with it the whole connection, which the browser then kept
+    // reusing until a page refresh. A window comfortably larger than any
+    // single chunk means Safari never waits for mid-body credit at all,
+    // which sidesteps the class rather than the instance.
+    //
+    // The memory exposure is bounded and deliberate: only *unread* data is
+    // buffered, our body loop reads eagerly, and this server is a LAN box
+    // with a handful of peers — not a public edge balancing thousands of
+    // connections.
+    transport.stream_receive_window(
+        quinn::VarInt::from_u32(32 * 1024 * 1024), // 2x the largest chunk
+    );
+    transport.receive_window(
+        quinn::VarInt::from_u32(96 * 1024 * 1024), // several streams' worth
+    );
+    // The mirror direction: a 4 GB film streams *out* over this transport.
+    transport.send_window(96 * 1024 * 1024);
     transport.max_idle_timeout(Some(
         IDLE_TIMEOUT
             .try_into()
@@ -265,6 +290,9 @@ async fn handle_request(
     // WebSocket cannot ride HTTP/3 (see the module docs). Say so plainly
     // instead of letting the client wait for an upgrade that never comes.
     if is_websocket_upgrade(&request) {
+        // Same flow-control hygiene as the 413 below: never answer early and
+        // walk away from an unread body.
+        recv.stop_sending(h3::error::Code::H3_REQUEST_REJECTED);
         let response = Response::builder()
             .status(StatusCode::NOT_IMPLEMENTED)
             .header(http::header::CONTENT_TYPE, "application/json")
@@ -286,6 +314,13 @@ async fn handle_request(
     let mut body = Vec::new();
     while let Some(mut chunk) = recv.recv_data().await? {
         if body.len() + chunk.remaining() > MAX_BODY {
+            // Tell the peer to stop sending before answering. Without this
+            // the unread remainder of the body sits in the connection's
+            // flow-control window forever — the stream is dead but its
+            // credit is not returned, and once enough credit leaks, every
+            // later request on the connection hangs with no error anywhere.
+            // A refused body must be *refused*, not merely ignored.
+            recv.stop_sending(h3::error::Code::H3_REQUEST_REJECTED);
             let response = Response::builder()
                 .status(StatusCode::PAYLOAD_TOO_LARGE)
                 .body(())
