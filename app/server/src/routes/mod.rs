@@ -142,6 +142,15 @@ fn api_router(state: &AppState) -> Router<AppState> {
     // load-balancer probe can never be throttled into reporting an outage.
     let unlimited = misc::health_router();
 
+    // Uploads draw on their own budget rather than the general one. A chunked
+    // upload makes a request per chunk by design, so metering it at 100/min
+    // throttles a large file into failing — the meter that matters for an
+    // upload is bytes, and that is bounded elsewhere.
+    let uploads = uploads::router().layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::ratelimit::upload,
+    ));
+
     let limited = Router::new()
         .merge(misc::router())
         .merge(auth::router(state))
@@ -151,7 +160,6 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(keys::router())
         .merge(messages::router())
         .merge(files::router())
-        .merge(uploads::router())
         .merge(images::router())
         .merge(search::router())
         .merge(operators::router())
@@ -164,6 +172,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         ));
 
     unlimited
+        .merge(uploads)
         .merge(limited)
         .fallback(unknown_route)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))

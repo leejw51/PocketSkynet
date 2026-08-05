@@ -801,3 +801,39 @@ async fn inline_cannot_be_used_to_execute_an_upload_on_this_origin() {
         );
     }
 }
+
+// --- rate limiting --------------------------------------------------------
+
+#[tokio::test]
+async fn a_long_upload_is_not_throttled_into_failing() {
+    // The general budget is 100 requests a minute, and a chunked upload makes
+    // one request per chunk *by design* — so under that budget a 888 MB film
+    // 429s partway through and stalls, which is precisely what happened to the
+    // first one. Uploads draw on their own budget instead.
+    //
+    // 150 chunks: comfortably past the general limit, nowhere near the upload
+    // one, and fast because each chunk is tiny. What is being tested is the
+    // *count* of requests, not their size.
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    let room = create_room(&alice.api, "ops").await;
+
+    let chunk = 64usize;
+    let chunks = 150usize;
+    let data = payload(chunk * chunks);
+
+    let started = begin(&server, &alice, &room, "long.bin", &data, true).await;
+    assert_eq!(started.status, 201);
+    let id = started.json()["id"].as_str().unwrap().to_owned();
+
+    for (i, piece) in data.chunks(chunk).enumerate() {
+        let r = append(&server, &alice, &id, i * chunk, piece).await;
+        assert_eq!(
+            r.status, 200,
+            "chunk {i} of {chunks} was refused with {} — the upload budget is \
+             being shared with the general one again",
+            r.status
+        );
+    }
+    assert_eq!(finish(&server, &alice, &id).await.status, 201);
+}
