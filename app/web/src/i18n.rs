@@ -875,6 +875,8 @@ strings! {
     (bank_testnet, "Testnet", "테스트넷", "テストネット", "測試網", "Testnet", "Testnet", "测试网", "Testnet"),
     (bank_universal_hint, "Universal wallet — runs on its own network, independent of the chain configured on this server.", "유니버설 지갑 — 이 서버에 설정된 체인과 무관하게 자체 네트워크에서 동작합니다.", "ユニバーサルウォレット — このサーバーに設定されたチェーンとは無関係に、独自のネットワークで動作します。", "通用錢包 — 用自己嘅網絡運作，唔受呢個伺服器設定嘅鏈影響。", "Univerzální peněženka — běží na vlastní síti, nezávisle na řetězci nastaveném na tomto serveru.", "Cartera universal: funciona en su propia red, independiente de la cadena configurada en este servidor.", "通用钱包 — 使用自己的网络，与此服务器配置的链无关。", "Universelle Wallet — läuft auf eigenem Netzwerk, unabhängig von der auf diesem Server konfigurierten Chain."),
     (copy_address, "Copy address", "주소 복사", "アドレスをコピー", "複製地址", "Zkopírovat adresu", "Copiar dirección", "复制地址", "Adresse kopieren"),
+    (view_full_address, "View full address", "전체 주소 보기", "アドレス全体を表示", "查看完整地址", "Zobrazit celou adresu", "Ver la dirección completa", "查看完整地址", "Vollständige Adresse anzeigen"),
+    (hide_full_address, "Hide full address", "전체 주소 숨기기", "アドレス全体を非表示", "隱藏完整地址", "Skrýt celou adresu", "Ocultar la dirección completa", "隐藏完整地址", "Vollständige Adresse ausblenden"),
     // --- Type preferences -------------------------------------------------
     (font_face, "Font", "글꼴", "フォント", "字體", "Písmo", "Fuente", "字体", "Schriftart"),
     (text_size, "Text size", "글자 크기", "文字サイズ", "文字大小", "Velikost písma", "Tamaño del texto", "文字大小", "Textgröße"),
@@ -888,6 +890,11 @@ strings! {
     (size_standard, "Standard", "보통", "標準", "標準", "Standardní", "Estándar", "标准", "Standard"),
     (size_large, "Large", "크게", "大", "大", "Velké", "Grande", "大", "Groß"),
     (size_xlarge, "Extra large", "아주 크게", "特大", "特大", "Extra velké", "Extra grande", "特大", "Sehr groß"),
+    // --- Skin (art direction; orthogonal to light/dark) --------------------
+    (skin, "Skin", "스킨", "スキン", "外觀", "Vzhled", "Aspecto", "外观", "Skin"),
+    (skin_skynet, "Skynet", "스카이넷", "スカイネット", "Skynet", "Skynet", "Skynet", "Skynet", "Skynet"),
+    (skin_cute, "Cute Skynet", "귀여운 스카이넷", "キュートスカイネット", "可愛 Skynet", "Roztomilý Skynet", "Skynet tierno", "可爱 Skynet", "Niedliches Skynet"),
+    (skin_change, "Skin: {skin}. Change.", "스킨: {skin}. 변경.", "スキン: {skin}。変更。", "外觀：{skin}。變更。", "Vzhled: {skin}. Změnit.", "Aspecto: {skin}. Cambiar.", "外观：{skin}。更改。", "Skin: {skin}. Ändern."),
     (bank_quick_actions, "Quick actions", "빠른 작업", "クイック操作", "快捷操作", "Rychlé akce", "Acciones rápidas", "快捷操作", "Schnellaktionen"),
     (bank_receive, "Receive", "받기", "受け取る", "收款", "Přijmout", "Recibir", "收款", "Empfangen"),
     (bank_receive_hint, "Share this address to receive funds on this network.", "이 네트워크에서 자산을 받으려면 이 주소를 공유하세요.", "このネットワークで資産を受け取るには、このアドレスを共有してください。", "喺呢個網絡收款，就分享呢個地址。", "Sdílejte tuto adresu pro příjem prostředků na této síti.", "Comparte esta dirección para recibir fondos en esta red.", "分享此地址即可在该网络接收资产。", "Teile diese Adresse, um auf diesem Netzwerk Guthaben zu empfangen."),
@@ -1086,6 +1093,16 @@ mod tests {
             (Lang::Es, Key::font_skynet),
             (Lang::Zh, Key::font_skynet),
             (Lang::De, Key::font_skynet),
+            // The skin is named after the product, so the base skin's label is
+            // the product's own name everywhere the script allows it. German
+            // borrows "Skin" itself — it is the word used for exactly this in
+            // German software.
+            (Lang::Yue, Key::skin_skynet),
+            (Lang::Cs, Key::skin_skynet),
+            (Lang::Es, Key::skin_skynet),
+            (Lang::Zh, Key::skin_skynet),
+            (Lang::De, Key::skin_skynet),
+            (Lang::De, Key::skin),
             (Lang::Cs, Key::font_mono),
             (Lang::Es, Key::font_mono),
             (Lang::De, Key::font_mono),

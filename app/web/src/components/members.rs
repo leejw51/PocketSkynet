@@ -254,8 +254,8 @@ fn person_row(
                 image={m.user.profile_image.clone()}
                 zoom={crate::components::common::Zoom {
                     title: m.user.username.clone(),
-                    subtitle: Some(m.user_address.to_checksummed()),
-                    copy: Some(m.user_address.to_checksummed()),
+                    subtitle: None,
+                    address: Some(m.user_address.clone()),
                 }}
             />
             <div class="fn-grow">

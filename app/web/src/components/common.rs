@@ -53,10 +53,16 @@ impl IdentSize {
 pub struct Zoom {
     /// The name under the portrait — also the tile's accessible label.
     pub title: String,
-    /// A quieter second line, usually the checksummed address.
+    /// A quieter second line: a role or a description. **Not** an address.
     pub subtitle: Option<String>,
-    /// When set, the stage offers a copy button for this value.
-    pub copy: Option<String>,
+    /// The wallet behind this tile, when there is one. Rooms pass `None`.
+    ///
+    /// The address itself rather than a formatted string, because the stage
+    /// shows it two ways — abbreviated, then in full behind a reveal — and
+    /// copies a third. Handing it a `String` would mean deciding here which
+    /// of the three the caller meant, which is how the truncated form ended
+    /// up un-checksummed in the first place.
+    pub address: Option<WalletAddress>,
 }
 
 #[derive(Properties, PartialEq)]
@@ -101,6 +107,11 @@ pub struct IdentProps {
 /// screen reader is noise.
 #[function_component(Ident)]
 pub fn ident_tile(p: &IdentProps) -> Html {
+    // Read from the store rather than taken as a prop, for the same reason
+    // `Addr` below does: the skin is document-wide, so threading it through
+    // fourteen call sites would be fourteen chances to forget one and render
+    // the other skin's face in a corner nobody looks at.
+    let skin = crate::state::use_store().skin;
     let monogram = identity::monogram_for(&p.seed);
     let hue = identity::hue_for(&p.seed);
     // A chosen avatar wins over the hash-derived face; the coloured tile and
@@ -108,8 +119,8 @@ pub fn ident_tile(p: &IdentProps) -> Html {
     let src = p
         .image
         .as_deref()
-        .and_then(identity::avatar_src)
-        .unwrap_or_else(|| format!("/static/img/{}.png", identity::art_for(&p.seed)));
+        .and_then(|i| identity::avatar_src(skin, i))
+        .unwrap_or_else(|| crate::asset::img(skin, identity::art_for(&p.seed)));
     let mut class = classes!("fn-ident", "fn-ident--art", p.class.clone());
     class.push(p.size.class().trim());
     if p.is_self {
@@ -131,11 +142,12 @@ pub fn ident_tile(p: &IdentProps) -> Html {
         let image = p.image.clone();
         std::rc::Rc::new(move || {
             super::spotlight::show_identity(
+                skin,
                 &seed,
                 image.as_deref(),
                 zoom.title.clone(),
                 zoom.subtitle.clone(),
-                zoom.copy.clone(),
+                zoom.address.clone(),
             );
         })
     });
@@ -190,9 +202,28 @@ pub fn ident_tile(p: &IdentProps) -> Html {
 #[derive(Properties, PartialEq)]
 pub struct AddrProps {
     pub address: WalletAddress,
-    /// Show the full EIP-55 checksum rather than `0x9f2a…7c41`.
+    /// Show the full EIP-55 checksum rather than `0x9f2a…7C41`.
+    ///
+    /// Mutually exclusive with [`Self::revealable`], which is the same idea
+    /// with a switch on it; setting both is treated as `revealable`, since a
+    /// reveal control that starts revealed has nothing to reveal.
     #[prop_or_default]
     pub full: bool,
+    /// Start truncated, with an eye button that shows the whole thing.
+    ///
+    /// Every place an address is printed at full length is a place where
+    /// forty-two mono characters — the longest string in the product — sit
+    /// next to something they are not more important than: a username, a
+    /// recovery-phrase warning, a sentence someone typed. The short form is
+    /// what an address is *recognised* by; the full form is what it is
+    /// *verified* by, and verification is a thing you deliberately go and do.
+    ///
+    /// So the default became "recognisable", with the full string one tap
+    /// away. The clipboard is unaffected either way — copying always yields
+    /// the complete checksum, so the common case never needs the reveal at
+    /// all.
+    #[prop_or_default]
+    pub revealable: bool,
     /// Tapping the address copies the **full checksum**, truncated or not.
     ///
     /// On by default. An address on screen is nearly always something someone
@@ -222,21 +253,70 @@ pub fn addr(p: &AddrProps) -> Html {
     // Unconditional, and before the read-only early return: hooks are ordered
     // by call, not by branch.
     let copied = use_state(|| false);
+    let revealed = use_state(|| false);
 
     let checksum = p.address.to_checksummed();
-    let text = if p.full {
+    // `revealable` wins over `full`: see the prop docs — a reveal control that
+    // starts revealed is a control with nothing to do.
+    let showing_full = if p.revealable { *revealed } else { p.full };
+    let text = if showing_full {
         checksum.clone()
     } else {
-        p.address.abbreviated()
+        // Sliced out of the checksum, never out of the stored lowercase. The
+        // two forms are shown side by side often enough — here and in the
+        // spotlight — that disagreeing casing reads as one of them being the
+        // wrong address.
+        p.address.abbreviated_checksummed()
     };
     let mut class = classes!("fn-addr");
-    if p.full {
+    if showing_full {
         class.push("fn-addr--full");
     }
 
+    // The eye, when this instance offers one. Built before the `!p.copy`
+    // return so a read-only address can still be revealed — the two are
+    // independent: one is about the clipboard, the other about the screen.
+    let eye = p.revealable.then(|| {
+        let onclick = {
+            let revealed = revealed.clone();
+            Callback::from(move |e: MouseEvent| {
+            // The address usually sits inside something with its own tap —
+            // a members row, a room card. Neither that nor the copy gesture
+            // beside it should fire because someone asked to see the rest.
+            e.stop_propagation();
+            revealed.set(!*revealed);
+            })
+        };
+        let key = if *revealed {
+            Key::hide_full_address
+        } else {
+            Key::view_full_address
+        };
+        html! {
+            <button
+                type="button"
+                class="topcoat-icon-button--quiet fn-addr__reveal"
+                aria-pressed={revealed.to_string()}
+                title={t(lang, key)}
+                aria-label={t(lang, key)}
+                {onclick}
+            >{ if *revealed { icons::eye_off(14) } else { icons::eye(14) } }</button>
+        }
+    });
+
+    // An inline-flex wrapper rather than a block: this whole assembly can land
+    // mid-sentence inside a message bubble, and it has to flow with the words
+    // either side of it exactly as the bare span did.
+    let wrap = |inner: Html| match &eye {
+        None => inner,
+        Some(eye) => html! {
+            <span class="fn-addr-group">{ inner }{ eye.clone() }</span>
+        },
+    };
+
     if !p.copy {
         let aria = t(lang, Key::wallet_address_aria).replace("{address}", &checksum);
-        return html! { <span {class} aria-label={aria}>{ text }</span> };
+        return wrap(html! { <span {class} aria-label={aria}>{ text }</span> });
     }
 
     class.push("fn-addr--copy");
@@ -274,7 +354,7 @@ pub fn addr(p: &AddrProps) -> Html {
         }
     });
 
-    html! {
+    wrap(html! {
         // A `<span role="button">` rather than a `<button>`, and the reason is
         // typographic: an address inside a message bubble is part of a
         // sentence. A real button is an atomic inline-block — forty-two mono
@@ -282,6 +362,9 @@ pub fn addr(p: &AddrProps) -> Html {
         // sentence onto the next one. A span flows, breaks and re-joins like
         // the text it is sitting in, and the role, the tabindex and the
         // Enter/Space handler give back everything the element gave up.
+        //
+        // The eye beside it *is* a real `<button>`, and can be: it is one
+        // glyph wide, so it has no line of its own to take.
         <span
             {class}
             role="button"
@@ -292,7 +375,7 @@ pub fn addr(p: &AddrProps) -> Html {
             {onclick}
             {onkeydown}
         >{ text }</span>
-    }
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -753,6 +836,23 @@ pub fn hit_control(e: &MouseEvent) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn hit_control(_e: &MouseEvent) -> bool {
     false
+}
+
+/// The translated name of a skin.
+///
+/// Lives here rather than on [`Skin`] itself so `session.rs` — which is the
+/// persistence layer — stays free of i18n, and here rather than inline at the
+/// two pickers so adding a third skin is one arm in one file instead of a
+/// compile error in one picker and a silent omission in the other.
+pub fn skin_label(lang: crate::i18n::Lang, skin: crate::session::Skin) -> &'static str {
+    use crate::i18n::Key;
+    crate::i18n::t(
+        lang,
+        match skin {
+            crate::session::Skin::Skynet => Key::skin_skynet,
+            crate::session::Skin::Cute => Key::skin_cute,
+        },
+    )
 }
 
 /// The "Skip to messages" link — the first focusable element on the page,

@@ -87,6 +87,24 @@ impl WalletAddress {
     pub fn abbreviated(&self) -> String {
         format!("{}…{}", &self.0[..6], &self.0[38..])
     }
+
+    /// The same short form in EIP-55 casing: `0x742d…6B22`.
+    ///
+    /// Sliced out of [`Self::to_checksummed`] rather than out of the stored
+    /// lowercase — which is the whole point. The abbreviation exists so
+    /// someone can check it against an address they have elsewhere, and a
+    /// truncation whose casing disagrees with the full form is not a shorter
+    /// version of it: on a screen showing both, the same four characters
+    /// appear twice in two different cases, which reads as one of them being
+    /// wrong. Checksum casing is also the only integrity signal an address
+    /// carries, so dropping it in the short form drops it exactly where
+    /// people are most likely to eyeball rather than paste.
+    ///
+    /// Display only, like `to_checksummed`. Never compare on this.
+    pub fn abbreviated_checksummed(&self) -> String {
+        let full = self.to_checksummed();
+        format!("{}…{}", &full[..6], &full[38..])
+    }
 }
 
 impl fmt::Display for WalletAddress {
@@ -276,6 +294,38 @@ mod tests {
     fn abbreviated_keeps_both_ends() {
         let a = WalletAddress::new(MIXED).unwrap();
         assert_eq!(a.abbreviated(), "0x742d…6b22");
+    }
+
+    #[test]
+    fn the_checksummed_abbreviation_is_a_slice_of_the_checksummed_form() {
+        // Not merely "is uppercase somewhere": the point is that the visible
+        // characters are the *same characters* the full form shows, so the two
+        // can be compared by eye when a screen offers both.
+        let a = WalletAddress::new(MIXED).unwrap();
+        let full = a.to_checksummed();
+        let short = a.abbreviated_checksummed();
+
+        // Note the casing is *not* MIXED's own: that constant is a mixed-case
+        // input for the normalisation test, not this address's real checksum.
+        // Its actual EIP-55 form is 0x742D35cC…, so the head gains a capital
+        // the plain abbreviation does not have and the tail keeps its
+        // lowercase — which is exactly the kind of difference that makes
+        // slicing the right string matter.
+        assert_eq!(short, "0x742D…6b22");
+        let (head, tail) = short.split_once('…').expect("one ellipsis");
+        assert!(full.starts_with(head), "{full} does not start with {head}");
+        assert!(full.ends_with(tail), "{full} does not end with {tail}");
+    }
+
+    #[test]
+    fn the_two_abbreviations_differ_only_in_case() {
+        // The guard against someone "simplifying" one into the other: they
+        // must stay the same address, and must not be the same string.
+        let a = WalletAddress::new(MIXED).unwrap();
+        let plain = a.abbreviated();
+        let checked = a.abbreviated_checksummed();
+        assert_ne!(plain, checked);
+        assert_eq!(plain, checked.to_lowercase());
     }
 
     #[test]

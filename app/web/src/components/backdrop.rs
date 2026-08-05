@@ -33,9 +33,12 @@ use web_sys::{
 };
 use yew::prelude::*;
 
-/// The artwork the shader samples. The same file the CSS layer uses, so the two
-/// are never showing different pictures.
-const PHOTO: &str = "/static/img/skynet-hero.png";
+/// The artwork the shader samples. Resolved through [`crate::asset`] against
+/// the skin in effect, because the CSS layer underneath this canvas paints
+/// `--img-skynet-hero` — and the two showing different pictures is exactly the
+/// seam a skin swap would otherwise open, visible for the one frame before the
+/// shader fades in over the CSS.
+const PHOTO_STEM: &str = "skynet-hero";
 
 const VERT: &str = r#"#version 300 es
 // A fullscreen triangle pair from gl_VertexID — no vertex buffer, no VAO
@@ -85,11 +88,18 @@ pub fn gl_backdrop(p: &GlBackdropProps) -> Html {
     // artwork underneath is what the person sees — including forever, if this
     // machine cannot run it.
     let live = use_state(|| false);
+    let skin = crate::state::use_store().skin;
 
     {
         let canvas_ref = canvas_ref.clone();
         let live = live.clone();
-        use_effect_with(p.layout.clone(), move |_| {
+        // The skin joins `layout` as a dependency for the same reason it is
+        // one: a texture is uploaded once, at start, so changing which picture
+        // the shader samples means tearing the context down and building it
+        // again. Without the skin here, switching skins on the sign-in screen
+        // leaves the previous artwork on the canvas until a reload.
+        let photo = crate::asset::img(skin, PHOTO_STEM);
+        use_effect_with((p.layout.clone(), skin), move |_| {
             // Reset on every re-run: the previous attempt may have bailed, and a
             // stale `true` would leave the canvas faded in over nothing.
             live.set(false);
@@ -97,7 +107,7 @@ pub fn gl_backdrop(p: &GlBackdropProps) -> Html {
 
             if !reduced_motion() {
                 if let Some(canvas) = canvas_ref.cast::<HtmlCanvasElement>() {
-                    *cleanup.borrow_mut() = start(canvas, live.clone());
+                    *cleanup.borrow_mut() = start(canvas, live.clone(), &photo);
                 }
             }
 
@@ -148,7 +158,7 @@ fn reduced_motion() -> bool {
 /// Bring the shader up. `None` on any failure, which leaves the CSS backdrop as
 /// the whole experience — deliberately silent, because a driver that cannot
 /// compile a decorative shader is not something to tell someone signing in.
-fn start(canvas: HtmlCanvasElement, live: UseStateHandle<bool>) -> Option<Cleanup> {
+fn start(canvas: HtmlCanvasElement, live: UseStateHandle<bool>, photo: &str) -> Option<Cleanup> {
     // No layout box means the layer is switched off for this layout (app.css
     // hides it in the two banner layouts, where the CSS backdrop is the tuned
     // one). Bailing here turns the render loop off rather than leaving it
@@ -191,6 +201,7 @@ fn start(canvas: HtmlCanvasElement, live: UseStateHandle<bool>) -> Option<Cleanu
         texture.clone(),
         dims.clone(),
         live.clone(),
+        photo,
     );
 
     // --- pointer ---------------------------------------------------------
@@ -360,6 +371,7 @@ fn load_photo(
     texture: Rc<WebGlTexture>,
     dims: Rc<RefCell<(f32, f32)>>,
     live: UseStateHandle<bool>,
+    photo: &str,
 ) {
     let Ok(img) = HtmlImageElement::new() else {
         return;
@@ -393,7 +405,7 @@ fn load_photo(
     // Deliberately leaked: the image fires once and the closure must outlive
     // this call. One closure for the life of the page, not per frame.
     onload.forget();
-    img.set_src(PHOTO);
+    img.set_src(photo);
 }
 
 fn draw(scene: &Scene, texture: &WebGlTexture, photo_w: f32, photo_h: f32) {

@@ -90,7 +90,7 @@ endif
 .PHONY: help start https http http3 stop restart refresh build gui package test \
         web server tools dev \
         test-unit test-web test-integration test-wasm \
-        package-installer verify fmt format fmt-check lint clean distclean assets assets-force db-reset
+        package-installer verify fmt format fmt-check lint clean distclean assets assets-force assets-cute db-reset
 
 ## ----------------------------------------------------------------- help ----
 
@@ -288,11 +288,14 @@ lint: tools ## Clippy, warnings denied
 privy: ## Rebuild the vendored Privy bundle (needs ../server/node_modules)
 	node tools/build-privy.mjs
 
-assets: ## Generate missing imagery with Grok (needs GROK_API_KEY)
+assets: ## Generate missing imagery for every skin (needs GROK_API_KEY)
 	python3 tools/genart.py
 
-assets-force: ## Regenerate all imagery
+assets-force: ## Regenerate all imagery, every skin
 	python3 tools/genart.py --force
+
+assets-cute: ## Generate missing imagery for the cuteskynet skin only
+	python3 tools/genart.py --skin cuteskynet
 
 ## --------------------------------------------------------------- chores ----
 

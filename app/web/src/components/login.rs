@@ -34,7 +34,7 @@ use yew::prelude::*;
 use crate::actions;
 use crate::i18n::{t, Key, Lang};
 use crate::route::Route;
-use crate::session::{Auth, LoginLayout, Session, Theme};
+use crate::session::{Auth, LoginLayout, Session, Skin, Theme};
 use crate::state::{use_store, Action};
 use crate::vault::{self, Credential, StoredWallet};
 
@@ -602,6 +602,14 @@ pub fn login(p: &LoginProps) -> Html {
         }
     };
 
+    let set_skin = {
+        let store = store.clone();
+        move |k: Skin| {
+            let store = store.clone();
+            Callback::from(move |_: MouseEvent| store.dispatch(Action::SetSkin(k)))
+        }
+    };
+
     let set_layout = {
         let layout = layout.clone();
         move |next: LoginLayout| {
@@ -812,6 +820,26 @@ pub fn login(p: &LoginProps) -> Html {
                                     onclick={set_theme(t)}
                                 >{ glyph }<span>{ label }</span></button>
                             }) }
+                    </div>
+                    // The skin belongs on this screen for the same reason the
+                    // language and the theme do: it is a preference about how
+                    // the product looks, and Settings — where it otherwise
+                    // lives — is on the far side of a sign-in. Someone who
+                    // wants the cute one should not have to look at the other
+                    // one first.
+                    <div class="fn-seg" role="group" aria-label={t(lang, Key::skin)}>
+                        { for Skin::ALL.into_iter().map(|k| html! {
+                                <button
+                                    type="button"
+                                    class="fn-seg__btn"
+                                    data-skin-sample={k.as_str()}
+                                    aria-pressed={(store.skin == k).to_string()}
+                                    onclick={set_skin(k)}
+                                >
+                                    { icons::palette(15) }
+                                    <span>{ super::common::skin_label(lang, k) }</span>
+                                </button>
+                        }) }
                     </div>
                     <div class="fn-seg" role="group" aria-label={t(lang, Key::layout)}>
                         { for [(LoginLayout::Vertical, t(lang, Key::login_vertical), icons::rows(15)),
@@ -1164,7 +1192,7 @@ pub fn login(p: &LoginProps) -> Html {
                                 <li>{ t(lang, Key::phrase_nobody_recovers) }</li>
                                 <li>{ t(lang, Key::phrase_anyone_reads) }</li>
                             </ul>
-                            <p><Addr address={address} full=true /></p>
+                            <p><Addr address={address} revealable=true /></p>
                             <div class="fn-row">
                                 <button type="button" class="topcoat-button" onclick={on_copy_phrase}>
                                     { icons::copy(16) }{ " " }{ t(lang, Key::copy_phrase) }

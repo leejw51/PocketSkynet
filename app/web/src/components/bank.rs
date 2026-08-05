@@ -453,9 +453,10 @@ pub fn bank_page() -> Html {
                         let subtitle = net.name.clone();
                         Callback::from(move |_: MouseEvent| {
                             super::spotlight::show(super::spotlight::Spot {
-                                image: "/static/img/bank-emblem.png".into(),
+                                image: crate::asset::img(store.skin, "bank-emblem"),
                                 title: title.clone(),
                                 subtitle: Some(subtitle.clone()),
+                                address: None,
                                 copy: None,
                                 hue: 190,
                             });

@@ -8,7 +8,7 @@ use yew::prelude::*;
 
 use crate::i18n::{t, Key, Lang};
 use crate::route::Route;
-use crate::session::{ConnectionMode, FontFace, FontScale, ShellLayout, Theme};
+use crate::session::{ConnectionMode, FontFace, FontScale, ShellLayout, Skin, Theme};
 use crate::state::{use_store, Action, Confirm, ConfirmAction, Modal};
 
 use super::common::{Addr, Back, Ident, IdentSize};
@@ -105,14 +105,14 @@ pub fn settings(p: &SettingsProps) -> Html {
                         image={store.auth.profile_image().map(str::to_owned)}
                         zoom={crate::components::common::Zoom {
                             title: username.clone(),
-                            subtitle: Some(address.to_checksummed()),
-                            copy: Some(address.to_checksummed()),
+                            subtitle: None,
+                            address: Some(address.clone()),
                         }}
                     />
                     <div class="fn-grow fn-stack">
                         <strong>{ &username }</strong>
                         <div class="fn-row">
-                            <Addr address={address.clone()} full=true />
+                            <Addr address={address.clone()} revealable=true />
                             <button
                                 type="button"
                                 class="topcoat-icon-button--quiet"
@@ -234,6 +234,37 @@ pub fn settings(p: &SettingsProps) -> Html {
                                     aria-checked={(store.theme == t).to_string()}
                                     onclick={set_theme(t, store.clone())}
                                 >{ label }</button>
+                            }) }
+                        </div>
+                    </div>
+
+                    // Directly under Appearance, and deliberately: the two are
+                    // the same question asked twice — how bright, and what
+                    // does it look like — and a reader who has just set one
+                    // should find the other without hunting.
+                    <div class="fn-picklist__row">
+                        { icons::palette(18) }
+                        <span class="fn-grow">{ t(lang, Key::skin) }</span>
+                        <div class="fn-row" role="radiogroup" aria-label={t(lang, Key::skin)}>
+                            { for Skin::ALL.into_iter().map(|k| {
+                                let store = store.clone();
+                                html! {
+                                    <button
+                                        type="button"
+                                        role="radio"
+                                        class="topcoat-button"
+                                        // Each button wears the skin it
+                                        // selects, so the choice is shown
+                                        // rather than described — the same
+                                        // trick `data-font-sample` plays for
+                                        // the typeface row.
+                                        data-skin-sample={k.as_str()}
+                                        aria-checked={(store.skin == k).to_string()}
+                                        onclick={Callback::from(move |_: MouseEvent| {
+                                            store.dispatch(Action::SetSkin(k));
+                                        })}
+                                    >{ super::common::skin_label(lang, k) }</button>
+                                }
                             }) }
                         </div>
                     </div>

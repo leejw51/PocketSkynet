@@ -23,12 +23,15 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use pocketskynet_core::WalletAddress;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use yew::prelude::*;
 
 use crate::i18n::{t, Key};
 use crate::state::use_store;
+
+use super::icons;
 
 // ------------------------------------------------------------------ the API --
 
@@ -39,8 +42,25 @@ pub struct Spot {
     pub image: String,
     /// The name under the portrait, set in the display face.
     pub title: String,
-    /// A quieter second line — an address, a role.
+    /// A quieter second line — a role, a description. **Not** an address:
+    /// those go in [`Self::address`], which knows how to render one.
     pub subtitle: Option<String>,
+    /// The wallet this portrait belongs to, when it belongs to one.
+    ///
+    /// Passed as the address rather than as a pre-formatted string so the
+    /// stage — one place — decides how an address is shown. It arrives
+    /// abbreviated in EIP-55 casing and stays that way until the reveal
+    /// button is pressed.
+    ///
+    /// The default is the short form because of where this thing appears:
+    /// full-screen, at the largest type in the product, raised by a *tap on a
+    /// face*. Nobody taps a portrait to read forty-two characters — they tap
+    /// it to see the picture — and forty-two mono characters across a phone
+    /// wrap to three lines under the name. The four leading and four trailing
+    /// characters are what an address is actually *checked* by; the full
+    /// string is what it is pasted by, and the copy button already covers
+    /// that without anyone reading a character of it.
+    pub address: Option<WalletAddress>,
     /// When set, a copy button appears and copies this value (the wallet
     /// address, so the old top-bar copy gesture survives inside the stage).
     pub copy: Option<String>,
@@ -77,19 +97,24 @@ pub fn show(spot: Spot) {
 /// hash-picked art — because the spotlight is the zoomed view of the tile
 /// that was tapped, and the two showing different faces reads as a bug.
 pub fn show_identity(
+    skin: crate::session::Skin,
     seed: &str,
     image: Option<&str>,
     title: String,
     subtitle: Option<String>,
-    copy: Option<String>,
+    address: Option<WalletAddress>,
 ) {
     show(Spot {
         image: image
-            .and_then(crate::identity::avatar_src)
-            .unwrap_or_else(|| format!("/static/img/{}.png", crate::identity::art_for(seed))),
+            .and_then(|i| crate::identity::avatar_src(skin, i))
+            .unwrap_or_else(|| crate::asset::img(skin, crate::identity::art_for(seed))),
         title,
         subtitle,
-        copy,
+        // The copy button copies the *full* checksum however little of it is
+        // on screen — the visible truncation is a reading aid, never what
+        // lands on the clipboard.
+        copy: address.as_ref().map(WalletAddress::to_checksummed),
+        address,
         hue: crate::identity::hue_for(seed),
     });
 }
@@ -190,6 +215,13 @@ pub fn spotlight_layer() -> Html {
     let spot = use_state(|| Option::<Spot>::None);
     let canvas_ref = use_node_ref();
     let tilt_ref = use_node_ref();
+    // Whether the address is showing in full. Held here rather than in `Spot`
+    // because it is a property of *this viewing*, not of the thing being
+    // viewed — and it has to start false on every open, which the reset effect
+    // below guarantees. Without that reset, revealing one person's address
+    // would silently reveal the next portrait's too, since the layer is a
+    // singleton and never unmounts between opens.
+    let revealed = use_state(|| false);
 
     let reduced = web_sys::window()
         .and_then(|w| {
@@ -209,6 +241,18 @@ pub fn spotlight_layer() -> Html {
             });
             EMIT.with(|e| *e.borrow_mut() = Some(cb));
             || EMIT.with(|e| *e.borrow_mut() = None)
+        });
+    }
+
+    // Every open starts hidden again. Keyed on the address rather than on
+    // `is_some`, so tapping straight from one face to another — which never
+    // passes through a closed state — also re-hides.
+    {
+        let revealed = revealed.clone();
+        let key = spot.as_ref().and_then(|s| s.address.clone());
+        use_effect_with(key, move |_| {
+            revealed.set(false);
+            || ()
         });
     }
 
@@ -254,6 +298,15 @@ pub fn spotlight_layer() -> Html {
     };
 
     let close = Callback::from(|_: MouseEvent| send(Op::Close));
+
+    let toggle_reveal = {
+        let revealed = revealed.clone();
+        Callback::from(move |e: MouseEvent| {
+            // The scrim closes the stage on click; revealing must not.
+            e.stop_propagation();
+            revealed.set(!*revealed);
+        })
+    };
 
     // The 3D lean: the stage looks at the pointer. Written straight onto the
     // node's style attribute — a re-render per mousemove would be absurd.
@@ -310,11 +363,46 @@ pub fn spotlight_layer() -> Html {
                         if let Some(sub) = &s.subtitle {
                             <span class="fn-spot__sub fn-nums">{ sub }</span>
                         }
-                        if let Some(copy) = copy {
-                            <button type="button" class="topcoat-button" onclick={copy}>
-                                { t(store.language, Key::copy_address) }
-                            </button>
+                        if let Some(address) = &s.address {
+                            // `aria-label` carries the whole checksum whether
+                            // or not it is on screen, so a screen reader is
+                            // never given the abbreviation to read out — the
+                            // same contract `Addr` keeps (DESIGN.md §17).
+                            <span
+                                class="fn-spot__addr fn-nums"
+                                data-revealed={revealed.then_some("true")}
+                                aria-label={t(store.language, Key::wallet_address_aria)
+                                    .replace("{address}", &address.to_checksummed())}
+                            >{
+                                if *revealed {
+                                    address.to_checksummed()
+                                } else {
+                                    address.abbreviated_checksummed()
+                                }
+                            }</span>
                         }
+                        <div class="fn-spot__actions">
+                            if s.address.is_some() {
+                                <button
+                                    type="button"
+                                    class="topcoat-button"
+                                    aria-pressed={revealed.to_string()}
+                                    onclick={toggle_reveal}
+                                >
+                                    { if *revealed { icons::eye_off(16) } else { icons::eye(16) } }
+                                    <span>{ t(store.language, if *revealed {
+                                        Key::hide_full_address
+                                    } else {
+                                        Key::view_full_address
+                                    }) }</span>
+                                </button>
+                            }
+                            if let Some(copy) = copy {
+                                <button type="button" class="topcoat-button" onclick={copy}>
+                                    { t(store.language, Key::copy_address) }
+                                </button>
+                            }
+                        </div>
                     </figcaption>
                 </figure>
             </div>
