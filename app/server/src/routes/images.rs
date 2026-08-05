@@ -67,13 +67,19 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/images", post(upload))
         .route("/images/import", post(import))
-        .route("/images/{name}", get(serve))
         // Overrides the 100 KB API-wide default: this is the one endpoint
         // whose whole point is a body bigger than that. Innermost layer
         // wins, so the general limit still applies everywhere else. The
         // per-kind caps below are what actually bound a stored file; this
         // only has to be the larger of the two.
         .layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES))
+}
+
+/// The serving route, split out for the media rate-limit budget — same
+/// reasoning as `files::media_router`: an AI-generated video hosted here is
+/// played by a `<video>` element, and playback is many requests by design.
+pub fn media_router() -> Router<AppState> {
+    Router::new().route("/images/{name}", get(serve))
 }
 
 /// The media types the AI providers actually emit. A server that stores

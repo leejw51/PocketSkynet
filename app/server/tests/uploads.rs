@@ -840,3 +840,56 @@ async fn a_long_upload_is_not_throttled_into_failing() {
     }
     assert_eq!(finish(&server, &alice, &id).await.status, 201);
 }
+
+#[tokio::test]
+async fn a_playing_video_does_not_exhaust_its_viewers_budget() {
+    // A <video> streams by firing many small Range requests — Safari probes an
+    // mp4 with dozens to hundreds of tiny ranges before it plays a frame.
+    // These used to draw from the general 100/min budget, so one film burned
+    // its viewer's entire allowance and then 429'd everything else from that
+    // IP, including the login challenge after a refresh. That is the literal
+    // screenshot this test is transcribed from.
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    let room = create_room(&alice.api, "ops").await;
+
+    let data = payload(50_000);
+    let meta = upload_in_chunks(&server, &alice, &room, "clip.mp4", &data, 16_000).await;
+    let id = meta["id"].as_str().unwrap();
+    let path = format!("/api/files/{id}/raw");
+
+    // Well past the general budget of 100.
+    for i in 0..150u64 {
+        let r = send(
+            &server,
+            Some(&alice),
+            reqwest::Method::GET,
+            &path,
+            None,
+            Some(&format!("bytes={}-{}", i, i + 63)),
+        )
+        .await;
+        assert_eq!(
+            r.status, 206,
+            "range request {i} was refused — media is back on the general budget"
+        );
+    }
+
+    // And the viewer can still do ordinary things afterwards: the whole point
+    // is that playback must not poison the rest of the session.
+    let after = send(
+        &server,
+        Some(&alice),
+        reqwest::Method::GET,
+        "/api/rooms",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        after.status,
+        200,
+        "playback exhausted the general budget: {}",
+        String::from_utf8_lossy(&after.bytes)
+    );
+}

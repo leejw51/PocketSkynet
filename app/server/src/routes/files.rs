@@ -105,6 +105,24 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/rooms/{roomId}/files", post(upload).get(list))
         .route("/files/{id}", get(detail).delete(remove))
+        // Innermost wins, so the 100 KB API-wide default is lifted here only.
+        // It applies to the GETs in this router too, which is harmless.
+        .layer(DefaultBodyLimit::max(MAX_FILE_BYTES))
+}
+
+/// The two routes a `<video>` or `<img>` hammers while rendering media, split
+/// out so `routes/mod.rs` can put them on the media rate-limit budget instead
+/// of the general one.
+///
+/// This split is load-bearing, not organisational. Range streaming *means*
+/// many requests — Safari probes an mp4 with dozens to hundreds of tiny ranges
+/// before it plays a frame — and under the general 100/min budget one film
+/// exhausted the caller's whole allowance and then 429'd everything else that
+/// device did, including signing back in. Authorisation is unchanged: every
+/// one of these requests still verifies its capability or bearer token and
+/// membership.
+pub fn media_router() -> Router<AppState> {
+    Router::new()
         .route("/files/{id}/raw", get(download))
         // GET as well as POST, and GET is what clients should use. Minting a
         // capability reads state and changes none, so it was only ever a POST
@@ -116,9 +134,6 @@ pub fn router() -> Router<AppState> {
             "/files/{id}/download-token",
             get(download_token).post(download_token),
         )
-        // Innermost wins, so the 100 KB API-wide default is lifted here only.
-        // It applies to the GETs in this router too, which is harmless.
-        .layer(DefaultBodyLimit::max(MAX_FILE_BYTES))
 }
 
 #[derive(Debug, Deserialize)]

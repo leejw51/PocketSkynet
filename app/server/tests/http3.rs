@@ -163,6 +163,52 @@ impl H3Client {
         }
     }
 
+    /// A request whose body is raw bytes — an upload chunk. The JSON helper
+    /// above cannot express this, and expressing it matters: the browser bug
+    /// this exists to catch involved 8 MB binary PATCH bodies over one QUIC
+    /// connection, which no JSON request ever produces.
+    async fn send_bytes(
+        &mut self,
+        method: http::Method,
+        path: &str,
+        token: Option<&str>,
+        payload: Bytes,
+    ) -> H3Response {
+        let mut builder = http::Request::builder()
+            .method(method)
+            .uri(format!("https://{}{path}", self.authority))
+            .header(http::header::CONTENT_TYPE, "application/octet-stream");
+        if let Some(token) = token {
+            builder = builder.header(http::header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let request = builder.body(()).expect("build the request");
+        let mut stream = self
+            .send
+            .send_request(request)
+            .await
+            .expect("send the request headers");
+        stream.send_data(payload).await.expect("send the body");
+        stream.finish().await.expect("finish the request stream");
+
+        let response = stream
+            .recv_response()
+            .await
+            .expect("receive the response headers");
+        let mut body = Vec::new();
+        while let Some(mut chunk) = stream.recv_data().await.expect("receive the body") {
+            while chunk.has_remaining() {
+                let piece = chunk.chunk().to_vec();
+                chunk.advance(piece.len());
+                body.extend_from_slice(&piece);
+            }
+        }
+        H3Response {
+            status: response.status(),
+            headers: response.headers().clone(),
+            body,
+        }
+    }
+
     async fn get(&mut self, path: &str, token: Option<&str>) -> H3Response {
         self.request(http::Method::GET, path, token, None).await
     }
@@ -643,6 +689,77 @@ async fn concurrent_requests_share_one_quic_connection() {
         let resp = client.get("/api/health", None).await;
         assert_eq!(resp.status, 200);
     }
+
+    client.close().await;
+}
+
+#[tokio::test]
+async fn a_chunked_upload_with_large_bodies_rides_one_quic_connection() {
+    // The browser shape of a video upload: one QUIC connection, a JSON begin,
+    // then sequential multi-megabyte binary PATCHes, then finish — and the
+    // connection must still be usable afterwards. A transport that survives
+    // JSON but dies under 8 MB-class bodies looks exactly like "uploading a
+    // video breaks HTTPS", which is why this exists.
+    let server = TestServer::start_http3().await;
+    let user = common::new_user(&server, "quicuploader").await;
+    let room = common::create_room(&user.api, "films").await;
+
+    let mut client = H3Client::connect(&server).await;
+    let token = user.api.token().to_string();
+
+    // Not a multiple of the chunk size, so the final short chunk is real.
+    let chunk = 2 * 1024 * 1024;
+    let data: Vec<u8> = (0..(chunk * 3 + 12_345)).map(|i| (i % 251) as u8).collect();
+    let digest = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&data))
+    };
+
+    let begun = client
+        .post(
+            "/api/uploads",
+            Some(&token),
+            json!({
+                "kind": "file",
+                "roomId": room,
+                "filename": "quic.bin",
+                "size": data.len(),
+                "sha256": digest,
+            }),
+        )
+        .await;
+    assert_eq!(begun.status, 201, "begin over QUIC: {:?}", begun.json());
+    let id = begun.json()["id"]
+        .as_str()
+        .expect("a session id")
+        .to_string();
+
+    for (i, piece) in data.chunks(chunk).enumerate() {
+        let at = i * chunk;
+        let r = client
+            .send_bytes(
+                http::Method::PATCH,
+                &format!("/api/uploads/{id}?offset={at}"),
+                Some(&token),
+                Bytes::copy_from_slice(piece),
+            )
+            .await;
+        assert_eq!(r.status, 200, "chunk at {at} over QUIC: {:?}", r.json());
+    }
+
+    let done = client
+        .post(
+            &format!("/api/uploads/{id}/finish"),
+            Some(&token),
+            json!({}),
+        )
+        .await;
+    assert_eq!(done.status, 201, "finish over QUIC: {:?}", done.json());
+
+    // The connection is alive, not merely the requests answered: a fresh
+    // request on the same session must still work.
+    let health = client.get("/api/health", None).await;
+    assert_eq!(health.status, 200, "the connection died under the upload");
 
     client.close().await;
 }

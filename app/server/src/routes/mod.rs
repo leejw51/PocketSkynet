@@ -151,6 +151,13 @@ fn api_router(state: &AppState) -> Router<AppState> {
         crate::ratelimit::upload,
     ));
 
+    // Media serving likewise — a playing <video> is a stream of Range
+    // requests, and metering those against the general budget made one film
+    // exhaust its viewer's entire allowance and 429 everything after it.
+    let media = files::media_router().merge(images::media_router()).layer(
+        axum::middleware::from_fn_with_state(state.clone(), crate::ratelimit::media),
+    );
+
     let limited = Router::new()
         .merge(misc::router())
         .merge(auth::router(state))
@@ -173,6 +180,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
 
     unlimited
         .merge(uploads)
+        .merge(media)
         .merge(limited)
         .fallback(unknown_route)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
