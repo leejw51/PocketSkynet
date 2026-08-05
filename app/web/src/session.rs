@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | `ps-session` | JWT, wallet address, username | The JWT is a bearer credential the server issued and can be re-issued; storing it is what makes a reload not a sign-in. It grants **read** access to the account's rooms but, on its own, decrypts nothing. |
 //! | `ps-theme` | `light` \| `dark` \| absent | Cosmetic. |
-//! | `ps-skin` | `skynet` \| `cuteskynet` | Cosmetic; the art direction, independent of light/dark. Written before authentication like `ps-lang`, so the sign-in screen wears the chosen skin. |
+//! | `ps-skin` | `skynet` \| `cuteskynet` \| `humanskynet` | Cosmetic; the art direction, independent of light/dark. Written before authentication like `ps-lang`, so the sign-in screen wears the chosen skin. |
 //! | `ps-lang` | language tag | Cosmetic; deliberately written *before* authentication so the login screen itself remembers. |
 //! | `ps-connection-mode` | `websocket` \| `sse` \| `polling` | A user preference about transport, not a secret. |
 //! | `ps-login-layout` | `auto` \| `vertical` \| `horizontal` | Cosmetic; written before authentication, like `ps-lang`, so the sign-in screen itself remembers. |
@@ -330,14 +330,31 @@ pub enum Skin {
     /// The same product drawn as a friendly mecha: primary blue, visor gold,
     /// signal red, generous radii, soft shadows. §1b of app.css.
     Cute,
+    /// The same product drawn as a person: indigo and cyan screen-light,
+    /// cel-animated cyberpunk anime, and a guardian you cannot tell from a
+    /// human. §1c of app.css.
+    Human,
 }
 
 impl Skin {
-    pub const ALL: [Skin; 2] = [Skin::Skynet, Skin::Cute];
+    pub const ALL: [Skin; 3] = [Skin::Skynet, Skin::Cute, Skin::Human];
 
     pub fn load() -> Self {
-        match backend::get::<String>(KEY_SKIN).as_deref() {
+        Self::from_stored(backend::get::<String>(KEY_SKIN).as_deref())
+    }
+
+    /// The inverse of [`Self::as_str`], and split out of [`Self::load`] so it
+    /// can be tested: off the browser `backend` is a stub that stores nothing,
+    /// so a round-trip through `load` would pass for a skin that had never
+    /// been added to this match.
+    ///
+    /// Anything unrecognised is the default rather than an error. A stored
+    /// value can outlive the skin that wrote it — someone who chose a skin
+    /// that a later build removed should get the base one, not a blank app.
+    fn from_stored(value: Option<&str>) -> Self {
+        match value {
             Some("cuteskynet") => Skin::Cute,
+            Some("humanskynet") => Skin::Human,
             _ => Skin::Skynet,
         }
     }
@@ -348,6 +365,7 @@ impl Skin {
         match self {
             Skin::Skynet => "skynet",
             Skin::Cute => "cuteskynet",
+            Skin::Human => "humanskynet",
         }
     }
 
@@ -357,6 +375,7 @@ impl Skin {
         match self {
             Skin::Skynet => None,
             Skin::Cute => Some("cute"),
+            Skin::Human => Some("human"),
         }
     }
 
@@ -742,11 +761,14 @@ mod tests {
 
     #[test]
     fn skin_strings_are_the_values_app_css_matches_on() {
-        // §1b selects on `:root[data-skin="cuteskynet"]`. If this string and
-        // that selector ever disagree the app renders the base skin with the
-        // picker insisting the other one is chosen — a silent failure, since
-        // nothing errors and every asset still resolves.
+        // §1b selects on `:root[data-skin="cuteskynet"]` and §1c on
+        // `humanskynet`. If a string and its selector ever disagree the app
+        // renders the base skin with the picker insisting another one is
+        // chosen — a silent failure, since nothing errors and every asset
+        // still resolves. The pre-paint script in `index.html` matches on the
+        // same two strings and has the same stake in them.
         assert_eq!(Skin::Cute.as_str(), "cuteskynet");
+        assert_eq!(Skin::Human.as_str(), "humanskynet");
         assert_eq!(Skin::Skynet.as_str(), "skynet");
     }
 
@@ -761,19 +783,50 @@ mod tests {
     }
 
     #[test]
-    fn only_the_cute_skin_reaches_into_a_subdirectory() {
+    fn every_skin_but_the_default_has_its_own_directory() {
         // `asset::img` keys off `art_dir`, so a skin that claims a directory
-        // it has no files in would render nothing at all.
+        // it has no files in would render nothing at all — and two skins
+        // sharing one would render each other's.
         assert_eq!(Skin::Cute.art_dir(), Some("cute"));
+        assert_eq!(Skin::Human.art_dir(), Some("human"));
+        let mut dirs: Vec<&str> = Skin::ALL.iter().filter_map(|s| s.art_dir()).collect();
+        let before = dirs.len();
+        dirs.sort_unstable();
+        dirs.dedup();
+        assert_eq!(before, dirs.len(), "two skins share an art directory");
+        assert_eq!(
+            before,
+            Skin::ALL.len() - 1,
+            "only the default may have none"
+        );
     }
 
     #[test]
     fn every_skin_is_in_the_picker() {
         // Both pickers (login and Settings) iterate `ALL`; a variant missing
         // from it is a skin nobody can choose.
-        assert_eq!(Skin::ALL.len(), 2);
+        assert_eq!(Skin::ALL.len(), 3);
         assert!(Skin::ALL.contains(&Skin::Skynet));
         assert!(Skin::ALL.contains(&Skin::Cute));
+        assert!(Skin::ALL.contains(&Skin::Human));
+    }
+
+    #[test]
+    fn every_skin_round_trips_through_its_stored_string() {
+        // `as_str` writes and `from_stored` reads. A variant added to one and
+        // not the other is a choice that silently reverts to Skynet the next
+        // time the app opens, with the picker still showing it as chosen.
+        for skin in Skin::ALL {
+            assert_eq!(
+                Skin::from_stored(Some(skin.as_str())),
+                skin,
+                "{} did not survive a reload",
+                skin.as_str()
+            );
+        }
+        // A skin that no longer exists, and no skin at all, both land on base.
+        assert_eq!(Skin::from_stored(Some("retiredskynet")), Skin::Skynet);
+        assert_eq!(Skin::from_stored(None), Skin::Skynet);
     }
 
     // ---- type preferences (`ps-font` / `ps-font-scale`) --------------------

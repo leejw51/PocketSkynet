@@ -144,18 +144,35 @@ room*; `data-skin` answers *what does the product look like*.
 | --- | --- |
 | *(none)* | `skynet` — machine cinema; `app.css` §1 |
 | `data-skin="cuteskynet"` | Friendly mecha; `app.css` §1b |
+| `data-skin="humanskynet"` | A guardian you cannot tell from a person; `app.css` §1c |
 
-They compose: every skin has a light and a dark face, so the two axes give four
+They compose: every skin has a light and a dark face, so the two axes give six
 appearances from one sheet. The picker is on the login screen and in Settings, and the
 choice persists under `ps-skin`.
 
+The three are deliberately an argument rather than three palettes. `skynet` shows you
+the machine — torn skin, chrome under it, a lit optic where an eye should be.
+`cuteskynet` shows you a toy. `humanskynet` shows you neither: same guardian, same job,
+and nothing in the picture gives her away. That premise is what decides its tokens —
+the machine is not allowed to be on her, so it moves into the environment, which is why
+cyan is *screen-light* in that skin (`--fn-info`, `--fn-glow`, the room insignia) and
+the brand is the indigo of the room. Reusing §1's cyan for the accent would have made
+it the machine skin with different pictures; the colour of the button you are about to
+press is the first thing anyone reads off an interface.
+
 A skin is a **block of token overrides**, never a second stylesheet. Sections 2–18 of
 `app.css` are written entirely against `--fn-*`, so restating the tokens is what makes a
-skin complete — and a rule added to §7 next month is themed by both skins the day it
+skin complete — and a rule added to §7 next month is themed by every skin the day it
 lands. The rule for anyone editing below §1b: *a hex value or a pixel radius outside
-§1/§1b is a bug.* Two of them were, and the second skin is what exposed them — the CTA
-fill and the whole sign-in cold open had been literal `hsl(190 …)` since they were
+§1/§1b/§1c is a bug.* Two of them were, and the second skin is what exposed them — the
+CTA fill and the whole sign-in cold open had been literal `hsl(190 …)` since they were
 written, invisible for as long as the only accent happened to be that same cyan.
+
+"Complete" is checkable and worth checking: §1b and §1c restate the same 119 tokens, and
+a skin that restates 118 of them inherits one value from the machine skin in a place
+nobody will look. `--fn-info-fill` in §1c is 5% darker than its `--fn-info` for exactly
+this kind of reason — a fill carries white ink and owes 4.5:1, where the same colour as
+a mark owes only 3:1.
 
 Imagery is the other half. CSS cannot build a `url()` from parts, so every illustration
 is named once in the §1.1 art registry (`--img-*`) and a skin repoints the entries it
@@ -173,9 +190,22 @@ Two things that look like conveniences and are not:
   replaced were each individually correct; what they could not be was correct *for the
   skin in effect*, and that failure renders as the wrong picture rather than as an error.
 
-Generating a skin's art: `make assets-cute`, or `tools/genart.py --skin cuteskynet`. Its
-`CUTE_PROMPTS` and `asset.rs::CUTE_ART` are one contract in two files, and `cargo test`
-fails if they drift.
+Generating a skin's art: `make assets-cute` / `make assets-human`, or
+`tools/genart.py --skin <name>`. Each skin's prompt table in `genart.py` and its array in
+`asset.rs` are one contract in two files, and `cargo test` fails if they drift.
+
+Prompts per skin are written out in full rather than derived from the base one with a
+style clause: "a chrome endoskeleton skull, but cute" produces a chrome endoskeleton
+skull. The subject has to change too. `humanskynet` needs this more than either — the
+absence of chrome is the whole skin, and a prompt that merely omits it gets it anyway, so
+every portrait says *no chrome, no seams, no implants* out loud.
+
+One rule survives every art direction: **operators are somebody, rooms are somewhere**,
+and at 40px the silhouette alone has to say which. `skynet` draws that as a half-human
+face against a machine sigil, `cuteskynet` as a helmeted pilot against an enamel badge,
+`humanskynet` as a lit human portrait against a flat glowing insignia. Different
+vocabulary, same distinction — an emblem has no gaze, and a gaze is what makes a picture
+somebody.
 
 ### 2.2 Colour tokens
 

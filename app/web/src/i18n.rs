@@ -894,6 +894,7 @@ strings! {
     (skin, "Skin", "스킨", "スキン", "外觀", "Vzhled", "Aspecto", "外观", "Skin"),
     (skin_skynet, "Skynet", "스카이넷", "スカイネット", "Skynet", "Skynet", "Skynet", "Skynet", "Skynet"),
     (skin_cute, "Cute Skynet", "귀여운 스카이넷", "キュートスカイネット", "可愛 Skynet", "Roztomilý Skynet", "Skynet tierno", "可爱 Skynet", "Niedliches Skynet"),
+    (skin_human, "Human Skynet", "휴먼 스카이넷", "ヒューマンスカイネット", "人類 Skynet", "Lidský Skynet", "Skynet humano", "人类 Skynet", "Menschliches Skynet"),
     (skin_change, "Skin: {skin}. Change.", "스킨: {skin}. 변경.", "スキン: {skin}。変更。", "外觀：{skin}。變更。", "Vzhled: {skin}. Změnit.", "Aspecto: {skin}. Cambiar.", "外观：{skin}。更改。", "Skin: {skin}. Ändern."),
     (bank_quick_actions, "Quick actions", "빠른 작업", "クイック操作", "快捷操作", "Rychlé akce", "Acciones rápidas", "快捷操作", "Schnellaktionen"),
     (bank_receive, "Receive", "받기", "受け取る", "收款", "Přijmout", "Recibir", "收款", "Empfangen"),

@@ -851,6 +851,7 @@ pub fn skin_label(lang: crate::i18n::Lang, skin: crate::session::Skin) -> &'stat
         match skin {
             crate::session::Skin::Skynet => Key::skin_skynet,
             crate::session::Skin::Cute => Key::skin_cute,
+            crate::session::Skin::Human => Key::skin_human,
         },
     )
 }

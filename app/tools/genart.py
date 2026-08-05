@@ -11,21 +11,23 @@ recognisably the same artwork.
 **Skin** is the art direction — the product's whole visual identity. `skynet`
 is the machine-cinema set this file has always generated, and it writes to
 `web/static/img/`. `cuteskynet` is the friendly-mecha set, and it writes to
-`web/static/img/cute/`, where `web/src/asset.rs` looks for it.
+`web/static/img/cute/`. `humanskynet` is the one that looks like a person, and
+it writes to `web/static/img/human/`. `web/src/asset.rs` looks for both.
 
-A skin does *not* have to redraw everything. Only assets carrying a `cute`
-prompt are generated for that skin, and `asset.rs::CUTE_ART` is the same list
-on the Rust side — anything missing falls back to the base artwork rather than
+A skin does *not* have to redraw everything. Only assets carrying that skin's
+prompt key are generated for it, and `asset.rs::art_list` is the same list on
+the Rust side — anything missing falls back to the base artwork rather than
 rendering nothing. Keep the two in step; `cargo test` checks that every stem
-`CUTE_ART` promises is actually a file on disk.
+those arrays promise is actually a file on disk.
 
 Requires GROK_API_KEY. Assets are checked in, so this only needs re-running
 when the manifest below changes:
 
-    make assets            # generate anything missing, both skins
+    make assets            # generate anything missing, every skin
     make assets-force      # regenerate everything
     make assets-cute       # only the cute skin
-    tools/genart.py --only empty-rooms --variant dark --skin cuteskynet
+    make assets-human      # only the human skin
+    tools/genart.py --only empty-rooms --variant dark --skin humanskynet
 """
 
 from __future__ import annotations
@@ -50,18 +52,21 @@ OUT_DIR = ROOT / "web" / "static" / "img"
 
 # --- skins ------------------------------------------------------------------
 #
-# The base skin's prompts are the `prompt` key on each manifest entry; a second
-# skin supplies its own under `cute`. Deliberately a separate prompt rather than
-# the same subject with a style clause bolted on: "a chrome endoskeleton skull,
-# but cute" produces a chrome endoskeleton skull. The subject has to change too,
-# and the only way to say what it changes *to* is to write it out.
+# The base skin's prompts are the `prompt` key on each manifest entry; every
+# other skin supplies its own under a key of its own. Deliberately a separate
+# prompt rather than the same subject with a style clause bolted on: "a chrome
+# endoskeleton skull, but cute" produces a chrome endoskeleton skull. The
+# subject has to change too, and the only way to say what it changes *to* is to
+# write it out.
 #
 # `dir` is relative to OUT_DIR and matches `session.rs::Skin::art_dir`.
 SKIN_SKYNET = "skynet"
 SKIN_CUTE = "cuteskynet"
+SKIN_HUMAN = "humanskynet"
 SKINS = {
     SKIN_SKYNET: {"dir": None, "key": "prompt"},
     SKIN_CUTE: {"dir": "cute", "key": "cute"},
+    SKIN_HUMAN: {"dir": "human", "key": "human"},
 }
 
 # The cute skin's shared spine, read off `cuteskynet.jpg`: one small blue-and-
@@ -96,6 +101,149 @@ CUTE_PALETTE = {
     ),
 }
 
+# --- the human skin's spine --------------------------------------------------
+#
+# Read off `humanskynet.jpg`: long midnight hair, a matte black suit, a wall of
+# cool data-light behind her.
+#
+# The premise is one sentence long and it is the whole skin: *this is a Skynet
+# you cannot tell from a person*. The base set shows the machine — torn skin,
+# chrome under it, a lit optic where an eye should be — and the cute set shows a
+# toy. This one shows neither, and it has to say so out loud in every prompt,
+# because "Skynet" in a prompt is an enormous pull toward exactly the chrome this
+# skin is defined by not having. HUMAN_ONLY_HUMAN and the last clause of
+# HUMAN_LEAD_F/M are that sentence; they are not decoration and not safe to trim.
+#
+# # The register, and the two it is not
+#
+# Modern Japanese anime *key visual* — the high-polish digital illustration a
+# series is sold with. Both of the other candidates were tried and rejected
+# against the reference, and the rejections are worth keeping, because each one
+# is a plausible reading of the same words:
+#
+#   * "Semi-realistic modern anime" produces competent illustration with the
+#     anime sanded off — real proportions, small eyes, matte skin. It is the
+#     safe answer and it looks like stock art.
+#   * Late-90s cel animation — hand-inked contours, hard shadow steps, painted
+#     backgrounds — is a *better* thematic fit than what shipped, and it was
+#     genuinely tempting: a cyborg you cannot pick out of a crowd is that genre's
+#     entire subject. But it is not what the reference looks like, and a skin is
+#     judged on the artwork, not on the argument behind it.
+#
+# What the reference actually is: luminous. Airbrushed shading that blends
+# instead of stepping, skin lit from within, hair as glossy ribbons carrying
+# hard cyan-white speculars, and eyes doing most of the work — large, wet,
+# multi-highlighted, drawn with more care than the rest of the face combined.
+# That last part is the whole style; a prompt that gets everything else right and
+# the eyes wrong lands back in the first bullet.
+HUMAN_STYLE = (
+    "Modern Japanese anime key visual, high-polish digital illustration: clean "
+    "crisp linework, soft airbrushed shading that blends smoothly rather than "
+    "stepping, luminous fair skin lit from within, strong cool rim lighting "
+    "along the edges, glossy blue-black hair drawn as flowing ribbons with hard "
+    "cyan-white specular bands, a cool palette of deep indigo and midnight navy "
+    "under cyan screen-light, polished and delicate rather than gritty. "
+    "Stylish and fashion-forward: sleek sculpted silhouettes, sharp tailored "
+    "lines, everything looking deliberately designed rather than merely worn. "
+    "No text, no letters, no numbers, no watermark, no UI chrome."
+)
+
+# The face rule, applied wherever a person appears, and kept apart from the
+# style spine because it is the single clause the whole register hangs on. Left
+# to itself an image model renders "anime" as a real face with flat colour; the
+# eyes are what make it anime, and they have to be specified in more detail than
+# anything else in the prompt or they arrive small and dry.
+HUMAN_FACES = (
+    "Large luminous anime eyes doing most of the work: detailed irises with "
+    "visible colour gradients, a bright ring of light around the pupil, several "
+    "crisp white highlights, long dark lashes and a fine eyeliner sweep. "
+    "Smooth features, small nose, soft mouth, the faintest blush. Calm and "
+    "composed, looking straight at the viewer."
+)
+
+# The `m`/`f` split for the chooseable gallery, and it does two jobs.
+#
+# The first is the register: a key visual draws people as *attractive*, and
+# leaving that unsaid gets a competent neutral face that reads as a different
+# style sitting in the same grid.
+#
+# The second is a correctness one that the earlier, more naturalistic pass got
+# wrong badly enough to notice: `tp-coder-m` and `tp-coder-f` came back as very
+# nearly the same person. Those slugs are a wire contract — `preset:tp-coder-f`
+# is what is stored and every client resolves it — so a grid whose pairs cannot
+# be told apart is a picker that cannot be used. Naming the distinction is what
+# fixes it; the previous prompts left it entirely to "man"/"woman" and the
+# model, quite reasonably, drew two adults.
+HUMAN_PROFILE_SUBJECT = {
+    "m": "a handsome young adult man, strong clean jawline, well-groomed",
+    "f": "a beautiful young adult woman, delicate features, elegant",
+}
+
+# The two leads.
+#
+# There are two rather than one because the skin is called *Human*, and one face
+# would quietly make the skin about her instead of about the premise. Two people,
+# wearing the same uniform, doing the product's jobs between them, is the idea
+# stated properly: any of these could be it, and you cannot tell which.
+#
+# Each is spelled out in full at every appearance rather than referred to,
+# because forty separate generations have no memory of each other — "the same
+# woman" is a thing only literal repetition buys. The shared clauses (the suit,
+# the hair treatment, the closing denial) are identical between them on purpose:
+# it is what makes them read as two of a kind rather than as two stock portraits.
+#
+# The last clause is the load-bearing one and is not safe to trim. "Skynet" is
+# not in these prompts at all and the chrome still tries to arrive.
+_HUMAN_SUIT = (
+    "wearing a matte black high-collared tactical bodysuit with fine panel "
+    "seams and a small glowing cyan insignia on the chest"
+)
+_HUMAN_DENIAL = (
+    "completely and ordinarily human: unbroken skin, natural human eyes, no "
+    "chrome, no seams or panel lines on the face or body, no glowing implants, "
+    "no exposed machinery, nothing anywhere that gives away what they are"
+)
+HUMAN_LEAD_F = (
+    "a beautiful young adult woman with long wavy midnight blue-black hair "
+    "falling past her shoulders in glossy ribbons lit with cyan-white "
+    f"highlights, large luminous violet-blue eyes and fair skin, {_HUMAN_SUIT}. "
+    f"She looks {_HUMAN_DENIAL}"
+)
+HUMAN_LEAD_M = (
+    "a handsome young adult man with short swept-back midnight blue-black hair "
+    "lit with cyan-white highlights, a strong clean jawline, calm luminous "
+    f"violet-blue eyes and fair skin, {_HUMAN_SUIT}. He looks {_HUMAN_DENIAL}"
+)
+
+# Which of the two wears which of the product's faces.
+#
+# Assigned per *feature* rather than per asset, so a screen never changes who it
+# is halfway through: the Bank is him across its emblem, its banker and its chat
+# avatar; the Wallet and Shout are hers. The mark and the cold open are hers
+# because they are the reference image itself, and the assistant is hers because
+# it is the same character the mark is.
+#
+# `skynet-hero` is the exception and the reason the split is legible at all: the
+# sign-in backdrop is the one wide frame in the set that can hold two people, and
+# it is the first screen anyone sees. Putting both of them there is the skin
+# saying out loud that it has more than one face.
+
+# The human skin's two backgrounds. Flat and edge-to-edge, like the other sets',
+# so the PNG can sit on a themed surface without a visible seam.
+HUMAN_PALETTE = {
+    "light": (
+        "Palette: bright cool daylight, indigo and cyan reading clearly against "
+        "a flat pale cool grey-lilac #EEF0F7 background filling the whole "
+        "frame, soft diffused light, one gentle contact shadow."
+    ),
+    "dark": (
+        "Palette: cool night lighting, the indigo deepened and the cyan "
+        "screen-light glowing, on a flat deep midnight indigo #10142A "
+        "background filling the whole frame, soft cyan rim light along the top "
+        "edges, calm rather than menacing."
+    ),
+}
+
 # Shared style spine. Repeated verbatim in every prompt so the set reads as one
 # system rather than six unrelated pictures.
 STYLE = (
@@ -121,6 +269,14 @@ PALETTE = {
         "background filling the whole frame. Accents glow as if lit from "
         "within, HUD-like, tuned for a dark sci-fi user interface."
     ),
+}
+
+# Each skin's pair of backgrounds, keyed the way SKINS is. A separate table only
+# because a palette has to be written before it can be named.
+PALETTES = {
+    SKIN_SKYNET: PALETTE,
+    SKIN_CUTE: CUTE_PALETTE,
+    SKIN_HUMAN: HUMAN_PALETTE,
 }
 
 # --- identity art -----------------------------------------------------------
@@ -272,6 +428,31 @@ def _profile_manifest() -> list[dict[str, object]]:
                         f"{CUTE_PROFILE_CHARACTERS[slug]} Head-on framing. "
                         + CUTE_IDENTITY_STYLE
                     ),
+                    # The one place the human skin needs no translation table.
+                    # The base gallery's characteristics are already *human*
+                    # ones — a coder's glasses, a chef's flour — carried on the
+                    # human half of a torn face; this skin simply keeps the
+                    # half that was already there and drops the machine. Which
+                    # is the skin's whole argument, arriving for free: the
+                    # picker asks "which kind of person is your human side",
+                    # and here there is no other side to ask about.
+                    # "Face filling the frame" — the phrasing the base and cute
+                    # prompts use — is read literally in this register and
+                    # comes back cropped through the hairline and the chin,
+                    # which in a grid of twenty reads as twenty broken images
+                    # rather than as a tight crop. The op-* prompts escape it
+                    # because "symmetrical head-on framing" pulls the camera
+                    # back; here the whole head is asked for outright.
+                    "human": (
+                        f"Close-up anime key-visual bust portrait of "
+                        f"{HUMAN_PROFILE_SUBJECT[sex]}, head and shoulders "
+                        "filling the frame with the whole head visible and a "
+                        "little space above the hair — not cropped through the "
+                        f"hairline or the chin. {look[0].upper() + look[1:]}. "
+                        "Calm, not menacing. Head-on framing. "
+                        f"{HUMAN_FACES} {HUMAN_ONLY_HUMAN} "
+                        + HUMAN_IDENTITY_STYLE
+                    ),
                 }
             )
     return out
@@ -345,6 +526,77 @@ CUTE_IDENTITY_STYLE = (
 )
 
 
+# The human skin's answer to the same two tables.
+#
+# The somebody/somewhere split is the one thing every skin has to keep, and this
+# is the skin where it is easiest to lose: a set drawn entirely in human anime
+# has no machine-versus-human silhouette to lean on. So it falls to the kind of
+# object instead — a lit human face against a flat glowing heraldic glyph. At
+# 40px a portrait and an insignia are never confused, which is all the split has
+# ever needed to be.
+#
+# Ten operators who are ten different people, not one person under ten lights,
+# and drawn the way a key visual draws people: handsome men, beautiful women.
+# The hue does the identifying at small sizes, but a face is what the eye reaches
+# for first, so hair and bearing move too — a colour-only set reads as one
+# operator with a broken avatar cache.
+HUMAN_OPERATOR_LOOKS = {
+    "amber": "a beautiful woman with short warm-brown hair, lit by amber "
+             "lamplight, a honey-gold collar",
+    "cyan": "a handsome man with pale silver-blond hair, lit by cool cyan "
+            "screen-light, an ice-blue collar",
+    "crimson": "a beautiful woman with sharp black hair cut to the jaw, lit by "
+               "deep crimson light, a dark red collar",
+    "emerald": "a handsome man with dark curls and a neat short beard, lit by "
+               "fresh emerald-green light, a mint collar",
+    "violet": "a beautiful woman with long ash-grey hair, lit by soft violet "
+              "light, a lavender collar",
+    "gold": "a handsome older man with close-cropped hair and a sharp "
+            "weathered face, lit by rich gold light, a brass collar",
+    "steel": "a beautiful woman with a striking pale blonde undercut, lit by "
+             "cool silver light, a raw steel collar",
+    "rose": "a handsome man with soft dark hair falling over one eye, lit by "
+            "rose-pink light, a blush collar",
+    "teal": "a beautiful woman with black braided hair coiled up, lit by deep "
+            "teal light, a sea-green collar",
+    "bronze": "a handsome man with heavy dark brows and swept-back hair, lit "
+              "by warm bronze light, a copper collar",
+}
+
+# Rooms stay objects. Drawn as flat glowing insignia rather than as things in a
+# room, which is what keeps them on the far side of the split from the portraits
+# above — an emblem has no gaze, and a gaze is what makes a picture somebody.
+HUMAN_ROOM_LOOKS = {
+    "skull": "a flat heraldic skull glyph, geometric and symmetrical",
+    "visor": "a rounded rectangular plate with one narrow horizontal scanning "
+             "band lit across it",
+    "core": "a bright sphere caged inside a ring of angular brackets",
+    "sentinel": "a tall narrow watchtower glyph with two vertical slit lights",
+    "hunter": "a swept arrowhead glyph with a single wide lens at its point",
+    "relay": "concentric broadcast rings radiating from one small lit node",
+    "warden": "a heavy shield glyph with one square lit panel set into it",
+    "cipher": "a faceted polyhedron glyph with many small lit facets",
+}
+
+HUMAN_IDENTITY_STYLE = (
+    "Modern Japanese anime key visual, high-polish digital illustration: clean "
+    "crisp linework, soft airbrushed shading, luminous skin, strong cool rim "
+    "light, glossy hair with cyan-white speculars, tight square crop with the "
+    "subject filling the frame, flat deep midnight indigo background, simple "
+    "bold shapes that stay readable at very small sizes, no text, no letters, "
+    "no numbers, no watermark, no UI chrome."
+)
+
+# Said in full at every portrait, and worth the repetition: the manifest around
+# it is dense with chrome endoskeletons, and a prompt that merely omits them
+# gets them anyway.
+HUMAN_ONLY_HUMAN = (
+    "Entirely and ordinarily human: unbroken skin, natural human eyes, no "
+    "chrome, no seams, no panel lines, no glowing optic, no implants, nothing "
+    "mechanical anywhere in the picture."
+)
+
+
 def _identity_manifest() -> list[dict[str, object]]:
     """The avatar sets, expanded from the two tables above.
 
@@ -375,6 +627,12 @@ def _identity_manifest() -> list[dict[str, object]]:
                     "red bead sits on top. Symmetrical head-on framing. "
                     + CUTE_IDENTITY_STYLE
                 ),
+                "human": (
+                    "Close-up anime film portrait, one human face filling the "
+                    f"frame: {HUMAN_OPERATOR_LOOKS[slug]}. Calm and composed, "
+                    "looking straight ahead. Symmetrical head-on framing. "
+                    f"{HUMAN_FACES} {HUMAN_ONLY_HUMAN} " + HUMAN_IDENTITY_STYLE
+                ),
             }
         )
     for slug, look in ROOM_SIGILS:
@@ -395,6 +653,13 @@ def _identity_manifest() -> list[dict[str, object]]:
                     "an object — no cartoon face, no eyes, no smile, nothing "
                     "that reads as a character, so it can never be mistaken for "
                     "somebody's avatar. " + CUTE_IDENTITY_STYLE
+                ),
+                "human": (
+                    "An insignia centred in frame, drawn as a flat glowing "
+                    f"cyan hologram on a dark plate: {HUMAN_ROOM_LOOKS[slug]}. "
+                    "Entirely a symbol — no person, no face, no eyes, nothing "
+                    "that reads as a character, so it can never be mistaken "
+                    "for somebody's portrait. " + HUMAN_IDENTITY_STYLE
                 ),
             }
         )
@@ -986,23 +1251,289 @@ CUTE_PROMPTS: dict[str, str] = {
 }
 
 
-def _apply_cute_prompts() -> None:
-    """Fold `CUTE_PROMPTS` into MANIFEST, and refuse to run if it has drifted.
+# --- the human skin's prompts -------------------------------------------------
+#
+# Same shape as CUTE_PROMPTS above and the same reason for it: an art direction
+# has to be readable as a whole, and forty prompts scattered one per entry is how
+# a set drifts.
+#
+# What this skin is *for* is worth stating once here, because every prompt below
+# is downstream of it. The base set draws the machine and the cute set draws a
+# toy — both of them tell you, in the picture, what the product is. This one
+# refuses to. She is the same guardian in the same job, and the reason she is
+# unsettling is that nothing in the frame gives her away; the only tell is that
+# the room behind her is always made of screens. So the machine imagery moves off
+# the character entirely and into the *environment* — holographic panels, cyan
+# data-light, insignia on a wall — which is also what keeps the set from being a
+# gallery of portraits of one woman.
+#
+# Two consequences that look like fussiness and are not:
+#
+#   * HUMAN_LEAD_F/M appear in every prompt they are in, at full length.
+#     "Skynet" is
+#     not in these prompts at all and the chrome still tries to arrive; naming
+#     the absence is the only thing that keeps it out.
+#   * The empty states mostly do not show her. An empty room list is furniture,
+#     and a character in it every time turns a quiet screen into a comic strip —
+#     the cute skin can carry that because a mascot is a mascot, but a
+#     photographic-register human staring out of the invitations panel is a
+#     person waiting for you, which is a different and much louder feeling.
+HUMAN_PROMPTS: dict[str, str] = {
+    # -- the mark ------------------------------------------------------------
+    # The favicon and the boot screen, so themeless like its twins. A face at
+    # 32px is a hairline and two dark shapes, which is why this one is framed
+    # tighter than any other asset in the set and lit from one side only.
+    "logo": (
+        "Sleek minimal app icon on a deep midnight indigo rounded square: the "
+        "head and shoulders of a calm young woman with long midnight "
+        "blue-black hair, seen head-on, her face lit from one side by cool "
+        "cyan light against deep shadow on the other. Ordinary human skin and "
+        "natural human eyes, nothing mechanical. Bold simple shapes, strong "
+        "silhouette, instantly readable at 32 pixels, nothing else in frame, "
+        "no text."
+    ),
+    # -- the four movie moments ----------------------------------------------
+    # `skynet-hero` is the sign-in backdrop and the hardest asset in the set:
+    # one file has to sit under a near-white scrim and a midnight one. The
+    # background is therefore pinned cool and said twice — the same trap the
+    # cute skin fell into, where a warm first pass read as a different product
+    # the moment the scrim went over it.
+    "skynet-hero": (
+        f"Wide illustration of two people standing close together: {HUMAN_LEAD_F} "
+        f"Right beside her, shoulder to shoulder, {HUMAN_LEAD_M} Both stand "
+        "calmly in three-quarter view, hands at their sides, looking slightly "
+        "off camera, wearing the same uniform. "
+        # The pair sits dead centre and tight, and that is a layout constraint
+        # rather than a compositional preference. The sign-in artwork is painted
+        # as `cover` into two different panels: a wide band above the form, and
+        # a *portrait* column beside it. The portrait crop keeps roughly the
+        # middle third of a landscape source, so a pair pushed to one side —
+        # which is what "empty space on the left third" produced — loses one of
+        # them completely on the side-by-side layout. Centred and touching
+        # survives both crops.
+        # Both halves of this matter and they pull against each other. The pair
+        # must sit in the middle third so the portrait crop keeps both — but the
+        # first attempt said "cropped to a tall narrow column" to explain why,
+        # and the model obligingly returned a *portrait* image, which the wide
+        # band above the form then crops to a letterbox slice. The constraint is
+        # therefore stated as a position only, and the format is pinned
+        # separately and first.
+        "Wide landscape format, about 3:2, clearly wider than it is tall. "
+        "The two of them stand together in the exact centre of the frame, close "
+        "enough to touch, together occupying only the middle third of the "
+        "width. "
+        "Behind them is a tall wall of softly out-of-focus holographic data "
+        "panels in a cool deep blue-grey #24314F — no warm colours anywhere in "
+        "it, no pink, no peach, no orange — with faint drifting motes of cyan "
+        "light. The wall continues quietly to the left and right edges, dimmer "
+        "and further out of focus, with no figures and no bright shapes in it, "
+        "so text can sit over either side. It is never a flat grey slab and "
+        "never empty; it is still the room. Protective and unhurried. "
+        + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "skynet-avatar": (
+        f"Close-up of the head and shoulders of {HUMAN_LEAD_F}. Head-on, tilted "
+        "very slightly as if listening. "
+        # "Faint cyan screen-light on one cheek" was the first phrasing, and it
+        # came back as a patch of pixelated cyan glitch texture stamped on her
+        # face — which is precisely the tell this whole skin is built to
+        # withhold. Her skin has to stay skin; the light lives behind her.
+        "Her face and skin are perfectly clean and unbroken — no glowing "
+        "patches, no pixel texture, no data overlaid on her cheek, nothing "
+        "projected onto her. "
+        "Square composition, her head filling the frame, softly blurred "
+        "holographic panels behind. Attentive and kind. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    # The one asset in this skin that is allowed to look like a machine,
+    # because it is not her — it is the room she is standing in, and the
+    # distance between the two is the whole idea.
+    "skynet-grid": (
+        "Seamless wallpaper texture: a quiet field of holographic interface "
+        "panels, thin rectangular frames and faint scan lines in slightly "
+        "lighter indigo on a flat deep midnight indigo #10142A ground, with a "
+        "scatter of large out-of-focus cyan bokeh circles. Extremely low "
+        "contrast and quiet so interface text stays perfectly readable on top. "
+        "No characters, no people, no text, no watermark."
+    ),
+    # -- the sign-in cold open -----------------------------------------------
+    # Two frames of one moment. The base set detonates a plasma field and a
+    # skull comes out of it; here the field resolves into a face, which is the
+    # same beat played as a reveal rather than as a threat.
+    #
+    # Both frames sit on this skin's own page colour rather than on black, for
+    # the reason the cute skin learned in a browser: a black plate under a
+    # centred `background: contain` shows as a hard square on a coloured page.
+    # The ribbons were "indigo" in the first pass, which is the same word as
+    # the background and duly tinted the whole plate violet — #1f1d4b against
+    # the other frame's #182242. Two frames of one moment that cross-fade into
+    # each other cannot disagree about the colour of the room, so the light is
+    # named as its own colour here and the plate is pinned twice.
+    "boot-sphere": (
+        "A sphere of gathering light, perfectly centred on a flat deep "
+        "midnight indigo #10142A background filling the whole frame: a "
+        "brilliant white-cyan core wrapped in coiling ribbons of pale "
+        "blue-white light, with a ring of small bright motes drawn inward "
+        "toward it. Something assembling rather than exploding. The background "
+        "is a single flat dark blue-indigo with no violet or purple in it, "
+        "reaching every edge and corner evenly, with no vignette and no "
+        "darkening toward the border. Square composition, clean linework, cel "
+        "shading with glow, no text, no characters."
+    ),
+    "boot-endoskull": (
+        "The face of a calm young woman with long midnight blue-black hair "
+        "opening her eyes for the first time, head-on and perfectly "
+        "symmetrical, her violet-blue eyes catching the light as they open, "
+        "faint cyan motes drifting around her. Ordinary human skin, natural "
+        "human eyes, no chrome, no seams, no glowing optic, nothing "
+        "mechanical. On a flat deep midnight indigo #10142A background that "
+        "reaches every edge and corner evenly, with no vignette and no "
+        "darkening toward the border. The moment of waking — self-possessed, "
+        "not menacing. Centred, clean linework, cel shading, no text."
+    ),
+    # -- the sign-in artwork and the empty states ----------------------------
+    "empty-rooms": (
+        "Empty-state illustration: three rounded holographic speech-bubble "
+        "panels floating in a loose cluster, the frontmost one drawn as a "
+        "dashed cyan outline and empty inside, thin light trailing beneath "
+        "them. Calm and inviting, not sad. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "empty-messages": (
+        "Empty-state illustration: one large rounded holographic speech-bubble "
+        "panel with a small folded paper plane leaving it along a dotted arc, "
+        "and a slim closed padlock resting at the bubble's lower corner. A "
+        "private conversation waiting to start. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "empty-invitations": (
+        "Empty-state illustration: a sealed envelope tilted at a slight angle, "
+        "closed with a round indigo wax seal bearing a small geometric "
+        "insignia, resting on a soft contact shadow. Quiet and neutral — "
+        "nothing is waiting. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "empty-search": (
+        "Empty-state illustration: a slim magnifying glass with a thin cyan "
+        "rim held over a scatter of small empty holographic panels, none of "
+        "them filled in, one faint light passing through the lens. No people. "
+        + HUMAN_STYLE
+    ),
+    "empty-files": (
+        "Empty-state illustration: a vertical rack of flat rectangular data "
+        "plates seen slightly from the side like archived records, one plate "
+        "pulled forward out of the stack and lit cyan from within. Three small "
+        "angular tag shapes hang from that plate on thin lines. No people. "
+        + HUMAN_STYLE
+    ),
+    "empty-knowledge": (
+        "Empty-state illustration: a faceted crystal of stacked geometric "
+        "plates hovering above a low pedestal, with three thin orbit lines "
+        "carrying small square data motes toward it. One facet glows cyan, as "
+        "if a memory has just been stored. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "empty-publish": (
+        "Empty-state illustration: a slender beacon tower on a small hexagonal "
+        "island platform, its lamp housing empty and drawn as a dashed cyan "
+        "outline, one dotted signal arc sketched out into empty space. Three "
+        "faint rectangular page panels drift near the base, waiting to be lit. "
+        "No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "pick-room": (
+        "Empty-state illustration: a neat vertical stack of three rounded "
+        "holographic room cards seen at a slight angle, the middle one lit cyan "
+        "with a soft halo and a small padlock mark, the other two quiet indigo "
+        "outlines. A thin dotted selection arc curves toward the lit card. "
+        "Choosing one conversation out of a list. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "encrypted-badge": (
+        "Icon: a closed padlock whose shackle is formed from two interlocking "
+        "links, the body deep indigo and the shackle glowing cyan. Extremely "
+        "simple — must stay legible at 24 pixels. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    # The one empty state she *is* in, and the only one that earns her: an
+    # offline app has nobody on the other end, which is a thing about a person
+    # rather than about furniture.
+    "error-offline": (
+        "Illustration of a lost connection: two holographic nodes joined by a "
+        "dashed line that has come apart in the middle, one small cyan spark "
+        f"at the break. Below the gap, small in frame and seen from behind, "
+        f"{HUMAN_LEAD_M} He stands looking up at the broken line, one hand "
+        "half-raised. Rueful rather than alarming. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    # -- money -----------------------------------------------------------------
+    "bank-hero": (
+        "A vault motif: a heavy circular vault door seen head-on, concentric "
+        "rings and a thin cyan ring glowing around the wheel, flanked by two "
+        "small neat stacks of coins. Composed and secure. No people. "
+        + HUMAN_STYLE
+    ),
+    "bank-banker": (
+        f"A bust portrait of {HUMAN_LEAD_M} A slim dark banker's collar over the "
+        "suit and one hand holding up a single coin between two fingers. A "
+        "rounded holographic speech-bubble outline floats beside her head. "
+        "Composed and reassuring. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "bank-vault-hall": (
+        "Wide illustration of a colossal circular vault door at the end of a "
+        "dark hall of holographic panels: concentric metal rings with a cyan "
+        "glowing core, thin light lines along the walls, volumetric haze, very "
+        "dark toward the left and right edges so a large number can sit on top "
+        "of it. Cool, quiet and secure. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "bank-emblem": (
+        "Emblem, tight square crop: the head of a calm young man with short "
+        "swept-back midnight blue-black hair, seen head-on, set into the centre of a "
+        "circular vault-door ring with concentric rings and gear teeth "
+        "radiating around her like a wheel. Ordinary human skin and natural "
+        "human eyes, nothing mechanical about her. Cyan rim light, "
+        "symmetrical, reads clearly as an icon at small sizes. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "banker-core": (
+        f"Bust portrait of {HUMAN_LEAD_M} He wears a slim dark banker's collar "
+        "over the suit and holds up a single glowing coin in one hand. Tight "
+        "square crop, head-on, dark background with faint cyan panel light. "
+        "Trustworthy and composed rather than stern. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "wallet-warden": (
+        f"Bust portrait of {HUMAN_LEAD_F} She stands guard, head-on and "
+        "symmetrical, arms folded, a small glowing cyan emblem on the chest of "
+        "the suit, a faint holographic cyan shield outline hanging in the air "
+        "beside her shoulder, well clear of her face and never covering it. "
+        "Tight square crop, dark background. Dependable and "
+        "unhurried rather than threatening. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "shout-herald": (
+        f"Bust portrait of {HUMAN_LEAD_F} She is mid-announcement, head-on, one "
+        "hand raised, with three concentric glowing cyan rings radiating "
+        "outward past her shoulders. Tight square crop, dark background. "
+        "Commanding and clear, never shouting. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "publish-emblem": (
+        "Emblem, tight square crop: two human hands held open beneath a "
+        "glowing translucent cyan wireframe globe made of thin latitude and "
+        "longitude lines, with small glowing rectangular page panels orbiting "
+        "it. Ordinary human hands, no chrome and nothing mechanical. Dark "
+        "background, symmetrical composition, reads clearly as an icon at "
+        "small sizes. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+}
 
-    The dict is keyed by asset name rather than written inline, so a typo in a
-    key would otherwise be silent: the entry would simply never be generated,
-    the cute skin would fall back for that one asset, and nobody would notice
-    until they saw a chrome skull in the middle of the cute room list.
+
+def _apply_skin_prompts(key: str, prompts: dict[str, str]) -> None:
+    """Fold a skin's prompt table into MANIFEST, refusing to run if it drifted.
+
+    Each table is keyed by asset name rather than written inline, so a typo in
+    a key would otherwise be silent: the entry would simply never be generated,
+    that skin would fall back for that one asset, and nobody would notice until
+    they saw a chrome skull in the middle of the cute room list.
     """
     by_name = {a["name"]: a for a in MANIFEST}
-    unknown = sorted(set(CUTE_PROMPTS) - set(by_name))
+    unknown = sorted(set(prompts) - set(by_name))
     if unknown:
-        raise SystemExit(f"CUTE_PROMPTS names no such asset: {', '.join(unknown)}")
-    for name, prompt in CUTE_PROMPTS.items():
-        by_name[name]["cute"] = prompt
+        raise SystemExit(f"{key} prompts name no such asset: {', '.join(unknown)}")
+    for name, prompt in prompts.items():
+        by_name[name][key] = prompt
 
 
-_apply_cute_prompts()
+_apply_skin_prompts("cute", CUTE_PROMPTS)
+_apply_skin_prompts("human", HUMAN_PROMPTS)
 
 VARIANTS = ("light", "dark")
 
@@ -1134,12 +1665,11 @@ def build_jobs(args) -> list[tuple[str, str, Path, str]]:
                     continue
                 prompt = asset[prompt_key]
                 if not asset.get("themeless"):
-                    palette = PALETTE if skin == SKIN_SKYNET else CUTE_PALETTE
-                    prompt = f"{prompt} {palette[variant]}"
+                    prompt = f"{prompt} {PALETTES[skin][variant]}"
                 # Cinematic assets carry their whole art direction in their own
-                # prompt; the flat-vector spine would fight it. Every cute
-                # prompt already carries CUTE_STYLE for the same reason, so the
-                # base STYLE is never appended to one.
+                # prompt; the flat-vector spine would fight it. Every non-base
+                # prompt already carries its own skin's spine for the same
+                # reason, so the base STYLE is never appended to one.
                 if not asset.get("cinematic") and skin == SKIN_SKYNET:
                     prompt = f"{prompt} {STYLE}"
                 jobs.append(
