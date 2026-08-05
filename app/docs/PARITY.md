@@ -1,5 +1,12 @@
 # Parity audit — PocketSkynet (Rust) vs FruitNation (React + Express)
 
+> **Note (2026-08-05):** parts of this audit are outdated — i18n, AI
+> assistants, the wallet, MetaMask/Privy login, attachments, message search,
+> and inline media all exist in the current tree despite being listed as
+> missing below. For the current state and direction, see
+> [ROADMAP.md](ROADMAP.md). The "Risks and unknowns" section here is still
+> accurate.
+
 Scope: the **React client** at `server/client/src/` vs the **Rust/WASM client** at
 `PocketSkynet/web/src/`, and the **Express server** at `server/server/` vs the
 **Rust server** at `PocketSkynet/server/src/`.
