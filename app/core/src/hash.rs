@@ -19,6 +19,46 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
 }
 
+/// A SHA-256 being computed over data that arrives in pieces.
+///
+/// [`sha256_hex`] needs the whole input at once, which is fine for a message
+/// body and impossible for a 4 GB file: the web client reads a file in slices
+/// precisely so that it never holds all of it, and hashing it would otherwise
+/// undo that. Feed it slices, ask for the digest at the end.
+///
+/// Lives here rather than in the client so the digest a client declares and the
+/// digest the server verifies are the same function, and so it can be tested
+/// without a browser.
+#[derive(Default)]
+pub struct Sha256Stream(Sha256);
+
+impl Sha256Stream {
+    pub fn new() -> Self {
+        Self(Sha256::new())
+    }
+
+    /// Add the next piece. Order matters and is the caller's responsibility —
+    /// this is a hash, not a set.
+    pub fn update(&mut self, piece: &[u8]) {
+        self.0.update(piece);
+    }
+
+    /// The digest, lowercase hex. Consumes the hasher: a SHA-256 cannot be
+    /// meaningfully continued after it is finalised, and returning it by value
+    /// stops anyone trying.
+    pub fn finish(self) -> String {
+        hex::encode(self.0.finalize())
+    }
+}
+
+impl std::fmt::Debug for Sha256Stream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // No state: a partial digest is not something to print, and `Sha256`
+        // has no useful `Debug` anyway.
+        f.write_str("Sha256Stream(..)")
+    }
+}
+
 /// `msgHash` for an **encrypted** message: SHA-256 over the base64 ciphertext
 /// string, as ASCII text, `=` padding included.
 ///
@@ -153,6 +193,35 @@ mod tests {
             msg_hash_encrypted("3nP4XMnquk7mpaDFxNxnZA=="),
             msg_hash_plaintext("attack at dawn")
         );
+    }
+
+    #[test]
+    fn a_streamed_hash_equals_the_one_shot_hash() {
+        // The property the whole chunked upload rests on: how the bytes were
+        // split must not change the digest, or a client and a server that
+        // chunk differently would never agree.
+        let data: Vec<u8> = (0..10_000).map(|i| (i % 251) as u8).collect();
+        let want = sha256_hex(&data);
+
+        for chunk in [1, 7, 1024, 4096, data.len(), data.len() + 1] {
+            let mut h = Sha256Stream::new();
+            for piece in data.chunks(chunk) {
+                h.update(piece);
+            }
+            assert_eq!(h.finish(), want, "chunk size {chunk} changed the digest");
+        }
+    }
+
+    #[test]
+    fn an_empty_stream_is_the_empty_digest() {
+        assert_eq!(Sha256Stream::new().finish(), sha256_hex(b""));
+        // And feeding empty pieces changes nothing, which is what a zero-length
+        // final slice at the end of a file looks like.
+        let mut h = Sha256Stream::new();
+        h.update(b"");
+        h.update(b"abc");
+        h.update(b"");
+        assert_eq!(h.finish(), sha256_hex(b"abc"));
     }
 
     #[test]

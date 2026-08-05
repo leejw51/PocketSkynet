@@ -16,6 +16,19 @@ use gloo_net::http::Method;
 use super::{ApiError, ApiResult, Client};
 use crate::api::types::FileMeta;
 
+/// What `POST /api/files/{id}/download-token` answers.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadLink {
+    /// Relative, and carrying the capability. Prefix with the client's base.
+    pub url: String,
+    /// Lowercase hex sha-256 of the file, so what landed on disk can be
+    /// checked against what the server holds.
+    pub sha256: String,
+    pub size_bytes: f64,
+    pub filename: String,
+}
+
 impl Client {
     /// Upload `bytes` to a room. `caption` may be empty; its `#hashtags` are
     /// what make the attachment findable, and the server extracts them.
@@ -70,6 +83,23 @@ impl Client {
     pub async fn delete_file(&self, id: &str) -> ApiResult<()> {
         self.send_ok_empty(Method::DELETE, &format!("/api/files/{}", encode(id)))
             .await
+    }
+
+    /// Ask for a short-lived URL a browser can download directly, plus the
+    /// digest to check what it saved.
+    ///
+    /// This is how a large attachment is saved. [`download_file`] below pulls
+    /// the bytes through the page, which needs the whole file in memory and
+    /// stops being possible somewhere well under a gigabyte; the browser
+    /// writing the response straight to disk has no such ceiling and gets
+    /// resume, pause and its own progress for free.
+    pub async fn download_link(&self, id: &str) -> ApiResult<DownloadLink> {
+        self.send_json(
+            Method::POST,
+            &format!("/api/files/{}/download-token", encode(id)),
+            &serde_json::json!({}),
+        )
+        .await
     }
 
     /// Fetch an attachment's bytes with the caller's token.

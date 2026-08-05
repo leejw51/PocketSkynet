@@ -5,3 +5,7 @@
 # repo root. Both are evidence for a single review, not part of the tree.
 .playwright-mcp/
 /*.png
+
+# Browser-test scratch: node_modules and the screenshots the scripts drop.
+app/tests/browser/node_modules/
+app/tests/browser/*.png

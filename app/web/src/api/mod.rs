@@ -34,6 +34,9 @@ pub mod search;
 pub mod shout;
 /// Public for the [`sites::Site`] type the Publish page renders.
 pub mod sites;
+/// Public for [`uploads::Progress`] and [`uploads::Target`], which the actions
+/// layer and the progress UI both name.
+pub mod uploads;
 mod users;
 
 use std::rc::Rc;

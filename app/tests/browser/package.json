@@ -1,0 +1,12 @@
+{
+  "name": "pocketskynet-browser-tests",
+  "private": true,
+  "description": "Large-file transfer checks that only a real browser can make",
+  "scripts": {
+    "upload": "node upload.js",
+    "resume": "node resume.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.0"
+  }
+}

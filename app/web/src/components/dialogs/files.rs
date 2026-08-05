@@ -22,7 +22,7 @@ use crate::api::FileMeta;
 use crate::i18n::{t, Key};
 use crate::state::{use_store, Load};
 
-use super::super::common::{object_url, save_as, Empty};
+use super::super::common::{object_url, Empty};
 use super::super::icons;
 use super::super::modal::Modal as Dialog;
 use super::super::toast;
@@ -102,6 +102,11 @@ pub fn files(p: &FilesProps) -> Html {
                     wasm_bindgen_futures::spawn_local(async move {
                         let mut next = (*thumbs).clone();
                         for f in wanted {
+                            // A thumbnail is not worth a gigabyte of heap; the
+                            // type plate is a perfectly good identifier.
+                            if (f.size_bytes as f64) > crate::actions::MAX_PREVIEW_BYTES {
+                                continue;
+                            }
                             if let Ok(bytes) = store.client.download_file(&f.id).await {
                                 if let Some(url) = object_url(&bytes, f.preview_mime()) {
                                     next.insert(f.id.clone(), url);
@@ -145,26 +150,33 @@ pub fn files(p: &FilesProps) -> Html {
         seen
     };
 
+    // Hash a picked file against what the server says this attachment is.
+    // Needs a round trip for the digest rather than caching it on `FileMeta`:
+    // the digest is the *stored* content hash, and the listing deliberately
+    // does not carry the storage layout.
+    let verify = {
+        let store = store.clone();
+        Callback::from(move |(f, picked): (FileMeta, web_sys::File)| {
+            let store = store.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match store.client.download_link(&f.id).await {
+                    Ok(link) => {
+                        crate::actions::verify_downloaded_file(store, link.sha256, picked).await
+                    }
+                    Err(e) => toast::error(&store, e.user_message(), None),
+                }
+            });
+        })
+    };
+
     let save = {
         let store = store.clone();
         Callback::from(move |f: FileMeta| {
             let store = store.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match store.client.download_file(&f.id).await {
-                    // A save is a fresh blob URL revoked immediately after the
-                    // click: the anchor has already read it by then, and holding
-                    // it would pin the bytes for nothing.
-                    Ok(bytes) => match object_url(&bytes, "application/octet-stream") {
-                        Some(url) => {
-                            save_as(&url, &f.filename);
-                            let _ = web_sys::Url::revoke_object_url(&url);
-                        }
-                        None => {
-                            toast::error(&store, t(store.language, Key::attach_read_failed), None)
-                        }
-                    },
-                    Err(e) => toast::error(&store, e.user_message(), None),
-                }
+                // The browser fetches and writes it, so this works at any size
+                // — see `actions::save_attachment`.
+                crate::actions::save_attachment(store, f.id.clone(), f.filename.clone()).await;
             });
         })
     };
@@ -268,6 +280,7 @@ pub fn files(p: &FilesProps) -> Html {
                                     thumb={thumbs.get(&f.id).cloned()}
                                     can_delete={can_delete(&store, f)}
                                     on_save={save.clone()}
+                                    on_verify={verify.clone()}
                                     on_delete={remove.clone()}
                                 />
                             }) }
@@ -286,6 +299,8 @@ struct FileRowProps {
     thumb: Option<String>,
     can_delete: bool,
     on_save: Callback<FileMeta>,
+    /// A file to check against this attachment's published digest.
+    on_verify: Callback<(FileMeta, web_sys::File)>,
     on_delete: Callback<FileMeta>,
 }
 
@@ -350,6 +365,43 @@ fn file_row(p: &FileRowProps) -> Html {
                         Callback::from(move |_: MouseEvent| cb.emit(f.clone()))
                     }}
                 >{ icons::download(16) }</button>
+                // Verify a copy already on disk. The app cannot check the
+                // download itself — the browser writes those bytes and never
+                // hands them back — so this re-reads a file the user picks and
+                // hashes it in slices against the digest the server published.
+                // Genuinely end to end: it checks what is on the disk now, not
+                // what a transfer believed at the time.
+                <label
+                    class="topcoat-icon-button--quiet fn-file__verify"
+                    aria-label={t(lang, Key::attach_verify)}
+                    title={t(lang, Key::attach_verify)}
+                >
+                    { icons::shield(16) }
+                    <input
+                        type="file"
+                        class="fn-file__verify-input"
+                        onchange={{
+                            let cb = p.on_verify.clone();
+                            let f = f.clone();
+                            Callback::from(move |e: Event| {
+                                use wasm_bindgen::JsCast;
+                                let Some(input) = e
+                                    .target()
+                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                else {
+                                    return;
+                                };
+                                let picked = input.files().and_then(|l| l.get(0));
+                                // Cleared now, so picking the same file twice
+                                // in a row still fires `change` the second time.
+                                input.set_value("");
+                                if let Some(picked) = picked {
+                                    cb.emit((f.clone(), picked));
+                                }
+                            })
+                        }}
+                    />
+                </label>
                 if p.can_delete {
                     <button
                         type="button"

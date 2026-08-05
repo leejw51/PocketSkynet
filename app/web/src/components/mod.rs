@@ -26,3 +26,4 @@ pub mod shell;
 pub mod shout;
 pub mod spotlight;
 pub mod toast;
+pub mod transfers;

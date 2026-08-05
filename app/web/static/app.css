@@ -9713,3 +9713,140 @@ span.fn-conn { cursor: default; }
      a resting transform-adjacent effect and has to be removed outright. */
   .fn-media__zoom:hover img { filter: none; }
 }
+
+/* ------------------------------------------------------------------ §24 --
+   TRANSFERS — a large upload, while it happens (components/transfers.rs)
+
+   Bottom-left, above the safe area, out of the way of the composer on phones
+   and of the toasts on the right. Fixed rather than in flow: the rail is
+   mounted in the shell and must not reflow whatever screen is under it.
+
+   Two stages, two colours. The checksum pass is a local read and gets the
+   quieter treatment; the transfer itself gets the accent, because that is the
+   one with a network on the other end and the one worth watching. Without the
+   distinction a bar that fills, resets and fills again reads as a bug — see
+   the module docs for why there are genuinely two passes.
+
+   Every value here is a token. §17's reduced-motion rule flattens the width
+   transition, which is correct: the *number* is the information and it is
+   still exact.                                                             */
+.fn-transfers {
+  position: fixed;
+  inset-block-end: calc(var(--fn-s4) + var(--fn-safe-bottom, 0px));
+  inset-inline-start: var(--fn-s4);
+  z-index: 60;
+  display: grid;
+  gap: var(--fn-s2);
+  inline-size: min(340px, calc(100vw - var(--fn-s4) * 2));
+  pointer-events: none;
+}
+
+.fn-transfer {
+  background: var(--fn-surface);
+  border: 1px solid var(--fn-border);
+  border-radius: var(--fn-radius);
+  padding: var(--fn-s3);
+  box-shadow: var(--fn-shadow);
+  display: grid;
+  gap: var(--fn-s2);
+  animation: fn-list-in var(--fn-dur-soft) var(--fn-spring-soft) both;
+}
+
+.fn-transfer__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--fn-s2);
+  font-size: var(--fn-fs-xs);
+}
+
+/* The filename gives up its width first: the stage and the percentage are
+   fixed-width facts, and a long name must not push them off the card. */
+.fn-transfer__name {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fn-text);
+  font-weight: 600;
+}
+
+.fn-transfer__stage {
+  flex: 0 0 auto;
+  color: var(--fn-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Tabular figures, or the percentage jitters the layout every chunk as the
+   digits change width. */
+.fn-transfer__pct {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-primary);
+  font-weight: 700;
+}
+
+.fn-transfer__track {
+  block-size: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fn-primary) 16%, transparent);
+  overflow: hidden;
+}
+
+.fn-transfer__fill {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--fn-primary);
+  box-shadow: 0 0 8px 0 color-mix(in srgb, var(--fn-primary) 60%, transparent);
+  /* Width, not a transform: the fill carries a glow on its leading edge and
+     scaling would stretch that into a smear across the whole bar. */
+  transition: inline-size var(--fn-dur) linear;
+}
+
+/* The local pass. Dimmer and unlit — nothing is crossing a network yet. */
+.fn-transfer__fill[data-stage="checksum"] {
+  background: var(--fn-text-dim);
+  box-shadow: none;
+}
+
+.fn-transfer__size {
+  font-size: var(--fn-fs-xs);
+  color: var(--fn-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fn-transfer { animation: none; }
+  .fn-transfer__fill { transition: none; }
+}
+
+/* The verify control is a `<label>` wrapping a hidden file input, because a
+   `<button>` cannot open a file picker and a visible input cannot be made to
+   look like the icon button beside it. `display: none` on the input would work
+   in every browser that matters, but a zero-size clipped input keeps it
+   focusable — so the control is still reachable by keyboard, which a `none`
+   input is not. */
+.fn-file__verify {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.fn-file__verify-input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* The focus ring belongs on the label, since the input it is on is invisible. */
+.fn-file__verify:focus-within {
+  outline: 2px solid var(--fn-primary);
+  outline-offset: 2px;
+  border-radius: var(--fn-radius-sm, 6px);
+}

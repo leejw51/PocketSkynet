@@ -535,7 +535,11 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
                     load.set(MediaLoad::Failed);
                     return;
                 };
-                let previewable = file.is_previewable_image() || file.is_previewable_video();
+                // Previewing pulls the bytes into the page; above the cap that
+                // is a tab-killer rather than a courtesy. The card still shows
+                // its type plate and a Save button, which streams.
+                let previewable = (file.is_previewable_image() || file.is_previewable_video())
+                    && (file.size_bytes as f64) <= crate::actions::MAX_PREVIEW_BYTES;
                 let mime = file.preview_mime();
                 meta.set(Some(file));
                 if !previewable {
@@ -615,13 +619,10 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
             let store = store.clone();
             let file = file.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                if let Ok(bytes) = store.client.download_file(&file.id).await {
-                    if let Some(url) = super::common::object_url(&bytes, "application/octet-stream")
-                    {
-                        super::common::save_as(&url, &file.filename);
-                        let _ = web_sys::Url::revoke_object_url(&url);
-                    }
-                }
+                // Streams via a capability URL rather than pulling the bytes
+                // through the page — see `actions::save_attachment`.
+                crate::actions::save_attachment(store, file.id.clone(), file.filename.clone())
+                    .await;
             });
         })
     };

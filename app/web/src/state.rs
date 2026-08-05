@@ -212,6 +212,14 @@ pub struct AppState {
     /// covers the round trip instead of following it — and pruned by the fold
     /// once the row it refers to is actually gone.
     pub dissolving: std::collections::HashSet<MessageId>,
+    /// Transfers currently running, newest last.
+    ///
+    /// In the store rather than in the component that started one because a
+    /// 4 GB upload outlives the screen it began on: navigating from the room to
+    /// Settings and back must not lose the bar, and the composer is remounted
+    /// by that round trip. Keyed by a local id so two uploads at once are two
+    /// rows rather than one flickering between them.
+    pub transfers: Vec<Transfer>,
     /// What the Knowledge page should open with — set by a hashtag click or
     /// "Teach from message" *before* navigating there, taken (and cleared) by
     /// the page on mount. A field rather than a route parameter because the
@@ -227,6 +235,55 @@ pub struct AppState {
     /// startup banner. See [`AppState::shareable_url`].
     pub share_base: Option<String>,
     next_id: u64,
+}
+
+/// Which pass of a transfer is running.
+///
+/// Worth showing rather than hiding behind one bar: the checksum pass reads the
+/// whole file before a byte leaves the machine, and on a large file that is
+/// long enough that an unlabelled bar filling and then restarting reads as a
+/// glitch. Naming it also explains why an upload of a local file starts fast
+/// and then slows down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferStage {
+    /// Hashing, locally.
+    Checksum,
+    /// Sending, or receiving.
+    Moving,
+}
+
+/// Which way the bytes are going.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferDirection {
+    Upload,
+    Download,
+}
+
+/// One transfer in flight. See [`AppState::transfers`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transfer {
+    pub id: u64,
+    pub name: String,
+    pub direction: TransferDirection,
+    pub stage: TransferStage,
+    pub done: f64,
+    pub total: f64,
+}
+
+impl Transfer {
+    /// 0.0–1.0, total-safe. A zero-length total is complete rather than a NaN,
+    /// because NaN in a CSS `width` is an empty bar that never moves.
+    pub fn fraction(&self) -> f64 {
+        if self.total <= 0.0 {
+            1.0
+        } else {
+            (self.done / self.total).clamp(0.0, 1.0)
+        }
+    }
+
+    pub fn percent(&self) -> u32 {
+        (self.fraction() * 100.0).round() as u32
+    }
 }
 
 /// See [`AppState::knowledge_seed`].
@@ -282,6 +339,7 @@ impl AppState {
             modal: None,
             pending_boot: None,
             dissolving: std::collections::HashSet::new(),
+            transfers: Vec::new(),
             knowledge_seed: None,
             share_base: None,
             next_id: 1,
@@ -448,6 +506,19 @@ impl PostBlock {
 /// Every mutation the UI can make.
 pub enum Action {
     SetAuth(Auth),
+    /// A transfer began. Carries its own id so the two updates below can find
+    /// it without the caller holding an index into a vector that other actions
+    /// are free to reorder.
+    TransferStarted(Transfer),
+    /// Move one along. Ignored for an id that is no longer present, which is
+    /// what a progress callback firing after a cancel looks like.
+    TransferProgress {
+        id: u64,
+        done: f64,
+        stage: TransferStage,
+    },
+    /// It finished, failed, or was cancelled — either way it stops being shown.
+    TransferEnded(u64),
     /// A verified session parked behind the boot cutscene (vault unlock on
     /// reload). `SetAuth` fires when the cutscene ends or is skipped.
     StageBoot(crate::session::Session),
@@ -564,6 +635,7 @@ impl Reducible for AppState {
             modal: self.modal.clone(),
             pending_boot: self.pending_boot.clone(),
             dissolving: self.dissolving.clone(),
+            transfers: self.transfers.clone(),
             knowledge_seed: self.knowledge_seed.clone(),
             share_base: self.share_base.clone(),
             next_id: self.next_id,
@@ -586,6 +658,22 @@ impl Reducible for AppState {
             }
             Action::StageBoot(session) => {
                 s.pending_boot = Some(session);
+            }
+            Action::TransferStarted(t) => {
+                s.transfers.push(t);
+            }
+            Action::TransferProgress { id, done, stage } => {
+                // A missing id is not an error. A callback can fire after the
+                // transfer was cancelled or after it finished, and re-creating
+                // the row from a late progress report would leave a bar on
+                // screen that nothing will ever remove.
+                if let Some(t) = s.transfers.iter_mut().find(|t| t.id == id) {
+                    t.done = done;
+                    t.stage = stage;
+                }
+            }
+            Action::TransferEnded(id) => {
+                s.transfers.retain(|t| t.id != id);
             }
             Action::Dissolve(id) => {
                 s.dissolving.insert(id);
