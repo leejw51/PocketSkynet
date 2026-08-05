@@ -6,49 +6,141 @@
 //! mid-transfer and the upload would appear to have stopped. The store holds
 //! the state (`state::Transfer`), this only draws it.
 //!
-//! Two labels rather than one, because there are genuinely two passes. A file
-//! is read once to checksum it — locally, before anything is sent — and again
-//! to upload it. An unlabelled bar that fills, resets and fills again reads as
-//! a bug; "Checking" then "Uploading" reads as what it is. See
-//! `api/uploads.rs` for why the checksum is a separate pass at all.
+//! # Three things it must never do, all learned from a screenshot
+//!
+//! A phone showed a bar reading `28.0 MB / 28.0 MB`, frozen, sitting on top of
+//! the bottom navigation, with no way to cancel it. Every part of that was a
+//! separate failure of this component:
+//!
+//! * **It must not lie about being finished.** The checksum pass ends at 100%,
+//!   and if the upload then hangs, a bare percentage says "done" while nothing
+//!   is happening. The stage is now always visible next to the number, and a
+//!   transfer that stops moving says so in as many words.
+//! * **It must not be a dead end.** Anything that can hang needs a way out, so
+//!   every row has a cancel control. Cancelling is safe: the session survives
+//!   on the server and re-attaching the same file resumes it.
+//! * **It must not sit on top of the app.** It clears the composer and the
+//!   bottom navigation rather than covering them.
 
 use yew::prelude::*;
 
 use crate::i18n::{t, Key};
-use crate::state::{use_store, TransferDirection, TransferStage};
+use crate::state::{use_store, Action, TransferDirection, TransferStage};
+
+/// How long a transfer may sit at the same byte count before it is called
+/// stalled.
+///
+/// Long enough not to fire between chunks on a slow link — an 8 MB chunk over
+/// a poor connection can legitimately take a while — and short enough that
+/// nobody sits watching a frozen bar wondering whether to wait. The `finish`
+/// call is the other legitimate pause: the server re-hashes the whole file, so
+/// a 4 GB upload can sit at 100% for a few seconds by design, and this must
+/// clear that comfortably.
+const STALL_AFTER_MS: f64 = 20_000.0;
+
+/// How often the stall check runs.
+const TICK_MS: u32 = 2_000;
 
 #[function_component(TransferRail)]
 pub fn transfer_rail() -> Html {
     let store = use_store();
     let lang = store.language;
 
+    // (id, bytes, when) for the row being watched, so "has it moved?" can be
+    // answered without the store growing a timestamp that only this component
+    // would ever read.
+    let seen = use_mut_ref(Vec::<(u64, f64, f64)>::new);
+    let tick = use_state(|| 0u32);
+
+    {
+        let tick = tick.clone();
+        use_effect_with((), move |_| {
+            let handle = gloo_timers::callback::Interval::new(TICK_MS, move || {
+                tick.set(*tick + 1);
+            });
+            move || drop(handle)
+        });
+    }
+
     if store.transfers.is_empty() {
+        // Nothing in flight: forget what was being watched, or a later transfer
+        // that happens to reuse an id would inherit a stale timestamp and be
+        // called stalled the moment it appeared.
+        seen.borrow_mut().clear();
         return Html::default();
     }
 
+    let now = js_sys::Date::now();
+    let mut marks = seen.borrow_mut();
+    marks.retain(|(id, _, _)| store.transfers.iter().any(|t| t.id == *id));
+
     html! {
         // `role="status"` and `aria-live="polite"`: progress is not an alert,
-        // and a screen reader interrupting every chunk would be unusable. The
-        // percentage is what gets announced, not the bar.
+        // and a screen reader interrupting every chunk would be unusable.
         <div class="fn-transfers" role="status" aria-live="polite">
             { for store.transfers.iter().map(|tr| {
                 let pct = tr.percent();
+
+                // Has this row moved since it was last looked at?
+                let stalled = match marks.iter_mut().find(|(id, _, _)| *id == tr.id) {
+                    Some(mark) => {
+                        if (mark.1 - tr.done).abs() > f64::EPSILON {
+                            mark.1 = tr.done;
+                            mark.2 = now;
+                            false
+                        } else {
+                            now - mark.2 > STALL_AFTER_MS
+                        }
+                    }
+                    None => {
+                        marks.push((tr.id, tr.done, now));
+                        false
+                    }
+                };
+
                 let label = match (tr.direction, tr.stage) {
-                    (_, TransferStage::Checksum) if tr.direction == TransferDirection::Download =>
-                        t(lang, Key::transfer_verifying),
+                    (TransferDirection::Download, _) => t(lang, Key::transfer_downloading),
                     (_, TransferStage::Checksum) => t(lang, Key::transfer_checksum),
                     (TransferDirection::Upload, _) => t(lang, Key::transfer_uploading),
-                    (TransferDirection::Download, _) => t(lang, Key::transfer_verifying),
                 };
+
+                let cancel = {
+                    let store = store.clone();
+                    let id = tr.id;
+                    Callback::from(move |_: MouseEvent| {
+                        // Only takes the row off screen. The session is still on
+                        // the server, so re-attaching the same file resumes it
+                        // rather than starting again — which is precisely why
+                        // offering cancel is safe.
+                        store.dispatch(Action::TransferEnded(id));
+                    })
+                };
+
                 html! {
-                    <div class="fn-transfer" key={tr.id}>
-                        <div class="fn-transfer__row">
+                    <div class="fn-transfer" key={tr.id} data-stalled={stalled.to_string()}>
+                        <div class="fn-transfer__head">
                             <span class="fn-transfer__name" title={tr.name.clone()}>
                                 { tr.name.clone() }
                             </span>
-                            <span class="fn-transfer__stage">{ label }</span>
+                            <button
+                                type="button"
+                                class="fn-transfer__cancel"
+                                aria-label={t(lang, Key::transfer_cancel)}
+                                title={t(lang, Key::transfer_cancel)}
+                                onclick={cancel}
+                            >{ super::icons::close(14) }</button>
+                        </div>
+
+                        <div class="fn-transfer__meta">
+                            // The stage sits *next to* the percentage on
+                            // purpose. A bare "100%" is what made a hung
+                            // checksum look like a finished upload.
+                            <span class="fn-transfer__stage">
+                                { if stalled { t(lang, Key::transfer_stalled) } else { label } }
+                            </span>
                             <span class="fn-transfer__pct">{ format!("{pct}%") }</span>
                         </div>
+
                         <div
                             class="fn-transfer__track"
                             role="progressbar"
@@ -56,9 +148,6 @@ pub fn transfer_rail() -> Html {
                             aria-valuemax="100"
                             aria-valuenow={pct.to_string()}
                         >
-                            // Width rather than a transform scale: the bar has a
-                            // glow on its leading edge, and scaling would stretch
-                            // that into a smear.
                             <i
                                 class="fn-transfer__fill"
                                 data-stage={match tr.stage {
@@ -68,8 +157,14 @@ pub fn transfer_rail() -> Html {
                                 style={format!("width:{pct}%")}
                             />
                         </div>
+
                         <div class="fn-transfer__size">
                             { format!("{} / {}", human_bytes(tr.done), human_bytes(tr.total)) }
+                            if stalled {
+                                <span class="fn-transfer__hint">
+                                    { t(lang, Key::transfer_stalled_hint) }
+                                </span>
+                            }
                         </div>
                     </div>
                 }
