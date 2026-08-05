@@ -280,11 +280,11 @@ pub fn addr(p: &AddrProps) -> Html {
         let onclick = {
             let revealed = revealed.clone();
             Callback::from(move |e: MouseEvent| {
-            // The address usually sits inside something with its own tap —
-            // a members row, a room card. Neither that nor the copy gesture
-            // beside it should fire because someone asked to see the rest.
-            e.stop_propagation();
-            revealed.set(!*revealed);
+                // The address usually sits inside something with its own tap —
+                // a members row, a room card. Neither that nor the copy gesture
+                // beside it should fire because someone asked to see the rest.
+                e.stop_propagation();
+                revealed.set(!*revealed);
             })
         };
         let key = if *revealed {
