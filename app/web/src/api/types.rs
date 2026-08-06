@@ -58,12 +58,39 @@ pub struct Room {
     /// every encrypted post 409s until it is.
     #[serde(default)]
     pub key_rotation_pending: bool,
+    /// `channel`, `dm` or `group_dm`. Defaulted rather than required so a
+    /// server predating direct messages still parses — everything it serves is
+    /// a channel, which is exactly what the default says.
+    #[serde(default = "channel_kind")]
+    pub kind: String,
     #[serde(default)]
     pub created_at: Option<String>,
 }
 
 fn one() -> i64 {
     1
+}
+
+fn channel_kind() -> String {
+    RoomKind::CHANNEL.to_owned()
+}
+
+/// The three room kinds, as the wire spells them.
+pub struct RoomKind;
+
+impl RoomKind {
+    pub const CHANNEL: &'static str = "channel";
+    pub const DM: &'static str = "dm";
+    pub const GROUP_DM: &'static str = "group_dm";
+}
+
+impl Room {
+    /// Whether this is a conversation between named people rather than a
+    /// channel. Every affordance a DM does not have keys on this one question,
+    /// so a third kind of DM later cannot leave one of them behind.
+    pub fn is_direct(&self) -> bool {
+        self.kind == RoomKind::DM || self.kind == RoomKind::GROUP_DM
+    }
 }
 
 /// A room enriched with its roster. `unreadCount`/`lastReadSerial` appear only
@@ -90,6 +117,10 @@ pub struct RoomWithMembers {
     pub unread_count: Option<u32>,
     #[serde(default)]
     pub last_read_serial: Option<i64>,
+    /// Unread messages in this room that name the caller. A different number
+    /// from `unreadCount`, and the one people actually triage by.
+    #[serde(default)]
+    pub mention_count: Option<u32>,
 }
 
 impl RoomWithMembers {
@@ -99,6 +130,50 @@ impl RoomWithMembers {
 
     pub fn is_admin(&self, who: &WalletAddress) -> bool {
         self.admins.iter().any(|a| &a.wallet_address == who)
+    }
+
+    pub fn is_direct(&self) -> bool {
+        self.room.is_direct()
+    }
+
+    /// The members of a DM other than the viewer.
+    ///
+    /// Empty for a note-to-self, which is a DM whose only member *is* the
+    /// viewer — [`Self::title_for`] turns that into "You" rather than showing
+    /// an unlabelled row.
+    pub fn others<'a>(&'a self, viewer: &WalletAddress) -> Vec<&'a User> {
+        self.members
+            .iter()
+            .filter(|m| &m.user_address != viewer)
+            .map(|m| &m.user)
+            .collect()
+    }
+
+    /// What to call this room on screen.
+    ///
+    /// A channel has a name somebody chose. A DM does not: the server stores a
+    /// placeholder because the column is `NOT NULL`, and the real title is
+    /// whoever else is in it — which is different for each participant, so it
+    /// can only be worked out here. Deriving it rather than storing it is also
+    /// what keeps it correct when somebody renames themselves.
+    pub fn title_for(&self, viewer: &WalletAddress) -> String {
+        if !self.is_direct() {
+            return self.room.name.clone();
+        }
+        let others = self.others(viewer);
+        match others.as_slice() {
+            // A DM with only you in it: the private notebook.
+            [] => "You".to_owned(),
+            [one] => one.display_name(),
+            // Three or four names read fine; past that the list is longer than
+            // the row and a count is more use than a truncated sentence.
+            many if many.len() <= 3 => many
+                .iter()
+                .map(|u| u.display_name())
+                .collect::<Vec<_>>()
+                .join(", "),
+            many => format!("{} and {} others", many[0].display_name(), many.len() - 1),
+        }
     }
 
     /// Sort key for the room list: newest activity first, falling back to the
@@ -212,6 +287,20 @@ pub struct Message {
     pub target_message_id: Option<MessageId>,
     #[serde(default)]
     pub emoticon_code: Option<String>,
+    /// The thread this message belongs to — always the thread's *root*, never
+    /// the message directly replied to. `None` is a top-level post.
+    #[serde(default)]
+    pub parent_message_id: Option<MessageId>,
+    /// How many replies the server counted, and when the newest arrived.
+    ///
+    /// Present only on `GET /rooms/{id}/messages`, which is the one read path
+    /// that hides replies and therefore owes the caller a summary of what it
+    /// hid. `/sync` omits both and delivers the reply rows themselves, so the
+    /// client keeps its own count from there — see `RoomState::reply_count`.
+    #[serde(default)]
+    pub reply_count: Option<i64>,
+    #[serde(default)]
+    pub last_reply_at: Option<i64>,
     /// Absent on endpoints that return a bare `Message`.
     #[serde(default)]
     pub sender: Option<User>,

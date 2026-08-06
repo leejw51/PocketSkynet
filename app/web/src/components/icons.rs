@@ -43,6 +43,12 @@ macro_rules! icons {
 
 icons! {
     plus => html! { <><path d="M12 5v14"/><path d="M5 12h14"/></> };
+    // The @ of a mention: a closed ring with the tail that distinguishes it
+    // from a plain circle at 16px, where the inner dot alone does not read.
+    at_sign => html! { <><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.9 7.9"/></> };
+    // A speech bubble with a second, offset one behind it — a reply *to*
+    // something, which is what distinguishes a thread from a message.
+    thread => html! { <><path d="M8 13H5.5A2.5 2.5 0 0 1 3 10.5v-4A2.5 2.5 0 0 1 5.5 4h9A2.5 2.5 0 0 1 17 6.5V8"/><path d="M9.5 10h9a2.5 2.5 0 0 1 2.5 2.5v4a2.5 2.5 0 0 1-2.5 2.5H14l-3.5 2.5V19H9.5A2.5 2.5 0 0 1 7 16.5v-4A2.5 2.5 0 0 1 9.5 10Z"/></> };
     search => html! { <><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></> };
     // An open book — two pages and a spine. The closed cover this replaced was
     // a rounded rectangle whose only interior stroke (the shelf lip) landed on

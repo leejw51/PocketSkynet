@@ -59,6 +59,7 @@ pub async fn refresh_all(store: Store) {
 
     refresh_invitations(store.clone()).await;
     refresh_shouts(store.clone()).await;
+    refresh_server_admin(store.clone()).await;
     refresh_blocks(store).await;
 }
 
@@ -78,6 +79,22 @@ pub async fn refresh_invitations(store: Store) {
     match store.client.invitations().await {
         Ok(v) => store.dispatch(Action::InvitationsLoaded(v)),
         Err(e) => store.dispatch(Action::InvitationsFailed(e.user_message())),
+    }
+}
+
+/// Ask the server whether this wallet administers it.
+///
+/// A request rather than something read from the login response, because a
+/// client restoring a stored session has the token but not the response that
+/// came with it. The endpoint answers for everybody — a route that 403'd for
+/// non-admins would make "you are not one" indistinguishable from "the server
+/// is down", and the console would flicker on every hiccup.
+pub async fn refresh_server_admin(store: Store) {
+    // A failure leaves the flag alone rather than clearing it: losing the
+    // console because one request timed out is worse than showing it for a few
+    // seconds too long, and every action behind it is checked server-side.
+    if let Ok(is_admin) = store.client.admin_session().await {
+        store.dispatch(Action::SetServerAdmin(is_admin));
     }
 }
 
@@ -522,13 +539,41 @@ fn hello_message(lang: Lang, entropy: &[u8; 2], now_ms: i64) -> String {
 /// `STALE_KEY_VERSION` is retried **once**, under the epoch the server named.
 /// `KEY_ROTATION_REQUIRED` is never retried: the room needs re-keying first,
 /// and retrying would just burn rate limit against a fail-closed gate.
-pub async fn send_message(store: Store, room_id: RoomId, local_id: u64, text: String) {
+/// Where a message is going beyond the room: a thread, and the people it names.
+///
+/// A struct rather than two more positional parameters, because both are
+/// usually absent and `send_message(store, room, id, text, None, vec![])` at
+/// every call site reads as noise around the one that matters.
+#[derive(Debug, Clone, Default)]
+pub struct SendExtras {
+    /// The thread to post into. The server flattens this to the thread root,
+    /// so passing a reply's id is fine.
+    pub parent: Option<pocketskynet_core::MessageId>,
+    /// Addresses the message names, resolved against the room's roster before
+    /// they got here. Advisory — the server re-checks them.
+    pub mentions: Vec<pocketskynet_core::WalletAddress>,
+}
+
+pub async fn send_message(
+    store: Store,
+    room_id: RoomId,
+    local_id: u64,
+    text: String,
+    extras: SendExtras,
+) {
     let room = store.room(&room_id).cloned();
     let encrypted = room.as_ref().is_some_and(|r| r.has_encryption);
 
     let build = |version: i64| -> Result<crate::api::messages::MessageBody, String> {
+        // Threading and mentions are attached *after* the body is built, so
+        // they survive the encrypted and plaintext paths identically — and so
+        // a retry under a new key version cannot drop them.
+        let attach = |b: crate::api::messages::MessageBody| {
+            b.in_thread(extras.parent.clone())
+                .naming(extras.mentions.clone())
+        };
         if !encrypted {
-            return Ok(crypto::plaintext_body(&text));
+            return Ok(attach(crypto::plaintext_body(&text)));
         }
         let bundle = store
             .bundle(&room_id)
@@ -537,6 +582,7 @@ pub async fn send_message(store: Store, room_id: RoomId, local_id: u64, text: St
             .get(version)
             .ok_or(t(store.language, Key::no_current_key))?;
         crypto::encrypted_body(key, version, &room_id, &text)
+            .map(attach)
             .map_err(|e| format!("Couldn't encrypt that message: {e}"))
     };
 
@@ -1240,7 +1286,7 @@ pub async fn attach_file(store: Store, room_id: RoomId, picked: web_sys::File, c
         body.clone(),
         now,
     ));
-    send_message(store, room_id, local_id, body).await;
+    send_message(store, room_id, local_id, body, SendExtras::default()).await;
 }
 
 #[cfg(test)]

@@ -22,6 +22,12 @@ struct NameReq<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DmReq<'a> {
+    wallet_addresses: &'a [WalletAddress],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct UserAddressReq<'a> {
     user_address: &'a str,
 }
@@ -46,6 +52,27 @@ impl Client {
                 // sending `""` and sending nothing are equivalent, but omitting
                 // it keeps the request honest.
                 description: description.filter(|d| !d.trim().is_empty()),
+            },
+        )
+        .await
+    }
+
+    /// Open a direct message with `who`, or return the one that already exists.
+    ///
+    /// **Idempotent by identity, not by convention.** The room is keyed on its
+    /// member set server-side, so this is the answer to "the conversation
+    /// between these people" rather than a create call that happens to be safe
+    /// to retry — two people pressing "message" at the same moment land in one
+    /// room. Naming only yourself is allowed and gives the private notebook.
+    ///
+    /// Returns the *enriched* room, because a DM has no name of its own: the
+    /// caller has to title it from the roster, which travels in this response.
+    pub async fn open_dm(&self, who: &[WalletAddress]) -> ApiResult<RoomWithMembers> {
+        self.send_json(
+            Method::POST,
+            "/api/rooms/dm",
+            &DmReq {
+                wallet_addresses: who,
             },
         )
         .await

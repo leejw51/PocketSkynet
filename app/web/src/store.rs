@@ -58,6 +58,19 @@ pub struct FoldOutcome {
     pub max_serial: i64,
 }
 
+/// The sort key for display order.
+///
+/// `msg_serial` as the tiebreak, **not** `id`. An id is `msg_{millis}_{uuid}`,
+/// so it looks like a stable secondary sort and is not one: within a
+/// millisecond it orders by a random UUID, which shuffled any burst of
+/// messages — most visibly a thread, where three quick replies came back in a
+/// different order on every render. The serial is the room's own monotonic
+/// counter and is the only column guaranteed to increase with insertion order.
+/// The server's queries were fixed the same way.
+fn order_key(m: &Message) -> (i64, i64) {
+    (m.message_timestamp, m.msg_serial)
+}
+
 impl RoomState {
     /// Fold one `/sync` event into the state (API.md §9).
     ///
@@ -224,12 +237,67 @@ impl RoomState {
             .values()
             .filter(|m| !blocks.hides(&m.sender_address))
             .collect();
-        v.sort_by(|a, b| {
-            a.message_timestamp
-                .cmp(&b.message_timestamp)
-                .then_with(|| a.id.as_str().cmp(b.id.as_str()))
-        });
+        v.sort_by_key(|m| order_key(m));
         v
+    }
+
+    /// The channel view: top-level messages only.
+    ///
+    /// Replies are deliberately excluded even though `/sync` delivered them and
+    /// they are sitting in `messages` — that is what threads are *for*, and it
+    /// is also what the server's `GET /messages` does. Holding them locally is
+    /// what lets [`Self::replies_to`] open a thread without a request.
+    pub fn ordered_top_level<'a>(&'a self, blocks: &BlockSet) -> Vec<&'a Message> {
+        self.ordered(blocks)
+            .into_iter()
+            .filter(|m| {
+                match &m.parent_message_id {
+                    None => true,
+                    // A reply whose parent is not in the local fold is
+                    // *promoted* to the stream rather than hidden. Two ways
+                    // that state is reached, both legitimate: the root was
+                    // deleted (this fold drops deleted rows outright, so
+                    // there is no parent row to hang a thread opener on), or
+                    // the root is older than the backfill window and only the
+                    // reply arrived over /sync. Filtering such a reply out
+                    // would strand it — held in memory, on the server,
+                    // renderable, and reachable from nowhere. When the parent
+                    // later arrives via backfill, the reply collapses back
+                    // under it.
+                    Some(parent) => !self.messages.contains_key(parent),
+                }
+            })
+            .collect()
+    }
+
+    /// One thread's replies, oldest first.
+    ///
+    /// Answered from the local fold rather than by fetching, because `/sync`
+    /// already delivered every reply — the server hides them from the *channel*
+    /// query, not from the stream. Opening a thread is therefore instant and
+    /// works offline, and the count below cannot disagree with the list.
+    pub fn replies_to<'a>(&'a self, root: &MessageId, blocks: &BlockSet) -> Vec<&'a Message> {
+        let mut v: Vec<&Message> = self
+            .messages
+            .values()
+            .filter(|m| m.parent_message_id.as_ref() == Some(root))
+            .filter(|m| !m.is_deleted && m.kind().is_renderable())
+            .filter(|m| !blocks.hides(&m.sender_address))
+            .collect();
+        v.sort_by_key(|m| order_key(m));
+        v
+    }
+
+    /// How many replies to show on the parent's footer.
+    ///
+    /// The local count wins when there is one, because it is block-filtered and
+    /// includes replies that arrived since the page loaded. The server's
+    /// `replyCount` is the fallback for the case the local fold cannot cover: a
+    /// message loaded by backward pagination, whose replies were never in any
+    /// `/sync` window this session.
+    pub fn reply_count(&self, message: &Message, blocks: &BlockSet) -> i64 {
+        let local = self.replies_to(&message.id, blocks).len() as i64;
+        local.max(message.reply_count.unwrap_or(0))
     }
 
     /// The oldest `messageTimestamp` held — the cursor for backward paging.
@@ -369,6 +437,70 @@ mod tests {
     }
 
     #[test]
+    fn threads_fold_under_their_parent_and_orphans_are_promoted() {
+        let blocks = BlockSet::default();
+        let mut st = RoomState::default();
+        let reply = |id: &str, serial: i64, ts: i64, parent: &str| {
+            let mut e = ev(id, "add", serial, ts, 2);
+            e.parent_message_id = Some(mid(parent));
+            e
+        };
+        st.fold(&[
+            ev("msg_aaaa_01", "add", 10, 100, 1),
+            reply("msg_aaaa_02", 11, 200, "msg_aaaa_01"),
+            reply("msg_aaaa_03", 12, 300, "msg_aaaa_01"),
+            ev("msg_aaaa_04", "add", 13, 400, 1),
+        ]);
+
+        // The channel shows the parent and the unrelated message; the two
+        // replies are under the parent, in order, and counted.
+        let top: Vec<_> = st
+            .ordered_top_level(&blocks)
+            .iter()
+            .map(|m| m.id.as_str().to_owned())
+            .collect();
+        assert_eq!(top, vec!["msg_aaaa_01", "msg_aaaa_04"]);
+        let thread: Vec<_> = st
+            .replies_to(&mid("msg_aaaa_01"), &blocks)
+            .iter()
+            .map(|m| m.id.as_str().to_owned())
+            .collect();
+        assert_eq!(thread, vec!["msg_aaaa_02", "msg_aaaa_03"]);
+        let parent = st.messages[&mid("msg_aaaa_01")].clone();
+        assert_eq!(st.reply_count(&parent, &blocks), 2);
+
+        // Delete the root. This fold drops deleted rows outright, so there is
+        // no parent row left to hang a thread opener on — the replies must be
+        // promoted into the stream rather than stranded in memory, reachable
+        // from nowhere.
+        st.fold(&[ev("msg_aaaa_01", "delete", 14, 100, 1)]);
+        let top: Vec<_> = st
+            .ordered_top_level(&blocks)
+            .iter()
+            .map(|m| m.id.as_str().to_owned())
+            .collect();
+        assert_eq!(top, vec!["msg_aaaa_02", "msg_aaaa_03", "msg_aaaa_04"]);
+
+        // The same promotion covers a reply that arrived over /sync when its
+        // root is older than anything backfill has loaded…
+        let mut cold = RoomState::default();
+        cold.fold(&[reply("msg_aaaa_09", 20, 900, "msg_aaaa_00")]);
+        assert_eq!(cold.ordered_top_level(&blocks).len(), 1);
+
+        // …and when the root later arrives via backfill, the reply collapses
+        // back under it.
+        cold.merge_history(&[ev("msg_aaaa_00", "add", 1, 50, 1)]);
+        let top: Vec<_> = cold
+            .ordered_top_level(&blocks)
+            .iter()
+            .map(|m| m.id.as_str().to_owned())
+            .collect();
+        assert_eq!(top, vec!["msg_aaaa_00"]);
+        let parent = cold.messages[&mid("msg_aaaa_00")].clone();
+        assert_eq!(cold.reply_count(&parent, &blocks), 1);
+    }
+
+    #[test]
     fn a_stream_survives_the_cache_round_trip() {
         // Fold a realistic sequence — messages, a reaction, a delete — then
         // snapshot and rebuild. The rebuilt stream must render identically:
@@ -440,6 +572,9 @@ mod tests {
             tx_hash: None,
             target_message_id: None,
             emoticon_code: None,
+            parent_message_id: None,
+            reply_count: None,
+            last_reply_at: None,
             sender: None,
         }
     }

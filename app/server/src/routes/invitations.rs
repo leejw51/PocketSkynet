@@ -53,8 +53,17 @@ async fn invite(
     state
         .db
         .call(move |conn| {
-            if rooms::get_room(conn, &room_id)?.is_none() {
+            let Some(record) = rooms::get_room(conn, &room_id)? else {
                 return Err(ApiError::not_found("Room not found"));
+            };
+            // A DM is the conversation between the people in it. Adding a
+            // third would silently turn the room two people believed was
+            // private into one that is not, and there is no notion of
+            // "accepting" your way into somebody else's DM.
+            if record.is_direct() {
+                return Err(ApiError::bad_request(
+                    "Cannot invite anyone to a direct message. Start a group message instead.",
+                ));
             }
             if !rooms::is_admin(conn, &room_id, &inviter)? {
                 return Err(ApiError::forbidden("Only room admins can invite users"));

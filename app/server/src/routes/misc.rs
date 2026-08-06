@@ -232,6 +232,48 @@ pub fn server_wallet() -> String {
     )
 }
 
+/// The wallets this deployment treats as server administrators.
+///
+/// `VITE_FRUITNATION_ADMIN` is a comma-separated list of addresses, and it is
+/// **configuration, not data**: there is no endpoint that grants or revokes
+/// this role, and nothing in the database can. That is the point. Wallet
+/// identity means an account is a keypair, so the only trustworthy way to say
+/// "these people run this server" is for the person who deploys it to say so,
+/// in the same file that decides which chain it is on. An admin table would be
+/// a table whose first row has to come from somewhere — and every bootstrap
+/// answer to that ("the first user to sign in", "whoever knows this code") is
+/// weaker than a line in a config file the operator already edits.
+///
+/// Returned lowercased, because addresses are written checksummed by every
+/// wallet and by hand in half a dozen cases; comparing on the lowered form is
+/// what stops a correctly-configured admin from silently having no powers.
+/// Blank entries are dropped, so a trailing comma is not an admin.
+pub fn server_admins() -> Vec<String> {
+    setting_opt(
+        "VITE_FRUITNATION_ADMIN",
+        option_env!("VITE_FRUITNATION_ADMIN"),
+    )
+    .map(|raw| {
+        raw.split(',')
+            .map(|entry| entry.trim().to_lowercase())
+            .filter(|entry| !entry.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Whether `address` administers this server.
+///
+/// An unset or empty `VITE_FRUITNATION_ADMIN` means **nobody** does, and every
+/// admin route 403s. Failing closed matters more here than anywhere else in
+/// the server: the opposite default — "no admins configured, so everyone is
+/// one" — would hand a fresh deployment's first visitor the ability to delete
+/// every room on it.
+pub fn is_server_admin(address: &str) -> bool {
+    let wanted = address.to_lowercase();
+    server_admins().iter().any(|admin| admin == &wanted)
+}
+
 /// The CRO price of an on-chain anchor.
 pub fn hash_price_cro() -> String {
     setting_opt(

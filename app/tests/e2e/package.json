@@ -1,0 +1,14 @@
+{
+  "name": "pocketskynet-e2e",
+  "private": true,
+  "description": "End-to-end checks for DMs, threads, mentions and server administration",
+  "scripts": {
+    "test": "./run.sh"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0"
+  }
+}

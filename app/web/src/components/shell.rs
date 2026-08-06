@@ -14,7 +14,7 @@ use crate::route::Route;
 use crate::session::{ShellLayout, Theme};
 use crate::state::{use_store, Action, Confirm, ConfirmAction, Modal};
 
-use super::common::{Addr, Ident, IdentSize, Unread};
+use super::common::{Addr, Ident, IdentSize, MentionBadge, Unread};
 use super::icons;
 
 #[derive(Properties, PartialEq)]
@@ -154,6 +154,9 @@ pub fn shell(p: &ShellProps) -> Html {
     let address = store.auth.address().cloned();
     let username = store.auth.username().unwrap_or("").to_owned();
     let invites = store.pending_invitations();
+    // Summed across rooms: the top bar answers "is anything waiting for me
+    // anywhere", which is a different question from the per-room badge.
+    let mentions: u32 = store.rooms.iter().filter_map(|r| r.mention_count).sum();
     let unread = store.total_unread();
     // Today's unfinished orders. Read straight from local storage rather than
     // held in the store: it changes only when an award lands, and the nav
@@ -402,6 +405,44 @@ pub fn shell(p: &ShellProps) -> Html {
                     >
                         { icons::type_size(18) }
                     </button>
+                    // Mentions before invitations: being named is a thing that
+                    // happens several times a day, an invitation a few times a
+                    // year, and the frequent one belongs nearer the front.
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
+                        aria-label={t(lang, Key::mentions)}
+                        title={t(lang, Key::mentions)}
+                        onclick={{
+                            let store = store.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                store.dispatch(Action::OpenModal(Modal::Mentions))
+                            })
+                        }}
+                    >
+                        { icons::at_sign(18) }
+                        <MentionBadge count={mentions} />
+                    </button>
+                    // Only for wallets the *server* names as administrators.
+                    // Hiding it is a courtesy — every route behind it is
+                    // checked server-side — but offering a console that 403s
+                    // on every click is worse than not offering one.
+                    if store.is_server_admin {
+                        <button
+                            type="button"
+                            class="topcoat-icon-button--quiet fn-topbar__wide"
+                            aria-label={t(lang, Key::admin_console)}
+                            title={t(lang, Key::admin_console)}
+                            onclick={{
+                                let store = store.clone();
+                                Callback::from(move |_: MouseEvent| {
+                                    store.dispatch(Action::OpenModal(Modal::AdminConsole))
+                                })
+                            }}
+                        >
+                            { icons::shield(18) }
+                        </button>
+                    }
                     <button
                         type="button"
                         class="topcoat-icon-button--quiet fn-topbar__wide"

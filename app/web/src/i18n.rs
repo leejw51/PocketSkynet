@@ -390,6 +390,7 @@ strings! {
     (file_deleted, "Attachment deleted", "첨부 파일이 삭제되었습니다", "添付を削除しました", "已刪除附件", "Příloha smazána", "Adjunto eliminado", "附件已删除", "Anhang gelöscht"),
     (file_delete_confirm, "Delete {name}? This cannot be undone.", "{name}을(를) 삭제할까요? 되돌릴 수 없습니다.", "{name} を削除しますか？取り消せません。", "要刪除 {name} 嗎？無法復原。", "Smazat {name}? Tuto akci nelze vzít zpět.", "¿Eliminar {name}? No se puede deshacer.", "删除 {name}？此操作无法撤销。", "{name} löschen? Das kann nicht rückgängig gemacht werden."),
     (open_in_new_window, "Open in a new window", "새 창에서 열기", "新しいウィンドウで開く", "在新視窗開啟", "Otevřít v novém okně", "Abrir en una ventana nueva", "在新窗口打开", "In einem neuen Fenster öffnen"),
+    (attachment_verifying, "Checking the file…", "파일 검사 중…", "ファイルを確認中…", "檢查緊個檔案…", "Kontroluji soubor…", "Comprobando el archivo…", "正在检查文件…", "Datei wird geprüft…"),
     (attachment_failed, "This attachment could not be loaded.", "이 첨부 파일을 불러올 수 없습니다.", "この添付を読み込めませんでした。", "無法載入此附件。", "Tuto přílohu nelze načíst.", "No se pudo cargar este adjunto.", "无法加载此附件。", "Dieser Anhang konnte nicht geladen werden."),
     (file_filter_all, "All", "전체", "すべて", "全部", "Vše", "Todos", "全部", "Alle"),
 
@@ -758,6 +759,49 @@ strings! {
     (delete_room, "Delete room", "채팅방 삭제", "ルームを削除", "刪除聊天室", "Smazat místnost", "Eliminar la sala", "删除聊天室", "Raum löschen"),
     (delete_room_title, "Delete {name}?", "{name}을(를) 삭제할까요?", "{name}を削除しますか？", "刪除 {name}？", "Smazat {name}?", "¿Eliminar {name}?", "删除 {name}？", "{name} löschen?"),
     (delete_room_body, "The room, its messages and its keys are removed for every member. It can't be undone.", "채팅방과 메시지, 키가 모든 멤버에게서 삭제됩니다. 되돌릴 수 없습니다.", "ルーム、そのメッセージ、鍵がすべてのメンバーから削除されます。取り消せません。", "聊天室、佢嘅訊息同金鑰會為所有成員刪走。無法還原。", "Místnost, její zprávy i klíče se odstraní všem členům. Nelze vzít zpět.", "La sala, sus mensajes y sus claves se eliminan para todos los miembros. No se puede deshacer.", "聊天室及其消息和密钥将为所有成员删除，且无法撤销。", "Der Raum, seine Nachrichten und Schlüssel werden für alle Mitglieder entfernt. Es lässt sich nicht rückgängig machen."),
+
+    // --- Direct messages, threads and mentions -------------------------------
+    (section_channels, "Channels", "채널", "チャンネル", "頻道", "Kanály", "Canales", "频道", "Kanäle"),
+    (section_direct_messages, "Direct messages", "다이렉트 메시지", "ダイレクトメッセージ", "私訊", "Přímé zprávy", "Mensajes directos", "私信", "Direktnachrichten"),
+    (new_direct_message, "New message", "새 메시지", "新規メッセージ", "新訊息", "Nová zpráva", "Mensaje nuevo", "新消息", "Neue Nachricht"),
+    (new_direct_message_hint, "Pick who to message. Choosing yourself opens a private notebook.", "메시지를 보낼 사람을 고르세요. 자신을 선택하면 개인 메모장이 열립니다.", "メッセージを送る相手を選んでください。自分を選ぶと自分専用のメモになります。", "揀你想傾偈嘅人。揀返自己就會開一個私人筆記。", "Vyberte, komu napsat. Když zvolíte sebe, otevře se soukromý zápisník.", "Elige a quién escribir. Si te eliges a ti, se abre un cuaderno privado.", "选择要发消息的人。选择自己会打开一个私人记事本。", "Wähle, wem du schreiben willst. Dich selbst zu wählen öffnet ein privates Notizbuch."),
+    (note_to_self, "You", "나", "自分", "自己", "Vy", "Tú", "自己", "Du"),
+    (reply_in_thread, "Reply in thread", "스레드로 답장", "スレッドで返信", "喺主題度回覆", "Odpovědět ve vlákně", "Responder en el hilo", "在话题中回复", "Im Thread antworten"),
+    (thread, "Thread", "스레드", "スレッド", "主題", "Vlákno", "Hilo", "话题", "Thread"),
+    (thread_reply_one, "{n} reply", "답장 {n}개", "返信{n}件", "{n} 個回覆", "{n} odpověď", "{n} respuesta", "{n} 条回复", "{n} Antwort"),
+    (thread_reply_many, "{n} replies", "답장 {n}개", "返信{n}件", "{n} 個回覆", "{n} odpovědí", "{n} respuestas", "{n} 条回复", "{n} Antworten"),
+    (thread_empty, "No replies yet — start the thread.", "아직 답장이 없습니다. 스레드를 시작해 보세요.", "まだ返信はありません。スレッドを始めましょう。", "仲未有回覆 — 開個主題啦。", "Zatím žádné odpovědi — začněte vlákno.", "Aún no hay respuestas: empieza el hilo.", "还没有回复 —— 来开个话题吧。", "Noch keine Antworten — starte den Thread."),
+    (thread_deleted_root, "The first message was deleted.", "첫 메시지가 삭제되었습니다.", "最初のメッセージは削除されました。", "第一則訊息已刪除。", "První zpráva byla smazána.", "El primer mensaje fue eliminado.", "第一条消息已被删除。", "Die erste Nachricht wurde gelöscht."),
+    (mentions, "Mentions", "멘션", "メンション", "提及", "Zmínky", "Menciones", "提及", "Erwähnungen"),
+    (mentions_empty, "Nothing has mentioned you yet.", "아직 회원님을 멘션한 메시지가 없습니다.", "まだメンションはありません。", "仲未有人提過你。", "Zatím vás nikdo nezmínil.", "Todavía nadie te ha mencionado.", "还没有人提到你。", "Dich hat noch nichts erwähnt."),
+    (mentions_empty_hint, "When someone writes @your name, it lands here.", "누군가 @이름을 적으면 여기에 표시됩니다.", "誰かが @あなたの名前 と書くと、ここに届きます。", "有人打 @你個名 嘅時候就會出現喺呢度。", "Když někdo napíše @vaše jméno, objeví se to tady.", "Cuando alguien escriba @tu nombre, aparecerá aquí.", "当有人写下 @你的名字 时，会出现在这里。", "Wenn jemand @deinen Namen schreibt, landet es hier."),
+    (message_verb, "Message", "메시지", "メッセージ", "傾偈", "Napsat", "Escribir", "发消息", "Schreiben"),
+    (opening, "Opening…", "여는 중…", "開いています…", "開緊…", "Otevírám…", "Abriendo…", "正在打开…", "Wird geöffnet…"),
+    (open_conversation, "Open", "열기", "開く", "開啟", "Otevřít", "Abrir", "打开", "Öffnen"),
+    (new_message_one, "{n} new message", "새 메시지 {n}개", "新着メッセージ{n}件", "{n} 則新訊息", "{n} nová zpráva", "{n} mensaje nuevo", "{n} 条新消息", "{n} neue Nachricht"),
+    (new_message_many, "{n} new messages", "새 메시지 {n}개", "新着メッセージ{n}件", "{n} 則新訊息", "{n} nových zpráv", "{n} mensajes nuevos", "{n} 条新消息", "{n} neue Nachrichten"),
+    (mention_suggestions, "People you can mention", "멘션할 수 있는 사람", "メンションできる人", "可以提及嘅人", "Lidé, které můžete zmínit", "Personas a las que puedes mencionar", "可提及的人", "Personen, die du erwähnen kannst"),
+
+    // --- Server administration -----------------------------------------------
+    (admin_console, "Server admin", "서버 관리", "サーバー管理", "伺服器管理", "Správa serveru", "Administración del servidor", "服务器管理", "Serververwaltung"),
+    (admin_people, "People", "사용자", "ユーザー", "使用者", "Lidé", "Personas", "用户", "Personen"),
+    (admin_rooms, "Rooms", "채팅방", "ルーム", "聊天室", "Místnosti", "Salas", "聊天室", "Räume"),
+    (admin_suspend, "Suspend", "정지", "利用停止", "停用", "Pozastavit", "Suspender", "停用", "Sperren"),
+    (admin_reinstate, "Reinstate", "정지 해제", "停止解除", "恢復", "Obnovit", "Restablecer", "恢复", "Entsperren"),
+    (admin_remove, "Remove from server", "서버에서 제거", "サーバーから削除", "喺伺服器移除", "Odebrat ze serveru", "Quitar del servidor", "从服务器移除", "Vom Server entfernen"),
+    (admin_suspended, "Suspended", "정지됨", "利用停止中", "已停用", "Pozastaveno", "Suspendido", "已停用", "Gesperrt"),
+    (admin_is_admin, "Admin", "관리자", "管理者", "管理員", "Správce", "Administrador", "管理员", "Admin"),
+    (admin_suspend_title, "Suspend {name}?", "{name}을(를) 정지할까요?", "{name} を利用停止にしますか？", "停用 {name}？", "Pozastavit {name}?", "¿Suspender a {name}?", "停用 {name}？", "{name} sperren?"),
+    (admin_suspend_body, "Their existing sign-in stops working immediately and they cannot sign in again. Their rooms and messages are untouched, and you can reinstate them at any time.", "기존 로그인이 즉시 무효화되고 다시 로그인할 수 없습니다. 채팅방과 메시지는 그대로이며 언제든 정지를 해제할 수 있습니다.", "現在のログインは直ちに無効になり、再ログインもできなくなります。ルームとメッセージはそのままで、いつでも解除できます。", "佢而家嘅登入即刻失效，亦都唔可以再登入。聊天室同訊息唔會郁到，你隨時可以恢復。", "Jejich stávající přihlášení okamžitě přestane fungovat a znovu se nepřihlásí. Místnosti a zprávy zůstanou nedotčené a kdykoli je můžete obnovit.", "Su sesión actual deja de funcionar de inmediato y no podrá volver a entrar. Sus salas y mensajes quedan intactos, y puedes restablecerlo cuando quieras.", "其现有登录会立即失效，且无法再次登录。其聊天室和消息不受影响，你可以随时恢复。", "Die bestehende Anmeldung wird sofort ungültig und eine erneute Anmeldung ist nicht möglich. Räume und Nachrichten bleiben unberührt, und du kannst jederzeit entsperren."),
+    (admin_remove_title, "Remove {name} from this server?", "{name}을(를) 이 서버에서 제거할까요?", "{name} をこのサーバーから削除しますか？", "喺呢個伺服器移除 {name}？", "Odebrat {name} z tohoto serveru?", "¿Quitar a {name} de este servidor?", "把 {name} 从此服务器移除？", "{name} von diesem Server entfernen?"),
+    (admin_remove_body, "They leave every room, lose their room keys, and are suspended. Every room they were in will need re-keying. Their messages stay where they are, still attributed to them.", "모든 채팅방에서 나가고 채팅방 키를 잃으며 정지됩니다. 그가 있던 모든 채팅방은 키를 교체해야 합니다. 메시지는 작성자 표시와 함께 그대로 남습니다.", "すべてのルームから退出し、ルームキーを失い、利用停止になります。在籍していた各ルームは鍵の更新が必要です。メッセージは投稿者名とともにそのまま残ります。", "佢會離開所有聊天室、失去聊天室金鑰，同埋被停用。佢去過嘅聊天室都要換金鑰。佢嘅訊息會照留低，仍然顯示佢個名。", "Opustí všechny místnosti, přijdou o klíče a budou pozastaveni. Každá místnost, kde byli, bude potřebovat obměnu klíče. Jejich zprávy zůstanou, stále s uvedením autora.", "Sale de todas las salas, pierde sus claves y queda suspendido. Cada sala en la que estuvo necesitará rotar la clave. Sus mensajes permanecen, aún atribuidos a esa persona.", "其将退出所有聊天室、失去聊天室密钥，并被停用。其待过的每个聊天室都需要轮换密钥。其消息将保留，且仍标注为其所发。", "Die Person verlässt jeden Raum, verliert ihre Raumschlüssel und wird gesperrt. Jeder Raum, in dem sie war, muss neu verschlüsselt werden. Ihre Nachrichten bleiben erhalten, weiterhin ihr zugeordnet."),
+    (admin_delete_room_body, "The room, its messages and its keys are removed for every member. Use this for a room whose last admin has gone. It can't be undone.", "채팅방과 메시지, 키가 모든 멤버에게서 삭제됩니다. 마지막 관리자가 떠난 채팅방에 사용하세요. 되돌릴 수 없습니다.", "ルーム、そのメッセージ、鍵がすべてのメンバーから削除されます。最後の管理者がいなくなったルームに使ってください。取り消せません。", "聊天室、佢嘅訊息同金鑰會為所有成員刪走。用喺最後一個管理員都走咗嘅聊天室。無法還原。", "Místnost, její zprávy i klíče se odstraní všem členům. Použijte pro místnost, jejíž poslední správce odešel. Nelze vzít zpět.", "La sala, sus mensajes y sus claves se eliminan para todos los miembros. Úsalo con una sala cuyo último administrador se ha ido. No se puede deshacer.", "聊天室及其消息和密钥将为所有成员删除。用于最后一位管理员已离开的聊天室。无法撤销。", "Der Raum, seine Nachrichten und Schlüssel werden für alle Mitglieder entfernt. Für einen Raum, dessen letzter Admin weg ist. Es lässt sich nicht rückgängig machen."),
+    (admin_configured_by, "Administrators come from VITE_FRUITNATION_ADMIN on the server. Nothing here can grant or revoke the role.", "관리자는 서버의 VITE_FRUITNATION_ADMIN 설정에서 정해집니다. 여기서는 권한을 주거나 뺏을 수 없습니다.", "管理者はサーバーの VITE_FRUITNATION_ADMIN で決まります。ここから権限を付与・剥奪することはできません。", "管理員係由伺服器嘅 VITE_FRUITNATION_ADMIN 決定。呢度改唔到權限。", "Správci pocházejí z VITE_FRUITNATION_ADMIN na serveru. Odsud roli udělit ani odebrat nelze.", "Los administradores salen de VITE_FRUITNATION_ADMIN en el servidor. Desde aquí no se puede conceder ni revocar el rol.", "管理员来自服务器上的 VITE_FRUITNATION_ADMIN。此处无法授予或撤销该角色。", "Administratoren stammen aus VITE_FRUITNATION_ADMIN auf dem Server. Hier lässt sich die Rolle weder vergeben noch entziehen."),
+    (admin_room_one, "{n} room", "채팅방 {n}개", "ルーム{n}件", "{n} 個聊天室", "{n} místnost", "{n} sala", "{n} 个聊天室", "{n} Raum"),
+    (admin_room_many, "{n} rooms", "채팅방 {n}개", "ルーム{n}件", "{n} 個聊天室", "{n} místností", "{n} salas", "{n} 个聊天室", "{n} Räume"),
+    (admin_message_one, "{n} message", "메시지 {n}개", "メッセージ{n}件", "{n} 則訊息", "{n} zpráva", "{n} mensaje", "{n} 条消息", "{n} Nachricht"),
+    (admin_message_many, "{n} messages", "메시지 {n}개", "メッセージ{n}件", "{n} 則訊息", "{n} zpráv", "{n} mensajes", "{n} 条消息", "{n} Nachrichten"),
+    (admin_totals, "{users} people · {channels} channels · {dms} direct · {messages} messages", "사용자 {users}명 · 채널 {channels}개 · 다이렉트 {dms}개 · 메시지 {messages}개", "ユーザー{users}人 · チャンネル{channels}個 · ダイレクト{dms}個 · メッセージ{messages}件", "{users} 個用戶 · {channels} 個頻道 · {dms} 個私訊 · {messages} 則訊息", "{users} lidí · {channels} kanálů · {dms} přímých · {messages} zpráv", "{users} personas · {channels} canales · {dms} directos · {messages} mensajes", "{users} 位用户 · {channels} 个频道 · {dms} 个私信 · {messages} 条消息", "{users} Personen · {channels} Kanäle · {dms} direkt · {messages} Nachrichten"),
 
     (filter_notes, "Filter taught notes…", "가르친 내용 필터…", "教えた内容をフィルタ…", "篩選教過嘅嘢…", "Filtrovat naučené poznámky…", "Filtrar lo enseñado…", "筛选已教内容…", "Beigebrachte Notizen filtern…"),
     (no_matching_notes, "No notes match that filter", "필터와 일치하는 내용이 없습니다", "フィルタに一致するものがありません", "冇符合篩選嘅嘢", "Žádné poznámky neodpovídají filtru", "Ninguna nota coincide con ese filtro", "没有符合筛选的内容", "Keine Notizen passen zu diesem Filter"),
@@ -1137,6 +1181,12 @@ mod tests {
             (Lang::De, Key::video_alt),
             (Lang::Cs, Key::tab_video),
             (Lang::De, Key::tab_video),
+            // German took "Thread" wholesale for the chat sense — every German
+            // messenger uses it, and "Diskussionsstrang" is what a dictionary
+            // says rather than what anyone types.
+            (Lang::De, Key::thread),
+            // Likewise "Admin", which is the ordinary German short form.
+            (Lang::De, Key::admin_is_admin),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

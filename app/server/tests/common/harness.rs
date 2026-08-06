@@ -231,6 +231,11 @@ impl TestServer {
         for key in [
             "VITE_FRUITNATION_WALLET",
             "VITE_FRUITNATION_HASH_CRO",
+            // Doubly important: leaving a developer's own address in here
+            // would give one wallet in the suite silent admin powers, and the
+            // tests that assert an action is refused would pass on CI and fail
+            // on that developer's machine — or worse, the reverse.
+            "VITE_FRUITNATION_ADMIN",
             "VITE_CHAIN_ID",
             "VITE_CHAIN_RPC",
             "VITE_CHAIN_NAME",

@@ -1,7 +1,7 @@
 //! Messages, reactions, sync and read state (API.md §6.10–§6.12).
 
 use gloo_net::http::Method;
-use pocketskynet_core::{MessageId, RoomId};
+use pocketskynet_core::{MessageId, RoomId, WalletAddress};
 use serde::Serialize;
 
 use super::{
@@ -25,6 +25,50 @@ pub struct MessageBody {
     pub hmac: Option<String>,
     pub enc_ver: i64,
     pub key_version: i64,
+    /// Post into a thread. Send only — an edit cannot move a message between
+    /// threads, and the server ignores it there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_message_id: Option<MessageId>,
+    /// The people this message names.
+    ///
+    /// Sent explicitly rather than left to the server's parser, for two
+    /// reasons that both matter: a username may contain spaces or emoji, which
+    /// no `@token` grammar recovers from plaintext; and in an encrypted room
+    /// there is no plaintext to parse at all. Omitted when empty so a plain
+    /// message stays a plain request.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<WalletAddress>,
+}
+
+impl MessageBody {
+    /// The common case: no thread, nobody named.
+    ///
+    /// A constructor rather than `Default` because `content` and `msgHash` have
+    /// no sensible default — a message with an empty hash is one the server
+    /// will refuse, and finding that out at runtime is worse than here.
+    pub fn plain(content: String, msg_hash: String) -> Self {
+        Self {
+            content,
+            msg_hash,
+            is_encrypted: false,
+            iv: None,
+            hmac: None,
+            enc_ver: 1,
+            key_version: 1,
+            parent_message_id: None,
+            mentions: Vec::new(),
+        }
+    }
+
+    pub fn in_thread(mut self, parent: Option<MessageId>) -> Self {
+        self.parent_message_id = parent;
+        self
+    }
+
+    pub fn naming(mut self, mentions: Vec<WalletAddress>) -> Self {
+        self.mentions = mentions;
+        self
+    }
 }
 
 #[derive(Serialize)]
@@ -82,6 +126,19 @@ impl Client {
             path.push_str(&format!("&before={b}"));
         }
         self.send(Method::GET, &path).await
+    }
+
+    /// One thread, root first.
+    ///
+    /// `id` may name the root or any reply in it — both answer with the same
+    /// list, so a client holding only a reply (from `/sync`, say) can open the
+    /// thread without first working out where it starts.
+    pub async fn thread(&self, id: &MessageId) -> ApiResult<Vec<Message>> {
+        self.send(
+            Method::GET,
+            &format!("/api/messages/{}/thread", encode_segment(id.as_str())),
+        )
+        .await
     }
 
     /// Edit. The row is updated in place — same id, same `createdAt`, same
@@ -261,6 +318,8 @@ mod tests {
             hmac: Some("f".repeat(64)),
             enc_ver: 2,
             key_version: 3,
+            parent_message_id: None,
+            mentions: Vec::new(),
         };
         let json: serde_json::Value = serde_json::to_value(&b).unwrap();
         assert_eq!(json["isEncrypted"], true);
@@ -281,6 +340,8 @@ mod tests {
             hmac: None,
             enc_ver: 1,
             key_version: 1,
+            parent_message_id: None,
+            mentions: Vec::new(),
         };
         let json = serde_json::to_string(&b).unwrap();
         assert!(!json.contains("\"iv\""));

@@ -14,6 +14,7 @@ fn main() {
     for key in [
         "VITE_FRUITNATION_WALLET",
         "VITE_FRUITNATION_HASH_CRO",
+        "VITE_FRUITNATION_ADMIN",
         "VITE_CHAIN_ID",
         "VITE_PRIVY_APPID",
     ] {

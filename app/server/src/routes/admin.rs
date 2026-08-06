@@ -1,0 +1,773 @@
+//! Server administration (`docs/API.md` §6.14).
+//!
+//! # What an admin is
+//!
+//! A wallet listed in `VITE_FRUITNATION_ADMIN`. Not a row, not a role anybody
+//! can grant at runtime — see [`super::misc::server_admins`] for why. Every
+//! handler below takes the [`ServerAdmin`] extractor, so the check is the
+//! signature rather than a line inside the body that a later edit could drop.
+//!
+//! # What an admin can do, and what they deliberately cannot
+//!
+//! Can: see who is on the server and what rooms exist, suspend and reinstate
+//! accounts, remove somebody from every room at once, delete any room, and
+//! manage any room as though they were one of its admins.
+//!
+//! Cannot: read a conversation they are not in. There is no endpoint here that
+//! returns message content, and that is a design decision rather than an
+//! omission. Half the rooms on a server like this are end-to-end encrypted and
+//! could not be read even with a route for it; giving the other half a
+//! side door would mean the privacy of a room depended on which checkbox was
+//! ticked when it was made. An admin who needs to be in a room can be invited
+//! into it, which is visible to everybody already there.
+
+use axum::extract::{Path, Query, State};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use pocketskynet_core::{ServerEvent, Target, WalletAddress};
+use serde::Deserialize;
+
+use crate::auth::{AuthUser, ServerAdmin};
+use crate::db::{admin, rooms};
+use crate::error::{ApiError, ApiResult};
+use crate::validate::{self, ValidJson};
+use crate::AppState;
+
+/// The ceiling on a listing. Not a page size — there is no paging — but the
+/// point past which this stops being a team server and the console should not
+/// try to render the answer in one screen.
+const LIST_LIMIT: i64 = 2_000;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/admin/session", get(session))
+        .route("/admin/overview", get(overview))
+        .route("/admin/users", get(list_users))
+        .route(
+            "/admin/users/{walletAddress}/suspend",
+            post(suspend).delete(reinstate),
+        )
+        .route("/admin/users/{walletAddress}", delete(evict))
+        .route("/admin/rooms", get(list_rooms))
+        .route("/admin/rooms/{roomId}", delete(delete_room))
+}
+
+/// `GET /api/admin/session` — whether *the caller* is an admin.
+///
+/// Takes [`AuthUser`], not [`ServerAdmin`], because the whole point is to be
+/// answerable for somebody who is not one. A client restoring a stored session
+/// has a token but not the login response that came with it, and needs to know
+/// whether to offer the console at all; asking an endpoint that 403s would
+/// make "you are not an admin" indistinguishable from "the server is down".
+async fn session(
+    State(_state): State<AppState>,
+    AuthUser(caller): AuthUser,
+) -> ApiResult<Response> {
+    Ok(Json(serde_json::json!({
+        "isServerAdmin": super::misc::is_server_admin(caller.as_str()),
+    }))
+    .into_response())
+}
+
+/// `GET /api/admin/overview` — totals, plus the configured admin list.
+///
+/// The admin list is echoed back so an operator can see what the server
+/// actually parsed out of `VITE_FRUITNATION_ADMIN`. A mistyped address there
+/// is silent by construction — the person it was meant for simply has no
+/// powers — and this is the one place that can say so.
+async fn overview(State(state): State<AppState>, _admin: ServerAdmin) -> ApiResult<Response> {
+    let totals = state.db.call(|conn| admin::totals(conn)).await?;
+    Ok(Json(serde_json::json!({
+        "totals": totals,
+        "admins": super::misc::server_admins(),
+    }))
+    .into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct ListQuery {
+    limit: Option<String>,
+}
+
+fn limit_of(query: &ListQuery) -> i64 {
+    query
+        .limit
+        .as_deref()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .unwrap_or(LIST_LIMIT)
+        .clamp(1, LIST_LIMIT)
+}
+
+/// `GET /api/admin/users` — every account, newest first.
+async fn list_users(
+    State(state): State<AppState>,
+    _admin: ServerAdmin,
+    Query(query): Query<ListQuery>,
+) -> ApiResult<Response> {
+    let limit = limit_of(&query);
+    let mut users = state
+        .db
+        .call(move |conn| admin::list_users(conn, limit))
+        .await?;
+    // Stamped here rather than in SQL: the admin list is configuration, and
+    // the database has never heard of it.
+    for user in &mut users {
+        user.is_server_admin = super::misc::is_server_admin(&user.wallet_address);
+    }
+    Ok(Json(users).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct SuspendBody {
+    reason: Option<String>,
+}
+
+/// `POST /api/admin/users/{walletAddress}/suspend`.
+///
+/// Takes effect immediately for tokens already issued — that is the whole
+/// value of it — because [`AuthUser`] consults the set this refreshes on every
+/// request. Their live realtime connections are dropped for the same reason:
+/// a socket opened before the suspension would otherwise keep delivering
+/// events until it happened to reconnect.
+async fn suspend(
+    State(state): State<AppState>,
+    admin: ServerAdmin,
+    Path(wallet_address): Path<String>,
+    ValidJson(body): ValidJson<SuspendBody>,
+) -> ApiResult<Response> {
+    let target = validate::wallet_address("walletAddress", Some(&wallet_address))?;
+    if target.as_str().eq_ignore_ascii_case(admin.address()) {
+        return Err(ApiError::bad_request(
+            "You cannot suspend yourself. Remove your address from VITE_FRUITNATION_ADMIN instead.",
+        ));
+    }
+    // An admin suspending another admin would be undone by the target simply
+    // reinstating themselves, and the resulting fight is not a state this
+    // server should be able to reach. The admin list is a config file; that
+    // is where an admin is removed.
+    if super::misc::is_server_admin(target.as_str()) {
+        return Err(ApiError::bad_request(
+            "That wallet is a server administrator. Remove it from VITE_FRUITNATION_ADMIN first.",
+        ));
+    }
+
+    let reason = body
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(|r| r.chars().take(500).collect::<String>());
+
+    let address = target.as_str().to_owned();
+    let by = admin.address().to_owned();
+    state
+        .db
+        .call(move |conn| admin::suspend(conn, &address, reason.as_deref(), &by))
+        .await?;
+    state.refresh_suspensions().await?;
+
+    let _ = state.log.append_audit(
+        "user_suspended",
+        Some(&admin.0),
+        serde_json::json!({ "walletAddress": target.as_str() }),
+    );
+    disconnect(&state, &target).await;
+
+    Ok(super::message("Account suspended"))
+}
+
+/// `DELETE /api/admin/users/{walletAddress}/suspend` — lift a suspension.
+async fn reinstate(
+    State(state): State<AppState>,
+    admin: ServerAdmin,
+    Path(wallet_address): Path<String>,
+) -> ApiResult<Response> {
+    let target = validate::wallet_address("walletAddress", Some(&wallet_address))?;
+    let address = target.as_str().to_owned();
+    state
+        .db
+        .call(move |conn| admin::reinstate(conn, &address))
+        .await?;
+    state.refresh_suspensions().await?;
+
+    let _ = state.log.append_audit(
+        "user_reinstated",
+        Some(&admin.0),
+        serde_json::json!({ "walletAddress": target.as_str() }),
+    );
+    Ok(super::message("Account reinstated"))
+}
+
+/// `DELETE /api/admin/users/{walletAddress}` — remove somebody from the
+/// server: out of every room, and suspended so they cannot walk back in.
+///
+/// Not a deletion of the person's history. Their messages stay where they are,
+/// attributed to them, because a room's record of a conversation is not the
+/// operator's to rewrite — and a year of unattributed text is worse for
+/// everybody still in the room than a name they know has left. Purging
+/// specific messages is the room's own `DELETE` endpoint.
+async fn evict(
+    State(state): State<AppState>,
+    admin: ServerAdmin,
+    Path(wallet_address): Path<String>,
+) -> ApiResult<Response> {
+    let target = validate::wallet_address("walletAddress", Some(&wallet_address))?;
+    if target.as_str().eq_ignore_ascii_case(admin.address()) {
+        return Err(ApiError::bad_request("You cannot remove yourself."));
+    }
+    if super::misc::is_server_admin(target.as_str()) {
+        return Err(ApiError::bad_request(
+            "That wallet is a server administrator. Remove it from VITE_FRUITNATION_ADMIN first.",
+        ));
+    }
+
+    let address = target.as_str().to_owned();
+    let by = admin.address().to_owned();
+    let touched = state
+        .db
+        .call(move |conn| {
+            let rooms = admin::evict_from_all_rooms(conn, &address)?;
+            admin::suspend(conn, &address, Some("Removed from the server"), &by)?;
+            Ok(rooms)
+        })
+        .await?;
+    state.refresh_suspensions().await?;
+
+    let _ = state.log.append_audit(
+        "user_removed",
+        Some(&admin.0),
+        serde_json::json!({ "walletAddress": target.as_str(), "rooms": touched.len() }),
+    );
+
+    // Everyone left behind needs to know their rooms changed and that a
+    // rotation is now pending; the removed wallet needs its socket closed.
+    for room_id in &touched {
+        if let Ok(room) = pocketskynet_core::RoomId::new(room_id) {
+            state
+                .hub
+                .publish_best_effort(
+                    Target::Room {
+                        room_id: room.clone(),
+                    },
+                    None,
+                    ServerEvent::RoomsUpdated,
+                )
+                .await;
+        }
+    }
+    disconnect(&state, &target).await;
+
+    Ok(super::message("Account removed from the server"))
+}
+
+/// `GET /api/admin/rooms` — every room, newest first. Metadata only.
+async fn list_rooms(
+    State(state): State<AppState>,
+    _admin: ServerAdmin,
+    Query(query): Query<ListQuery>,
+) -> ApiResult<Response> {
+    let limit = limit_of(&query);
+    let out = state
+        .db
+        .call(move |conn| admin::list_rooms(conn, limit))
+        .await?;
+    Ok(Json(out).into_response())
+}
+
+/// `DELETE /api/admin/rooms/{roomId}` — delete any room on the server.
+///
+/// The room-level `DELETE /api/rooms/{id}` already lets a *room* admin do this
+/// for a room they administer. This one exists for the case that endpoint
+/// cannot reach: a room whose last admin has gone, which nobody remaining can
+/// delete or rename, and which would otherwise be permanent.
+async fn delete_room(
+    State(state): State<AppState>,
+    admin: ServerAdmin,
+    Path(room_id): Path<String>,
+) -> ApiResult<Response> {
+    let room = validate::room_id(&room_id)?;
+    let room_id = room.as_str().to_owned();
+
+    let members = state
+        .db
+        .call({
+            let room_id = room_id.clone();
+            move |conn| {
+                if admin::room_name(conn, &room_id)?.is_none() {
+                    return Err(ApiError::not_found("Room not found"));
+                }
+                let members = rooms::list_members(conn, &room_id)?;
+                Ok(members
+                    .into_iter()
+                    .map(|m| m.user_address)
+                    .collect::<Vec<_>>())
+            }
+        })
+        .await?;
+
+    state
+        .db
+        .call({
+            let room_id = room_id.clone();
+            move |conn| rooms::delete_room(conn, &room_id)
+        })
+        .await?;
+
+    let _ = state.log.append_audit(
+        "room_deleted_by_admin",
+        Some(&admin.0),
+        serde_json::json!({ "roomId": room.as_str() }),
+    );
+
+    for address in members {
+        if let Ok(wallet) = WalletAddress::new(&address) {
+            let _ = state.hub.refresh_user_rooms(&wallet).await;
+            state
+                .hub
+                .publish_best_effort(Target::User { wallet }, None, ServerEvent::RoomsUpdated)
+                .await;
+        }
+    }
+
+    Ok(super::message("Room deleted"))
+}
+
+/// Tell a wallet's live connections that their credential is no longer good.
+///
+/// Best-effort by design: the authoritative check is at the extractor, on the
+/// next request. This only saves a suspended client from sitting on an open
+/// stream believing everything is fine until something makes it reconnect.
+async fn disconnect(state: &AppState, wallet: &WalletAddress) {
+    state
+        .hub
+        .publish_best_effort(
+            Target::User {
+                wallet: wallet.clone(),
+            },
+            None,
+            ServerEvent::SessionExpired {
+                reason: "Account suspended".to_owned(),
+            },
+        )
+        .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::routes::build;
+    use crate::test_support::{arm_server_admin, boss, register, send, state, wallet};
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn the_admin_routes_refuse_everybody_else() {
+        arm_server_admin();
+        let state = state("admin-gate");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        for path in [
+            "/api/admin/overview",
+            "/api/admin/users",
+            "/api/admin/rooms",
+        ] {
+            let response = send(&router, "GET", path, Some(&token), None).await;
+            assert_eq!(
+                response.status,
+                StatusCode::FORBIDDEN,
+                "{path} must not answer a non-admin"
+            );
+        }
+
+        // But every signed-in caller may ask whether *they* are one — a client
+        // has to know whether to offer the console at all.
+        let session = send(&router, "GET", "/api/admin/session", Some(&token), None).await;
+        assert_eq!(session.status, StatusCode::OK);
+        assert_eq!(session.json()["isServerAdmin"], false);
+    }
+
+    #[tokio::test]
+    async fn an_admin_sees_the_server_and_is_named_as_one() {
+        arm_server_admin();
+        let state = state("admin-overview");
+        let boss = boss();
+        let alice = wallet("alice");
+        let boss_token = register(&state, &boss, "boss");
+        let alice_token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        send(
+            &router,
+            "POST",
+            "/api/rooms",
+            Some(&alice_token),
+            Some(serde_json::json!({ "name": "Engineering" })),
+        )
+        .await;
+
+        let session = send(
+            &router,
+            "GET",
+            "/api/admin/session",
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(session.json()["isServerAdmin"], true);
+
+        let overview = send(
+            &router,
+            "GET",
+            "/api/admin/overview",
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(overview.status, StatusCode::OK);
+        assert_eq!(overview.json()["totals"]["users"], 2);
+        assert_eq!(overview.json()["totals"]["channels"], 1);
+        // Echoed back so an operator can see what the server parsed out of
+        // VITE_FRUITNATION_ADMIN — a mistyped address there is otherwise
+        // completely silent.
+        assert_eq!(overview.json()["admins"][0], boss.as_str().to_lowercase());
+
+        let users = send(&router, "GET", "/api/admin/users", Some(&boss_token), None).await;
+        let users = users.json();
+        let users = users.as_array().unwrap();
+        let listed_boss = users
+            .iter()
+            .find(|u| u["walletAddress"] == boss.as_str())
+            .unwrap();
+        assert_eq!(listed_boss["isServerAdmin"], true);
+        let listed_alice = users
+            .iter()
+            .find(|u| u["walletAddress"] == alice.as_str())
+            .unwrap();
+        assert_eq!(listed_alice["isServerAdmin"], false);
+        assert_eq!(listed_alice["roomCount"], 1);
+
+        let rooms = send(&router, "GET", "/api/admin/rooms", Some(&boss_token), None).await;
+        assert_eq!(rooms.json()[0]["name"], "Engineering");
+        assert_eq!(rooms.json()[0]["memberCount"], 1);
+    }
+
+    #[tokio::test]
+    async fn suspending_invalidates_a_token_already_issued() {
+        arm_server_admin();
+        let state = state("admin-suspend");
+        let boss_token = register(&state, &boss(), "boss");
+        let alice = wallet("alice");
+        let alice_token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        // Alice's token works before.
+        assert_eq!(
+            send(&router, "GET", "/api/rooms", Some(&alice_token), None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+
+        let suspended = send(
+            &router,
+            "POST",
+            &format!("/api/admin/users/{}/suspend", alice.as_str()),
+            Some(&boss_token),
+            Some(serde_json::json!({ "reason": "posting from a compromised laptop" })),
+        )
+        .await;
+        assert_eq!(suspended.status, StatusCode::OK, "{:?}", suspended.body);
+
+        // The same token, unchanged, now fails — which is the whole point:
+        // there is no revocation list, so the decision is remade per request.
+        let after = send(&router, "GET", "/api/rooms", Some(&alice_token), None).await;
+        assert_eq!(after.status, StatusCode::UNAUTHORIZED);
+
+        let listed = send(&router, "GET", "/api/admin/users", Some(&boss_token), None).await;
+        let listed = listed.json();
+        let alice_row = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["walletAddress"] == alice.as_str())
+            .unwrap()
+            .clone();
+        assert_eq!(alice_row["isSuspended"], true);
+        assert_eq!(
+            alice_row["suspendedReason"],
+            "posting from a compromised laptop"
+        );
+
+        // Reinstating puts it back.
+        let reinstated = send(
+            &router,
+            "DELETE",
+            &format!("/api/admin/users/{}/suspend", alice.as_str()),
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(reinstated.status, StatusCode::OK);
+        assert_eq!(
+            send(&router, "GET", "/api/rooms", Some(&alice_token), None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn suspension_closes_the_realtime_door_too() {
+        // The regression this pins down: `AuthUser` refused suspended accounts
+        // on every REST request, but the stream credentials (`StreamAuth`)
+        // verified the JWT directly — so a suspended user could reconnect over
+        // SSE or WebSocket and keep receiving room activity until their token
+        // expired. The extractor now routes through the same deny set.
+        arm_server_admin();
+        let state = state("admin-suspend-sse");
+        let boss_token = register(&state, &boss(), "boss");
+        let alice = wallet("alice");
+        let alice_token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        send(
+            &router,
+            "POST",
+            &format!("/api/admin/users/{}/suspend", alice.as_str()),
+            Some(&boss_token),
+            Some(serde_json::json!({})),
+        )
+        .await;
+
+        // The same bearer token the REST paths now refuse must be refused by
+        // the stream handshake as well — this returns immediately with 401
+        // rather than opening a stream.
+        let refused = send(&router, "GET", "/api/events", Some(&alice_token), None).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNAUTHORIZED,
+            "{:?}",
+            refused.body
+        );
+
+        // And a ticket cannot be minted either (AuthUser gates minting).
+        let ticket = send(
+            &router,
+            "POST",
+            "/api/events/ticket",
+            Some(&alice_token),
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(ticket.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn an_admin_cannot_suspend_themselves_or_another_admin() {
+        arm_server_admin();
+        let state = state("admin-selfharm");
+        let boss = boss();
+        let boss_token = register(&state, &boss, "boss");
+        let router = build(state);
+
+        let response = send(
+            &router,
+            "POST",
+            &format!("/api/admin/users/{}/suspend", boss.as_str()),
+            Some(&boss_token),
+            Some(serde_json::json!({})),
+        )
+        .await;
+        // Locking the only administrator out of their own server is not a
+        // state a request should be able to reach; the admin list is a config
+        // file, and that is where an admin is removed.
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+
+        let response = send(
+            &router,
+            "DELETE",
+            &format!("/api/admin/users/{}", boss.as_str()),
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn removing_someone_evicts_them_and_flags_a_rekey() {
+        arm_server_admin();
+        let state = state("admin-evict");
+        let boss_token = register(&state, &boss(), "boss");
+        let alice = wallet("alice");
+        let bob = wallet("bob");
+        let alice_token = register(&state, &alice, "alice");
+        let bob_token = register(&state, &bob, "bob");
+        let router = build(state);
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms/dm",
+            Some(&alice_token),
+            Some(serde_json::json!({ "walletAddress": bob.as_str() })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let removed = send(
+            &router,
+            "DELETE",
+            &format!("/api/admin/users/{}", bob.as_str()),
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(removed.status, StatusCode::OK, "{:?}", removed.body);
+
+        // Bob is out of the room and out of the server.
+        assert_eq!(
+            send(&router, "GET", "/api/rooms", Some(&bob_token), None)
+                .await
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+        let alices = send(&router, "GET", "/api/rooms", Some(&alice_token), None).await;
+        assert_eq!(alices.json()[0]["id"], room);
+        assert_eq!(alices.json()[0]["memberCount"], 1);
+        // He may still hold the room key, so nothing may be sealed under it
+        // until Alice rotates — the same guarantee leaving gives.
+        assert_eq!(alices.json()[0]["keyRotationPending"], true);
+    }
+
+    #[tokio::test]
+    async fn an_admin_can_manage_and_delete_a_room_they_were_never_in() {
+        arm_server_admin();
+        let state = state("admin-rooms");
+        let boss_token = register(&state, &boss(), "boss");
+        let alice = wallet("alice");
+        let alice_token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms",
+            Some(&alice_token),
+            Some(serde_json::json!({ "name": "Abandoned" })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        // Room admin powers, without being a member — this is what makes a
+        // room whose last admin left recoverable rather than permanent.
+        let renamed = send(
+            &router,
+            "PATCH",
+            &format!("/api/rooms/{room}"),
+            Some(&boss_token),
+            Some(serde_json::json!({ "name": "Reclaimed" })),
+        )
+        .await;
+        assert_eq!(renamed.status, StatusCode::OK, "{:?}", renamed.body);
+
+        let deleted = send(
+            &router,
+            "DELETE",
+            &format!("/api/admin/rooms/{room}"),
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(deleted.status, StatusCode::OK, "{:?}", deleted.body);
+        assert!(send(&router, "GET", "/api/rooms", Some(&alice_token), None)
+            .await
+            .json()
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn purging_a_rooms_history_is_admin_only() {
+        arm_server_admin();
+        let state = state("admin-purge");
+        let alice = wallet("alice");
+        let bob = wallet("bob");
+        let alice_token = register(&state, &alice, "alice");
+        let bob_token = register(&state, &bob, "bob");
+        let boss_token = register(&state, &boss(), "boss");
+        let router = build(state);
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms",
+            Some(&alice_token),
+            Some(serde_json::json!({ "name": "Team" })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // Bob joins as an ordinary member.
+        send(
+            &router,
+            "POST",
+            &format!("/api/rooms/{room}/invite"),
+            Some(&alice_token),
+            Some(serde_json::json!({ "userAddress": bob.as_str() })),
+        )
+        .await;
+        send(
+            &router,
+            "POST",
+            &format!("/api/invitations/{room}/accept"),
+            Some(&bob_token),
+            Some(serde_json::json!({})),
+        )
+        .await;
+
+        // A member erasing everybody's history with one request was the gap
+        // the roadmap named. Deleting one message is still open to him.
+        let refused = send(
+            &router,
+            "DELETE",
+            &format!("/api/rooms/{room}/messages"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN);
+
+        // The room's own admin may.
+        let allowed = send(
+            &router,
+            "DELETE",
+            &format!("/api/rooms/{room}/messages"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+        assert_eq!(allowed.status, StatusCode::OK, "{:?}", allowed.body);
+
+        // And so may a server admin, who is not even a member.
+        let by_boss = send(
+            &router,
+            "DELETE",
+            &format!("/api/rooms/{room}/messages"),
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(by_boss.status, StatusCode::OK, "{:?}", by_boss.body);
+    }
+}

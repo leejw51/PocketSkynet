@@ -7,6 +7,8 @@
 //! check. No other messenger has a receipt stub, and it is the visible reason
 //! the protocol hashes every message.
 
+use std::rc::Rc;
+
 use pocketskynet_core::{MessageId, WalletAddress};
 use yew::prelude::*;
 
@@ -49,6 +51,39 @@ pub struct MessageProps {
     /// A `#tag` chip was clicked or "Teach from this message" chosen — the
     /// parent seeds the Knowledge page and navigates there (docs/SEARCH.md §5).
     pub on_knowledge: Callback<crate::state::KnowledgeSeed>,
+    /// How many replies this message has, 0 for none. Drives the footer that
+    /// opens the thread.
+    #[prop_or_default]
+    pub reply_count: i64,
+    /// This message's thread is expanded below it.
+    #[prop_or_default]
+    pub thread_open: bool,
+    /// Open or close this message's thread.
+    #[prop_or_default]
+    pub on_toggle_thread: Callback<MessageId>,
+    /// Start composing a reply into this message's thread.
+    #[prop_or_default]
+    pub on_reply: Callback<MessageId>,
+    /// Rendered *inside* a thread rather than in the channel. Suppresses the
+    /// reply affordances, because a reply already has a thread — replying to
+    /// one joins the same thread, so a second "reply" control on a reply
+    /// would promise a nesting that does not exist.
+    #[prop_or_default]
+    pub in_thread: bool,
+    /// Display names of everybody in this room, for highlighting `@mentions`.
+    ///
+    /// Names rather than the roster, and shared rather than cloned: this is
+    /// the same list on every row of a long conversation, and copying a
+    /// hundred `RoomMember`s per render to draw a chip would be the most
+    /// expensive thing on the screen.
+    #[prop_or_default]
+    pub mention_names: Rc<Vec<String>>,
+    /// The handles that mean *the viewer* — their display name and their
+    /// address. A mention of the reader is drawn differently, and answering
+    /// "is this one mine" needs the viewer's *name*, which their address alone
+    /// does not give.
+    #[prop_or_default]
+    pub my_handles: Rc<Vec<String>>,
 }
 
 #[function_component(MessageRow)]
@@ -180,6 +215,28 @@ pub fn message_row(p: &MessageProps) -> Html {
                 { hash_slug(lang, m, &p.chain, copy_hash) }
             </footer>
 
+            // The thread footer. Only on a message that has replies, and never
+            // inside a thread — where every row is already in one.
+            if p.reply_count > 0 && !p.in_thread {
+                <button
+                    type="button"
+                    class={classes!("fn-thread-open", p.thread_open.then_some("is-open"))}
+                    aria-expanded={p.thread_open.to_string()}
+                    onclick={{
+                        let on_toggle_thread = p.on_toggle_thread.clone();
+                        let id = m.id.clone();
+                        Callback::from(move |_: MouseEvent| on_toggle_thread.emit(id.clone()))
+                    }}
+                >
+                    { icons::thread(14) }
+                    <span>{ t(lang, if p.reply_count == 1 {
+                                Key::thread_reply_one
+                            } else {
+                                Key::thread_reply_many
+                            }).replace("{n}", &p.reply_count.to_string()) }</span>
+                </button>
+            }
+
             if !p.reactions.is_empty() {
                 <div class="fn-reactions">
                     { for p.reactions.iter().map(|(code, who)| {
@@ -201,6 +258,21 @@ pub fn message_row(p: &MessageProps) -> Html {
                 >
                     { icons::smile(16) }
                 </button>
+                if !p.in_thread {
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet"
+                        aria-label={t(lang, Key::reply_in_thread)}
+                        title={t(lang, Key::reply_in_thread)}
+                        onclick={{
+                            let on_reply = p.on_reply.clone();
+                            let id = m.id.clone();
+                            Callback::from(move |_: MouseEvent| on_reply.emit(id.clone()))
+                        }}
+                    >
+                        { icons::thread(16) }
+                    </button>
+                }
                 <button
                     type="button"
                     class="topcoat-icon-button--quiet"
@@ -232,7 +304,9 @@ fn bubble(lang: Lang, p: &MessageProps) -> Html {
     };
     match &p.body {
         Decrypted::Plaintext(text) | Decrypted::Text(text) => html! {
-            <div class="fn-bubble">{ render_content(lang, text, &on_tag) }</div>
+            <div class="fn-bubble">
+                { render_with_mentions(lang, text, &p.mention_names, &p.my_handles, &on_tag) }
+            </div>
         },
         sealed => html! {
             // Mono and muted, and never collapsed into one string: "no key for
@@ -254,6 +328,52 @@ fn bubble(lang: Lang, p: &MessageProps) -> Html {
 /// introducing an HTML sanitiser, and the wrong sanitiser is an XSS. An
 /// `<img src>` / `youtube-nocookie` iframe carries no script capability, so
 /// inlining media stays inside that rule.
+/// Draw the body, with any `@name` in it as a chip.
+///
+/// Mentions are found by *span* rather than by token because a username may
+/// contain spaces (`validate::username` allows them), so "@Jonghwan Lee" is one
+/// mention and two tokens. The text between spans goes through
+/// [`render_content`] unchanged, which is what keeps links, hashtags,
+/// attachments and addresses working inside a sentence that also names
+/// somebody.
+fn render_with_mentions(
+    lang: Lang,
+    text: &str,
+    names: &[String],
+    my_handles: &[String],
+    on_tag: &Callback<String>,
+) -> Html {
+    let spans = crate::mentions::highlight_spans(text, names);
+    if spans.is_empty() {
+        return render_content(lang, text, on_tag);
+    }
+
+    // A mention *of the viewer* is drawn differently. Being named is the one
+    // thing in a busy room somebody is scanning for, and a chip that looks the
+    // same whoever it names does not answer that question.
+    let mut out: Vec<Html> = Vec::new();
+    let mut cursor = 0usize;
+    for (start, end) in spans {
+        if start > cursor {
+            out.push(render_content(lang, &text[cursor..start], on_tag));
+        }
+        let label = &text[start..end];
+        let is_me = my_handles
+            .iter()
+            .any(|h| label[1..].eq_ignore_ascii_case(h));
+        out.push(html! {
+            <span class={classes!("fn-mention", is_me.then_some("fn-mention--me"))}>
+                { label }
+            </span>
+        });
+        cursor = end;
+    }
+    if cursor < text.len() {
+        out.push(render_content(lang, &text[cursor..], on_tag));
+    }
+    html! { <>{ for out }</> }
+}
+
 fn render_content(lang: Lang, text: &str, on_tag: &Callback<String>) -> Html {
     let mut out: Vec<Html> = Vec::new();
     for (i, token) in text.split(' ').enumerate() {
@@ -494,6 +614,16 @@ fn youtube_embed(lang: Lang, id: &str) -> Html {
 #[derive(Clone, Copy, PartialEq)]
 enum MediaLoad {
     Loading,
+    /// The attachment is not there *yet*.
+    ///
+    /// A distinct state from `Failed` because the two mean opposite things to
+    /// somebody staring at a video they just posted. Finishing an upload
+    /// rehashes the whole file server-side before the `files` row exists
+    /// (`routes/uploads.rs`), and for a large video that pass takes real time
+    /// — during which the attachment genuinely 404s. Reporting that as "could
+    /// not be loaded" tells the viewer their upload broke, at exactly the
+    /// moment it is being checked.
+    Verifying,
     Loaded,
     Failed,
 }
@@ -538,7 +668,31 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
         let id = p.id.to_string();
         use_effect_with(id.clone(), move |_| {
             wasm_bindgen_futures::spawn_local(async move {
-                let Ok(file) = store.client.file(&id).await else {
+                // Retry a miss rather than failing on it. The window is the
+                // time a server needs to hash a large file, and each attempt
+                // waits longer than the last so a small file still resolves
+                // in one go and a large one is not polled hard.
+                const ATTEMPTS: u32 = 8;
+                let mut file = None;
+                for attempt in 0..ATTEMPTS {
+                    match store.client.file(&id).await {
+                        Ok(f) => {
+                            file = Some(f);
+                            break;
+                        }
+                        Err(e) if e.is_not_found() && attempt + 1 < ATTEMPTS => {
+                            // Only a 404 is worth waiting through: it is the
+                            // shape "the row is not written yet" takes. A 403
+                            // or a network error will not improve by asking
+                            // again, and pretending otherwise would leave a
+                            // spinner up for fifteen seconds before saying so.
+                            load.set(MediaLoad::Verifying);
+                            gloo_timers::future::TimeoutFuture::new(400 << attempt.min(5)).await;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let Some(file) = file else {
                     load.set(MediaLoad::Failed);
                     return;
                 };
@@ -575,6 +729,14 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
     if *load == MediaLoad::Failed {
         return html! {
             <span class="fn-media--failed">{ t(lang, Key::attachment_failed) }</span>
+        };
+    }
+    if *load == MediaLoad::Verifying {
+        return html! {
+            <span class="fn-attach fn-attach--loading">
+                <span class="fn-spinner" aria-hidden="true"></span>
+                <span>{ t(lang, Key::attachment_verifying) }</span>
+            </span>
         };
     }
     let Some(file) = (*meta).clone() else {

@@ -167,6 +167,22 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientAddr {
     }
 }
 
+/// Whether `wallet` is in the suspension set.
+///
+/// The spawned SSE task cannot call `AppState::is_suspended` — it owns only
+/// what it captured — so the set travels as its own `Arc` and the comparison
+/// lives here. No lowercasing on either side: [`WalletAddress`] normalises at
+/// construction and the set is loaded lowercased, and re-lowercasing per event
+/// would be paying for a case that cannot occur.
+fn suspended(
+    set: &std::sync::RwLock<std::collections::HashSet<String>>,
+    wallet: &WalletAddress,
+) -> bool {
+    set.read()
+        .map(|s| s.contains(wallet.as_str()))
+        .unwrap_or(false)
+}
+
 fn ip_of(parts: &Parts) -> IpAddr {
     parts
         .extensions
@@ -335,6 +351,30 @@ impl StreamAuth {
 
         Err(ApiError::unauthorized("No token provided"))
     }
+
+    /// [`resolve`](Self::resolve), then the suspension gate.
+    ///
+    /// This wrapper exists because `resolve` has four success exits and a
+    /// check pasted after each is the kind that loses one in a refactor. The
+    /// audit that prompted it found exactly that shape of bug already shipped:
+    /// `AuthUser` refused suspended accounts on every REST request, but these
+    /// stream credentials verified the JWT directly — so a suspended user who
+    /// ignored the advisory `SessionExpired` event could simply reconnect
+    /// over WebSocket or SSE and keep receiving room activity, typing signals
+    /// and serials until their token expired. Events are wake-up signals, not
+    /// content, but "suspension takes effect immediately" has to mean the
+    /// streams too — including a ticket minted moments before the suspension
+    /// landed, which is why the check sits after ticket consumption rather
+    /// than only on the JWT paths.
+    fn resolve_active(parts: &Parts, state: &AppState, allow_query_token: bool) -> ApiResult<Self> {
+        let auth = Self::resolve(parts, state, allow_query_token)?;
+        if state.is_suspended(auth.wallet.as_str()) {
+            return Err(ApiError::unauthorized(
+                "This account has been suspended by a server administrator.",
+            ));
+        }
+        Ok(auth)
+    }
 }
 
 /// SSE credential: ticket, bearer header, or — behind `--sse-token-query` —
@@ -348,7 +388,7 @@ impl FromRequestParts<AppState> for SseAuth {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        StreamAuth::resolve(parts, state, state.cfg.sse_token_query).map(Self)
+        StreamAuth::resolve_active(parts, state, state.cfg.sse_token_query).map(Self)
     }
 }
 
@@ -364,7 +404,7 @@ impl FromRequestParts<AppState> for WsAuth {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        StreamAuth::resolve(parts, state, state.cfg.sse_token_query).map(Self)
+        StreamAuth::resolve_active(parts, state, state.cfg.sse_token_query).map(Self)
     }
 }
 
@@ -426,6 +466,7 @@ async fn sse_handler(
     let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(64);
     let mut receiver = state.hub.subscribe();
     let hub = state.hub.clone();
+    let suspensions = state.suspensions.clone();
     let conn_id = handle.id;
 
     tokio::spawn(async move {
@@ -489,6 +530,17 @@ async fn sse_handler(
                         }
                         if handle.token_expired(now_ms() / 1000) {
                             let event = ServerEvent::SessionExpired { reason: "token_expired".into() };
+                            let _ = tx.send(Ok(sse_event(envelope.seq, &event))).await;
+                            break;
+                        }
+                        // Checked at the same spot as expiry, and for the same
+                        // reason: a stream opened before the suspension landed
+                        // is a credential the deny set cannot reach any other
+                        // way. Gating *delivery* is the guarantee that
+                        // matters — no event crosses after the suspension,
+                        // however long the socket itself lingers.
+                        if suspended(&suspensions, &handle.wallet) {
+                            let event = ServerEvent::SessionExpired { reason: "suspended".into() };
                             let _ = tx.send(Ok(sse_event(envelope.seq, &event))).await;
                             break;
                         }
@@ -637,6 +689,9 @@ async fn ws_conn(socket: WebSocket, state: AppState, auth: StreamAuth) {
                 if handle.token_expired(now_ms() / 1000) {
                     break Some((close::AUTH, "Token expired"));
                 }
+                if state.is_suspended(handle.wallet.as_str()) {
+                    break Some((close::AUTH, "Account suspended"));
+                }
                 missed_pings += 1;
                 if missed_pings > MAX_MISSED_PINGS {
                     // No close frame: the peer is not answering, so there is
@@ -653,6 +708,12 @@ async fn ws_conn(socket: WebSocket, state: AppState, auth: StreamAuth) {
                     let view = handle.view();
                     if !view.accepts(&envelope, &handle.wallet) {
                         continue;
+                    }
+                    // The ping tick above is a 30-second cadence; this is the
+                    // moment an event would actually cross, so it is the one
+                    // that must not be later than the suspension.
+                    if state.is_suspended(handle.wallet.as_str()) {
+                        break Some((close::AUTH, "Account suspended"));
                     }
                     let payload = serde_json::to_string(&*envelope.event).unwrap_or_default();
                     if sink.send(Message::Text(payload.into())).await.is_err() {

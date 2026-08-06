@@ -77,9 +77,13 @@ and `realtime.rs::the_websocket_token_query_fallback_is_off_by_default`.
 - **SSE heartbeat spelling.** `REALTIME.md` §8.5 writes the comment frame as
   `:hb`; axum emits `: hb`. Both are valid SSE comments and every parser ignores
   them identically. The test accepts either.
-- **`GET /messages` has no tiebreak on `messageTimestamp`.** Within spec — §9
-  puts tie-breaking on the client — but adding `, msg_serial ASC` to the ORDER
-  BY would make same-millisecond ordering deterministic for free.
+- ~~**`GET /messages` has no tiebreak on `messageTimestamp`.**~~ **Fixed.** The
+  tiebreak was `m.id`, which looks stable and is not: an id is
+  `msg_{millis}_{uuid}`, so messages sharing a millisecond were ordered by a
+  random UUID. Now `msg_serial`, the room's own monotonic counter. Threads
+  surfaced this — a three-reply thread posted in one burst came back shuffled
+  under parallel test load, which the same ordering had been doing to the
+  channel view all along, just less visibly.
 - **On-chain verification of a published anchor is not implemented** — the
   `FN_RPC_URL` path of §6.10.6 step 4. `server/src/routes/messages.rs` documents
   this as deliberate, and the format, recipient, ownership and already-anchored

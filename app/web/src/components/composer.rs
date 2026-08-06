@@ -15,12 +15,13 @@
 //! someone whose keys are merely not on this device to "rotate the room key"
 //! sends them after an admin action that would not have helped.
 
+use pocketskynet_core::WalletAddress;
 use web_sys::HtmlTextAreaElement;
 use yew::prelude::*;
 
 use crate::state::PostBlock;
 
-use super::common::Popover;
+use super::common::{Ident, IdentSize, Popover};
 use super::icons;
 use crate::i18n::{t, Key};
 
@@ -55,6 +56,19 @@ pub struct ComposerProps {
     /// Opens the Files drawer for this room.
     #[prop_or_default]
     pub on_open_files: Callback<()>,
+    /// The room's roster, for the `@` autocomplete. Empty disables it.
+    #[prop_or_default]
+    pub members: Vec<crate::api::RoomMember>,
+    /// The viewer, so the autocomplete does not offer them themselves.
+    #[prop_or_default]
+    pub me: Option<WalletAddress>,
+    /// Set when this message will be posted into a thread. Shown as a chip
+    /// above the field, because a reply that silently went somewhere other
+    /// than the channel is the worst outcome available here.
+    #[prop_or_default]
+    pub replying_to: Option<String>,
+    #[prop_or_default]
+    pub on_cancel_reply: Callback<MouseEvent>,
 }
 
 #[function_component(Composer)]
@@ -65,6 +79,43 @@ pub fn composer(p: &ComposerProps) -> Html {
     let send_btn = use_node_ref();
     let file_input = use_node_ref();
     let last_typing = use_mut_ref(|| 0f64);
+    // The `@` being completed, and which suggestion is highlighted.
+    let mention = use_state(|| Option::<crate::mentions::ActiveMention>::None);
+    let mention_index = use_state(|| 0usize);
+
+    let suggestions: Vec<crate::mentions::Candidate> = match (&*mention, &p.me) {
+        (Some(active), Some(me)) => crate::mentions::suggest(&p.members, me, &active.query),
+        _ => Vec::new(),
+    };
+    // Bounded here rather than by scrolling: a list taller than the composer
+    // covers the conversation it is meant to be about.
+    let suggestions: Vec<_> = suggestions.into_iter().take(6).collect();
+    let picked = mention_index.min(suggestions.len().saturating_sub(1));
+
+    // Accept a suggestion: rewrite the field and put the caret after it.
+    let accept = {
+        let text = text.clone();
+        let mention = mention.clone();
+        let area = area.clone();
+        std::rc::Rc::new(move |name: String| {
+            let Some(active) = (*mention).clone() else {
+                return;
+            };
+            let (next, caret) = crate::mentions::apply(&text, &active, &name);
+            text.set(next.clone());
+            mention.set(None);
+            // The caret has to be restored explicitly: setting `value` puts it
+            // at the end, which after a mid-sentence mention is the wrong end.
+            if let Some(el) = area.cast::<HtmlTextAreaElement>() {
+                el.set_value(&next);
+                // Back into UTF-16 units for the DOM, or a caret after CJK
+                // text lands past where it should.
+                let units = crate::mentions::byte_to_caret(&next, caret) as u32;
+                let _ = el.set_selection_range(units, units);
+                let _ = el.focus();
+            }
+        })
+    };
 
     let send = {
         let text = text.clone();
@@ -117,11 +168,24 @@ pub fn composer(p: &ComposerProps) -> Html {
         let text = text.clone();
         let on_typing = p.on_typing.clone();
         let last_typing = last_typing.clone();
+        let mention = mention.clone();
+        let mention_index = mention_index.clone();
         Callback::from(move |e: InputEvent| {
             let Some(el) = e.target_dyn_into::<HtmlTextAreaElement>() else {
                 return;
             };
-            text.set(el.value());
+            let value = el.value();
+            // Where the caret is decides whether an `@` is being completed;
+            // the text alone cannot say, because a finished mention earlier in
+            // the line looks identical to one being typed now. The DOM reports
+            // the caret in UTF-16 units; the scanner works in bytes — the
+            // conversion is what keeps this working after Korean text, where
+            // the two disagree.
+            let units = el.selection_start().ok().flatten().unwrap_or(0) as usize;
+            let caret = crate::mentions::caret_to_byte(&value, units);
+            mention.set(crate::mentions::active_mention(&value, caret));
+            mention_index.set(0);
+            text.set(value);
 
             // Self-throttle on top of the server's 1/s cap. A typing frame per
             // keystroke is pure noise and would trip the relay throttle, which
@@ -136,7 +200,41 @@ pub fn composer(p: &ComposerProps) -> Html {
 
     let onkeydown = {
         let send = send.clone();
+        let mention = mention.clone();
+        let mention_index = mention_index.clone();
+        let accept = accept.clone();
+        let names: Vec<String> = suggestions.iter().map(|c| c.name.clone()).collect();
         Callback::from(move |e: KeyboardEvent| {
+            // The suggestion list owns the arrows, Enter, Tab and Escape while
+            // it is open. Enter especially: with a list on screen it means
+            // "this one", and sending the half-typed handle instead is the
+            // mistake this whole branch exists to prevent.
+            if !names.is_empty() {
+                match e.key().as_str() {
+                    "ArrowDown" => {
+                        e.prevent_default();
+                        mention_index.set((*mention_index + 1) % names.len());
+                        return;
+                    }
+                    "ArrowUp" => {
+                        e.prevent_default();
+                        mention_index.set(mention_index.checked_sub(1).unwrap_or(names.len() - 1));
+                        return;
+                    }
+                    "Enter" | "Tab" => {
+                        e.prevent_default();
+                        let i = (*mention_index).min(names.len() - 1);
+                        accept(names[i].clone());
+                        return;
+                    }
+                    "Escape" => {
+                        e.stop_propagation();
+                        mention.set(None);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             if e.key() == "Enter" && !e.shift_key() {
                 e.prevent_default();
                 send.emit(());
@@ -193,6 +291,46 @@ pub fn composer(p: &ComposerProps) -> Html {
 
     html! {
         <div class="fn-composer" data-locked={locked.to_string()}>
+            if let Some(who) = &p.replying_to {
+                <div class="fn-composer__reply">
+                    { icons::thread(14) }
+                    <span>{ t(lang, Key::reply_in_thread) }{ " · " }{ who }</span>
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet"
+                        aria-label={t(lang, Key::cancel)}
+                        onclick={p.on_cancel_reply.clone()}
+                    >{ icons::close(14) }</button>
+                </div>
+            }
+            if !suggestions.is_empty() {
+                <ul class="fn-mention-pop" role="listbox"
+                    aria-label={t(lang, Key::mention_suggestions)}>
+                    { for suggestions.iter().enumerate().map(|(i, c)| {
+                        let accept = accept.clone();
+                        let name = c.name.clone();
+                        html! {
+                            <li
+                                key={c.address.to_string()}
+                                role="option"
+                                aria-selected={(i == picked).to_string()}
+                                class={classes!((i == picked).then_some("is-active"))}
+                                // `mousedown`, not `click`: a click fires after
+                                // the textarea has already lost focus, and the
+                                // blur closes this list out from under it.
+                                onmousedown={Callback::from(move |e: MouseEvent| {
+                                    e.prevent_default();
+                                    accept(name.clone());
+                                })}
+                            >
+                                <Ident seed={c.address.to_string()} size={IdentSize::Xs}
+                                       image={c.image.clone()} />
+                                <span>{ &c.name }</span>
+                            </li>
+                        }
+                    }) }
+                </ul>
+            }
             <button
                 type="button"
                 class="topcoat-icon-button--quiet"

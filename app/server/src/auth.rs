@@ -1,9 +1,15 @@
 //! Authentication: challenge messages, JWTs, and the `AuthUser` extractor.
 //!
-//! There is no session table and no revocation list. A JWT is a bearer
-//! credential that is valid until it expires, which is why the TTL is
+//! There is no session table and no per-token revocation list. A JWT is a
+//! bearer credential that is valid until it expires, which is why the TTL is
 //! configurable and why realtime connections re-check `exp` while they are
 //! open rather than only at the handshake.
+//!
+//! What does exist is revocation by *account*: [`AuthUser`] refuses a token
+//! whose wallet a server admin has suspended (`AppState::is_suspended`). That
+//! is a deliberately coarser instrument than a `jti` deny list — it cannot end
+//! one session and leave another — but it is the one an operator actually
+//! reaches for, and it costs a set lookup rather than a table.
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -277,6 +283,53 @@ impl FromRequestParts<AppState> for AuthUser {
         let token = bearer_token(&parts.headers)
             .ok_or_else(|| ApiError::unauthorized("No token provided"))?;
         let (wallet, _) = state.jwt.verify(token)?;
+        // The one place a suspension can take effect. A valid signature over a
+        // valid token is still a valid token — there is no revocation list to
+        // add it to — so "this account is no longer welcome" has to be decided
+        // when the credential is presented, on every request, or not at all.
+        if state.is_suspended(wallet.as_str()) {
+            return Err(ApiError::unauthorized(
+                "This account has been suspended by a server administrator.",
+            ));
+        }
+        Ok(Self(wallet))
+    }
+}
+
+/// An authenticated caller who administers this server.
+///
+/// Extracting it *is* the authorisation check, exactly as [`AuthUser`] is the
+/// authentication one: a handler that takes this cannot be reached by anybody
+/// else, and cannot forget to ask.
+///
+/// The role comes from `VITE_FRUITNATION_ADMIN` — see
+/// [`crate::routes::misc::server_admins`] for why it is configuration rather
+/// than a table.
+#[derive(Debug, Clone)]
+pub struct ServerAdmin(pub WalletAddress);
+
+impl ServerAdmin {
+    pub fn address(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl FromRequestParts<AppState> for ServerAdmin {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let AuthUser(wallet) = AuthUser::from_request_parts(parts, state).await?;
+        if !crate::routes::misc::is_server_admin(wallet.as_str()) {
+            // 403, not 404: the caller is authenticated and this route exists.
+            // Hiding it would only mean an operator who mistyped their own
+            // address in `.env` sees "not found" and looks in the wrong place.
+            return Err(ApiError::forbidden(
+                "This action requires a server administrator.",
+            ));
+        }
         Ok(Self(wallet))
     }
 }

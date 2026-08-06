@@ -5,13 +5,16 @@
 //! HTML document (uploaded or pasted) or a zip carrying `index.html` plus its
 //! assets. The result is served publicly at `/sites/{id}/`, recorded in
 //! SQLite, and indexed into search (kind `site`, global visibility like
-//! knowledge). **Any signed-in user may delete any site** — the requirement,
-//! verbatim: this is a shared wall, and the community can tear down what
-//! offends it. The payment already happened, so deletion is not a refund.
+//! knowledge). **A site is deleted by its owner or by a server admin.** The
+//! original requirement said any signed-in user could, on the theory that a
+//! shared wall should be tearable-down by whoever it offends; that reasoning
+//! does not survive the server being a company's, because publishing costs the
+//! author a real on-chain payment and deletion is not a refund. The
+//! offended-neighbour case is now the admin's, and it leaves an audit line.
 //!
 //! * `POST   /api/sites?title=…&txHash=…` — raw body: HTML bytes or a zip
 //! * `GET    /api/sites`                  — newest first
-//! * `DELETE /api/sites/{id}`             — any signed-in user
+//! * `DELETE /api/sites/{id}`             — the owner, or a server admin
 //! * `GET    /sites/{id}/{*path}`         — the hosting itself, public
 //!
 //! # Serving user HTML without handing over the app's origin
@@ -341,7 +344,15 @@ async fn list_sites(
     })))
 }
 
-/// `DELETE /api/sites/{id}` — any signed-in user, deliberately.
+/// `DELETE /api/sites/{id}` — the owner, or a server admin.
+///
+/// This used to be open to any signed-in user, on the theory that a shared LAN
+/// wall should be tearable-down by whoever it annoys. That reasoning holds for
+/// a wall in a house and stops holding the moment the server is a company's:
+/// publishing costs the author a real on-chain payment, and "anyone can delete
+/// anything you paid for" is not a property a paid feature can have. The
+/// annoyed-neighbour case is what the admin role is for, and unlike the old
+/// rule it leaves an audit line naming who did it.
 async fn remove(
     State(state): State<AppState>,
     AuthUser(caller): AuthUser,
@@ -357,6 +368,13 @@ async fn remove(
     let Some(site) = site else {
         return Err(ApiError::not_found("Site not found"));
     };
+
+    let owns = site.owner_address.eq_ignore_ascii_case(caller.as_str());
+    if !owns && !super::misc::is_server_admin(caller.as_str()) {
+        return Err(ApiError::forbidden(
+            "Only the site's owner or a server administrator can remove it",
+        ));
+    }
 
     let delete_id = checked.clone();
     state
@@ -792,7 +810,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn publish_serve_and_community_delete_round_trip() {
+    async fn publish_serve_and_owner_delete_round_trip() {
         let state = state("sites-roundtrip");
         let alice = wallet("alice");
         let bob = wallet("bob");
@@ -856,12 +874,29 @@ mod tests {
         assert_eq!(results.len(), 1, "{:?}", response.body);
         assert_eq!(results[0]["refId"].as_str().unwrap(), id);
 
-        // Bob — not the owner — removes it. Any user can; that is the spec.
+        // Bob is not the owner and not an admin. Publishing cost Alice a real
+        // on-chain payment, and a bystander cannot spend it for her.
         let response = send(
             &router,
             "DELETE",
             &format!("/api/sites/{id}"),
             Some(&bob_token),
+            None,
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::FORBIDDEN,
+            "{:?}",
+            response.body
+        );
+
+        // Alice can, because it is hers.
+        let response = send(
+            &router,
+            "DELETE",
+            &format!("/api/sites/{id}"),
+            Some(&alice_token),
             None,
         )
         .await;

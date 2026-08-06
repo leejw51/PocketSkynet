@@ -1190,6 +1190,15 @@ pub fn banker_view(p: &BankerProps) -> Html {
                 </div>
 
                 <div class="fn-bank__chat fn-banker__chat fn-scroll" ref={chat_ref}>
+                    // Every child of this log is keyed, `.fn-stream__item`
+                    // wrappers included — the message stream's rule, for the
+                    // message stream's reason. The intro and the progress
+                    // indicator used to sit here as bare `if` blocks, and one
+                    // unkeyed sibling turns keyed matching off for the whole
+                    // list: every row, images included, was torn down and
+                    // rebuilt each time the progress indicator ticked while a
+                    // reply streamed in.
+                    <div class="fn-stream__item" key="intro">
                     if log.is_empty() {
                         // The executing banker's face (`banker-core`) — the
                         // chrome endoskeleton in a suit, not the flat teller.
@@ -1223,6 +1232,7 @@ pub fn banker_view(p: &BankerProps) -> Html {
                             }) }
                         </div>
                     }
+                    </div>
                     { for log.iter().enumerate().map(|(i, m)| html! {
                         <div key={i}
                              class={if m.user { "fn-banker__msg fn-bank__msg fn-bank__msg--user" }
@@ -1244,12 +1254,14 @@ pub fn banker_view(p: &BankerProps) -> Html {
                             }
                         </div>
                     }) }
+                    <div class="fn-stream__item" key="progress">
                     if let Some(s) = &*stage {
                         <div class="fn-bank__msg fn-banker__progress" role="status">
                             <span>{ s.label(lang) }</span>
                             <span class="fn-banker__bar" aria-hidden="true"></span>
                         </div>
                     }
+                    </div>
                 </div>
 
                 <div class="fn-row">

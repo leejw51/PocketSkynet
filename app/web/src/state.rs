@@ -105,6 +105,13 @@ pub struct Pending {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Modal {
     CreateRoom,
+    /// Pick somebody to start a direct message with.
+    NewDirectMessage,
+    /// Everything that named you, across every room.
+    Mentions,
+    /// The server admin console. Offered only when the server says this wallet
+    /// administers it — see `Store::is_server_admin`.
+    AdminConsole,
     Invite(RoomId),
     ManageAdmins(RoomId),
     Blocked,
@@ -169,6 +176,14 @@ pub struct AppState {
     /// dispatch clones the whole state and the registry never changes after
     /// boot.
     pub networks: Rc<Vec<Network>>,
+
+    /// Whether the server says this wallet administers it.
+    ///
+    /// Server-supplied, never inferred. The role lives in the deployment's
+    /// `VITE_FRUITNATION_ADMIN`, which the client cannot see — so a client that
+    /// guessed would either hide a console its user is entitled to, or offer
+    /// one that 403s on every request behind it.
+    pub is_server_admin: bool,
 
     pub rooms: Vec<RoomWithMembers>,
     pub rooms_load: Load,
@@ -315,6 +330,7 @@ impl AppState {
             client,
             chain: BlockchainInfo::default(),
             networks: Rc::new(Vec::new()),
+            is_server_admin: false,
             rooms: Vec::new(),
             rooms_load: Load::Idle,
             invitations: Vec::new(),
@@ -506,6 +522,8 @@ impl PostBlock {
 /// Every mutation the UI can make.
 pub enum Action {
     SetAuth(Auth),
+    /// The server answered whether this wallet administers it.
+    SetServerAdmin(bool),
     /// A transfer began. Carries its own id so the two updates below can find
     /// it without the caller holding an index into a vector that other actions
     /// are free to reorder.
@@ -611,6 +629,7 @@ impl Reducible for AppState {
             client: self.client.clone(),
             chain: self.chain.clone(),
             networks: self.networks.clone(),
+            is_server_admin: self.is_server_admin,
             rooms: self.rooms.clone(),
             rooms_load: self.rooms_load.clone(),
             invitations: self.invitations.clone(),
@@ -652,9 +671,16 @@ impl Reducible for AppState {
                     s.pending.clear();
                     s.invitations.clear();
                     s.blocks = BlockSet::default();
+                    // The role belongs to the wallet, not to the browser.
+                    // Carrying it across a sign-in would offer the console to
+                    // whoever signed in next.
+                    s.is_server_admin = false;
                 }
                 s.client = s.client.with_token(a.token());
                 s.auth = a;
+            }
+            Action::SetServerAdmin(is_admin) => {
+                s.is_server_admin = is_admin;
             }
             Action::StageBoot(session) => {
                 s.pending_boot = Some(session);
@@ -1153,6 +1179,9 @@ mod tests {
             tx_hash: None,
             target_message_id: None,
             emoticon_code: None,
+            parent_message_id: None,
+            reply_count: None,
+            last_reply_at: None,
             sender: None,
         };
         let s = s.reduce(Action::Sync(room.clone(), vec![purge]));
@@ -1229,6 +1258,9 @@ mod tests {
                 tx_hash: None,
                 target_message_id: None,
                 emoticon_code: None,
+                parent_message_id: None,
+                reply_count: None,
+                last_reply_at: None,
                 sender: None,
             });
             r

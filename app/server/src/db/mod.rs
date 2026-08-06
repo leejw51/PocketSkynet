@@ -27,8 +27,10 @@
 //! * `busy_timeout` — turns `SQLITE_BUSY` from an error the caller must retry
 //!   into a bounded wait, which is the behaviour every call site wants.
 
+pub mod admin;
 pub mod files;
 pub mod keys;
+pub mod mentions;
 pub mod messages;
 pub mod models;
 pub mod operators;
@@ -58,7 +60,7 @@ const SCHEMA: &str = include_str!("schema.sql");
 
 /// Bumped only for diagnostics — the schema is applied by replay, not by a
 /// migration ladder, so this records what a database was last opened by.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -263,18 +265,52 @@ fn open_connection(uri: &str) -> Result<Connection, DbError> {
 /// and needs no version ladder to consult.
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(SCHEMA)?;
+
     // Additive upgrades. `CREATE TABLE IF NOT EXISTS` cannot retrofit a
     // column onto a table that predates it, so each late column is probed
     // for and added — still idempotent, still no version ladder.
-    let has_profile_image: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'profile_image'",
-        [],
+    //
+    // Every one of these is nullable or defaulted, which is what lets an old
+    // row mean the right thing without a backfill: a room from before DMs
+    // existed is a channel, and a message from before threads existed is not
+    // a reply.
+    add_column(conn, "users", "profile_image", "TEXT")?;
+    add_column(conn, "rooms", "kind", "TEXT NOT NULL DEFAULT 'channel'")?;
+    add_column(conn, "rooms", "dm_key", "TEXT")?;
+    add_column(conn, "messages", "parent_message_id", "TEXT")?;
+
+    // Indexes over the columns just added. These cannot live in `schema.sql`:
+    // on a database that predates the column, the batch above would reach the
+    // index before the ALTER below could add what it indexes, and a failing
+    // statement aborts the *whole* batch — taking every table declared after
+    // it with it. Creating them here, after the retrofit, is the only ordering
+    // that works on a fresh database and an upgraded one alike.
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_dm_key
+             ON rooms (dm_key) WHERE dm_key IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS idx_messages_parent
+             ON messages (parent_message_id, message_timestamp)
+             WHERE parent_message_id IS NOT NULL;",
+    )?;
+
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+/// Add one column if the table does not already have it.
+///
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, and running the `ALTER` blind and
+/// swallowing the error would swallow real ones too — a typo'd type, a
+/// disk-full — so the probe is the honest form.
+fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> rusqlite::Result<()> {
+    let present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        rusqlite::params![table, column],
         |r| r.get(0),
     )?;
-    if has_profile_image == 0 {
-        conn.execute_batch("ALTER TABLE users ADD COLUMN profile_image TEXT")?;
+    if present == 0 {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))?;
     }
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
 
@@ -340,6 +376,95 @@ mod tests {
             let user = users::get_user(conn, "0xaa").unwrap().unwrap();
             assert_eq!(user.username, "alice");
             assert_eq!(user.profile_image, None, "existing rows read as unset");
+            Ok(())
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_database_from_before_threads_and_dms_upgrades_completely() {
+        // The regression this pins down is subtle and total: `schema.sql` is
+        // one `execute_batch`, and a statement that fails aborts the rest of
+        // it. So an index over `rooms.dm_key` declared in that file would,
+        // on a database whose rooms table predates the column, fail — and
+        // take every table declared *after* it (messages, mentions, files,
+        // payments…) with it. A server would then come up against a database
+        // missing half its schema.
+        let mut tag = [0u8; 8];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut tag);
+        let dir = std::env::temp_dir().join(format!("ps-mig2-{}", hex::encode(tag)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pocketskynet.db");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE rooms (
+                     id                   TEXT PRIMARY KEY,
+                     name                 TEXT NOT NULL,
+                     description          TEXT,
+                     current_key_version  INTEGER NOT NULL DEFAULT 1,
+                     key_rotation_pending INTEGER NOT NULL DEFAULT 0,
+                     created_at           INTEGER NOT NULL
+                 ) STRICT;
+                 CREATE TABLE messages (
+                     id                TEXT PRIMARY KEY,
+                     room_id           TEXT NOT NULL,
+                     sender_address    TEXT NOT NULL,
+                     content           TEXT NOT NULL,
+                     msg_hash          TEXT NOT NULL,
+                     message_timestamp INTEGER NOT NULL,
+                     msg_type          TEXT NOT NULL DEFAULT 'add',
+                     msg_serial        INTEGER NOT NULL DEFAULT 0,
+                     is_deleted        INTEGER NOT NULL DEFAULT 0,
+                     edited_at         INTEGER,
+                     created_at        INTEGER NOT NULL,
+                     is_encrypted      INTEGER NOT NULL DEFAULT 0,
+                     iv                TEXT,
+                     hmac              TEXT,
+                     enc_ver           INTEGER NOT NULL DEFAULT 1,
+                     key_version       INTEGER NOT NULL DEFAULT 1,
+                     tx_hash           TEXT,
+                     target_message_id TEXT,
+                     emoticon_code     TEXT
+                 ) STRICT;
+                 INSERT INTO rooms VALUES ('room_old', 'General', NULL, 1, 0, 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).unwrap();
+        db.call_blocking(|conn| {
+            // The room predates DMs, so it reads as the channel it always was.
+            let room = rooms::get_room(conn, "room_old").unwrap().unwrap();
+            assert_eq!(room.kind, "channel");
+
+            // Tables declared after the retrofitted columns in `schema.sql`
+            // are present, which is what the aborted-batch bug destroyed.
+            for table in ["message_mentions", "suspended_users", "payments", "files"] {
+                let n: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        rusqlite::params![table],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(n, 1, "{table} missing after upgrade");
+            }
+
+            // And the indexes that could only be built after the ALTERs.
+            for index in ["idx_rooms_dm_key", "idx_messages_parent"] {
+                let n: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                        rusqlite::params![index],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(n, 1, "{index} missing after upgrade");
+            }
             Ok(())
         })
         .unwrap();

@@ -8,4 +8,9 @@
 
 # Browser-test scratch: node_modules and the screenshots the scripts drop.
 app/tests/browser/node_modules/
+app/tests/e2e/node_modules/
+app/tests/e2e/test-results/
+# Playwright drops this beside whatever directory it was invoked from.
+app/test-results/
+app/tests/e2e/playwright-report/
 app/tests/browser/*.png

@@ -590,6 +590,9 @@ mod tests {
             tx_hash: None,
             target_message_id: None,
             emoticon_code: None,
+            parent_message_id: None,
+            reply_count: None,
+            last_reply_at: None,
             sender: None,
         }
     }

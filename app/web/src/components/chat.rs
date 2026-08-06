@@ -12,7 +12,10 @@
 //!   reconnect.
 
 use pocketskynet_core::{MessageId, RoomId};
+use std::collections::HashMap;
+use std::rc::Rc;
 use web_sys::HtmlElement;
+
 use yew::prelude::*;
 
 use crate::actions;
@@ -60,15 +63,418 @@ pub fn chat(p: &ChatProps) -> Html {
     let state = store.room_state(&p.room_id).cloned().unwrap_or_default();
     let load = store.room_load.get(&p.room_id).cloned().unwrap_or_default();
 
-    // Keep the stream pinned to the bottom as messages arrive. Anchoring on a
-    // revision rather than on a length means edits and reactions also settle
-    // the scroll, and history loads (which prepend) do not.
+    // How far from the bottom still counts as "reading the newest".
+    //
+    // Generous on purpose. A message can be two hundred pixels tall, and a
+    // threshold tight enough to mean "exactly at the bottom" would unpin
+    // somebody who is plainly still there — a stray trackpad nudge, or the
+    // browser's own rounding after an image finishes loading and reflows the
+    // stream under them.
+    const PINNED_SLACK_PX: f64 = 120.0;
+
+    /// The same slack, scaled to the viewport.
+    ///
+    /// A flat 120px is a quarter of a laptop's message pane and a *sliver* of
+    /// a phone's, where one bubble can be taller than the whole allowance —
+    /// so a thumb-scroll that lands one message short of the end reads as
+    /// "gone off to read history" and the stream stops following. Taking a
+    /// fifth of the pane keeps the meaning ("still looking at the newest")
+    /// the same on both.
+    fn pin_slack(client_height: f64) -> f64 {
+        PINNED_SLACK_PX.max(client_height * 0.2)
+    }
+
+    /// How long after a gesture a scroll still counts as the reader's doing.
+    ///
+    /// Generous enough to cover the tail of a fling on a touchscreen, which
+    /// keeps firing `scroll` long after the finger has gone, and short enough
+    /// that a reflow a second later is not mistaken for it.
+    const GESTURE_WINDOW_MS: f64 = 700.0;
+
+    fn now_ms_f64() -> f64 {
+        #[cfg(target_arch = "wasm32")]
+        {
+            js_sys::Date::now()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            0.0
+        }
+    }
+
+    // Whether the stream was at the bottom *before* this render's new message
+    // landed. Read during render rather than inside the effect: by the time
+    // the effect runs the DOM already contains the new row, so the scroll
+    // position it would measure is the answer to a different question.
+    // Which threads are expanded, and which message the composer replies into.
+    // Declared here rather than beside the rendering because the settle below
+    // has to know: a thread's replies are visible only while it is open, so
+    // "how much is on screen" cannot be answered without this.
+    let open_threads = use_state(std::collections::HashSet::<MessageId>::new);
+    let reply_to = use_state(|| Option::<MessageId>::None);
+
+    // Whether the room has loaded, and therefore whether the stream element
+    // exists in the DOM. The listeners below key on this.
+    let room_ready = room.is_some();
+
+    // Decrypt once per message, not once per render.
+    //
+    // Every row's body used to be decrypted inline in the render loop, so a
+    // room of twenty encrypted messages ran twenty AES+HMAC passes on every
+    // single render — and a render happens on every keystroke in the composer,
+    // every typing indicator, every reaction. That is the cost behind the
+    // flicker: the main thread is busy re-deriving text it already had, while
+    // the rows it is rebuilding have no height yet.
+    //
+    // Keyed by message id, holding the `msg_serial` it was decrypted at. An
+    // edit advances the serial, which is exactly the signal that the cached
+    // plaintext is stale — so a message is re-decrypted when, and only when,
+    // its content actually changed.
+    let plaintext = use_mut_ref(HashMap::<MessageId, (i64, Decrypted)>::new);
+    // What the cache's entries were computed under: the room, and the
+    // bundle's epoch coverage. Compared and cleared *during* render, below,
+    // once `bundle` is in hand — an effect is one frame too late. Effects run
+    // after the render commits, and clearing a RefCell schedules nothing, so
+    // the render that first saw the new key would have served every row from
+    // the stale cache and the sealed bubbles would sit there until something
+    // unrelated re-rendered.
+    let plaintext_stamp = use_mut_ref(|| Option::<(RoomId, Option<(usize, Option<i64>)>)>::None);
+
+    let was_pinned = use_mut_ref(|| true);
+    // When the reader last touched the scroll themselves.
+    //
+    // The stream fires `scroll` for two very different reasons, and treating
+    // them alike is what broke this: a finger or a wheel, and the browser
+    // clamping `scrollTop` because the content under it changed size. Rows do
+    // change size — an attachment row collapses to nothing while it
+    // re-renders and springs back a moment later — and the clamp that follows
+    // looks exactly like somebody scrolling up. So the view was marked
+    // "reading history", the correction refused to run, and the message just
+    // sent stayed off-screen. Only a real gesture may unpin.
+    let last_gesture = use_mut_ref(|| 0.0f64);
+    // A count of what arrived while scrolled away, for the jump-down pill.
+    let unseen = use_state(|| 0u32);
+    // Whether this room's backlog has already been settled once.
+    //
+    // The room-change effect below cannot do this job on its own: it fires when
+    // the id changes, which is *before* the messages arrive, so it has nothing
+    // to scroll. The first real settle therefore happens in the count effect —
+    // and without this flag it would animate the entire backlog, smoothly
+    // dragging three thousand pixels of history past the reader on every room
+    // open. That is the smear the animation is supposed to avoid, not produce.
+    let settled = use_mut_ref(|| false);
+    let last_pending = use_mut_ref(|| 0usize);
+    // Your own outbound messages, which live in `store.pending` until the
+    // server acknowledges them — *not* in `state.messages`. Keying the settle
+    // on the message count alone therefore missed the single most obvious
+    // case there is: you press Enter, your bubble appears below the fold, and
+    // the view does not move. It is also the one case where the reader's
+    // scroll position should be overridden rather than respected — somebody
+    // who scrolled up and then typed wants to see what they just said.
+    let pending_count = store.pending.get(&p.room_id).map(|q| q.len()).unwrap_or(0);
+    // What the channel actually shows: top-level rows, nothing else.
+    //
+    // **Not** `state.messages.len()`, which counts thread replies the channel
+    // does not display — a reply to a collapsed thread bumped that count,
+    // scrolled the stream, and put "1 new message" on the pill for something
+    // nowhere on screen. Pressing it took you to the bottom to find nothing.
+    //
+    // And **not** a sum over each open thread's replies either, which was the
+    // first attempt: quadratic in a busy room, and it made expanding a thread
+    // look identical to a message arriving, so opening one scrolled away from
+    // the very thread just opened. Counting only what the channel lists means
+    // expanding a thread does not move the count at all — the effect simply
+    // does not fire, which is exactly the wanted behaviour and needs no
+    // special case to express.
+    let visible_count = state.ordered_top_level(&store.blocks).len();
+
     {
         let stream_ref = stream_ref.clone();
-        let count = state.messages.len();
-        use_effect_with(count, move |_| {
+        let was_pinned = was_pinned.clone();
+        let unseen = unseen.clone();
+        let settled = settled.clone();
+        let last_pending = last_pending.clone();
+        // Both counts drive the settle: one for messages arriving, one for
+        // messages leaving.
+        let deps = (visible_count, pending_count);
+        // Anchoring on the message count rather than a revision: edits and
+        // reactions must not move the scroll, and history loads prepend —
+        // both of those change the revision without adding a row at the
+        // bottom, and settling the scroll for either yanks the reader.
+        use_effect_with(deps, move |(count, pending_count)| {
+            let (count, pending_count) = (*count, *pending_count);
+            let Some(el) = stream_ref.cast::<HtmlElement>() else {
+                return;
+            };
+
+            // An empty stream is not a settle. This effect also runs on mount,
+            // when the room's messages have not arrived yet — and letting that
+            // run consume the "first settle" below meant the real backlog got
+            // the *smooth* path, animating three thousand pixels of history on
+            // every room open. Worse, a second load batch landing during that
+            // animation was counted as "unseen" and raised the jump pill on a
+            // reader who had not scrolled anywhere.
+            if count == 0 && pending_count == 0 {
+                return;
+            }
+
+            // The first settle after opening a room is a jump, not a
+            // journey: the backlog was already there when the reader arrived,
+            // so there is no motion to explain.
+            let first = !*settled.borrow();
+            *settled.borrow_mut() = true;
+
+            // A message you sent always brings you with it. Anything else
+            // respects where you are reading.
+            let sent_by_me = pending_count > *last_pending.borrow();
+            *last_pending.borrow_mut() = pending_count;
+            if sent_by_me {
+                *was_pinned.borrow_mut() = true;
+            }
+
+            let pinned = *was_pinned.borrow();
+            if first {
+                scroll_to_latest(&el, false);
+                unseen.set(0);
+            } else if pinned {
+                scroll_to_latest(&el, true);
+                unseen.set(0);
+            } else {
+                // Left where they are, deliberately. Dragging somebody out of
+                // the history they are reading is worse than a delayed read —
+                // the pill below is how they come back, on their terms.
+                unseen.set(*unseen + 1);
+            }
+        });
+    }
+
+    // Recompute the pin on every scroll, so the *next* arrival knows whether
+    // this person is still at the bottom.
+    let on_stream_scroll = {
+        let was_pinned = was_pinned.clone();
+        let unseen = unseen.clone();
+        let last_gesture = last_gesture.clone();
+        Callback::from(move |e: Event| {
+            let Some(el) = e.target_dyn_into::<HtmlElement>() else {
+                return;
+            };
+            let distance =
+                el.scroll_height() as f64 - el.scroll_top() as f64 - el.client_height() as f64;
+            if distance <= pin_slack(el.client_height() as f64) {
+                // Arriving at the bottom always means "following", however
+                // you got here.
+                *was_pinned.borrow_mut() = true;
+            } else if now_ms_f64() - *last_gesture.borrow() < GESTURE_WINDOW_MS {
+                // Away from the bottom, and the reader put it there.
+                *was_pinned.borrow_mut() = false;
+            }
+            // Otherwise: away from the bottom with no gesture behind it — a
+            // reflow moved the content, not the reader. Leave the intent
+            // alone; the observer below puts the view back.
+            // Scrolling back down by hand clears the pill without a press.
+            if *was_pinned.borrow() && *unseen > 0 {
+                unseen.set(0);
+            }
+        })
+    };
+
+    let jump_to_latest = {
+        let stream_ref = stream_ref.clone();
+        let was_pinned = was_pinned.clone();
+        let unseen = unseen.clone();
+        Callback::from(move |_: MouseEvent| {
             if let Some(el) = stream_ref.cast::<HtmlElement>() {
-                el.set_scroll_top(el.scroll_height());
+                scroll_to_latest(&el, true);
+            }
+            *was_pinned.borrow_mut() = true;
+            unseen.set(0);
+        })
+    };
+
+    // Expanding a thread moves the goalposts, so re-measure rather than trust.
+    //
+    // `was_pinned` is only ever updated by scroll events, and revealing a
+    // thread's replies fires none — it just inserts several hundred pixels.
+    // The flag therefore stayed `true` while the reader was left far from the
+    // bottom, and the media listener below then did the damage: the replies
+    // just revealed load their avatars, each `load` finds "pinned", and the
+    // view is flung to the end of the room — away from the very thread that
+    // was opened to be read. Measuring after the render is the honest answer
+    // to "are they still following?".
+    {
+        let stream_ref = stream_ref.clone();
+        let was_pinned = was_pinned.clone();
+        let open = (*open_threads).clone();
+        use_effect_with(open, move |_| {
+            if let Some(el) = stream_ref.cast::<HtmlElement>() {
+                let distance =
+                    el.scroll_height() as f64 - el.scroll_top() as f64 - el.client_height() as f64;
+                *was_pinned.borrow_mut() = distance <= pin_slack(el.client_height() as f64);
+            }
+        });
+    }
+
+    // Media that changes a row's height *after* it was scrolled past.
+    //
+    // This is the bug the flat "scroll on new message" never survived, and it
+    // is invisible in a room of plain text. A message carrying a video or an
+    // image renders at almost no height — no poster, no intrinsic dimensions —
+    // and the settle below runs against that. Then the poster decodes, the
+    // metadata arrives, and the row grows by several hundred pixels. The
+    // stream is now nowhere near the bottom, and **no scroll event fires for
+    // content growth**, so nothing here would ever notice. Rows are variable
+    // height; treating one settle as final was the mistake.
+    //
+    // `load` and `loadedmetadata` do not bubble, so this listens in the
+    // capture phase on the container — one listener for every image, video and
+    // avatar in the room, present and future, instead of a subscription per
+    // row that would have to be managed as messages arrive.
+    {
+        let stream_ref = stream_ref.clone();
+        let was_pinned = was_pinned.clone();
+        let last_gesture = last_gesture.clone();
+        // Keyed on the room *and on whether it has loaded* — not on `()`.
+        //
+        // This component returns a spinner while the room is still being
+        // fetched, so on the first render there is no `.fn-stream` in the DOM
+        // at all. An effect with `()` deps runs exactly then, finds nothing to
+        // attach to, and — having no dependency that can change — never tries
+        // again. The listener was therefore missing for the whole session
+        // whenever a room was opened cold: by URL, by reload, or on any
+        // connection slow enough that the room list had not arrived yet. Which
+        // is exactly when a room full of video needs it.
+        use_effect_with((p.room_id.clone(), room_ready), move |_| {
+            let listeners = stream_ref.cast::<HtmlElement>().map(|el| {
+                let options = gloo_events::EventListenerOptions::enable_prevent_default();
+                let capture = gloo_events::EventListenerOptions {
+                    phase: gloo_events::EventListenerPhase::Capture,
+                    ..options
+                };
+                // A wheel, a finger, a scrolling key, or the scrollbar itself.
+                // These are the only things that may *unpin* — see
+                // `last_gesture`. `pointerdown` is not padding: dragging the
+                // scrollbar produces scroll events and no wheel or touch at
+                // all, so without it a mouse user who scrolled up to read
+                // would be dragged back down by the next message.
+                let gestures =
+                    ["wheel", "touchstart", "touchmove", "keydown", "pointerdown"].map(|event| {
+                        let last_gesture = last_gesture.clone();
+                        gloo_events::EventListener::new_with_options(
+                            &el,
+                            event,
+                            capture,
+                            move |_| {
+                                *last_gesture.borrow_mut() = now_ms_f64();
+                            },
+                        )
+                    });
+
+                let media = ["load", "loadedmetadata"].map(|event| {
+                    let stream_ref = stream_ref.clone();
+                    let was_pinned = was_pinned.clone();
+                    gloo_events::EventListener::new_with_options(&el, event, capture, move |_| {
+                        // Only while following. Somebody reading history
+                        // must not be yanked because a video three
+                        // screens below them finished decoding.
+                        if !*was_pinned.borrow() {
+                            return;
+                        }
+                        if let Some(el) = stream_ref.cast::<HtmlElement>() {
+                            // Instant: this is a correction to a settle
+                            // that already happened, not a new arrival.
+                            // Animating it would read as drift.
+                            scroll_to_latest(&el, false);
+                        }
+                    })
+                });
+
+                // The stream re-rendering, which `load` cannot stand in for.
+                //
+                // Attachment rows collapse to nothing and spring back as they
+                // re-render, and with a cached image no `load` fires at all —
+                // so the media listener above had nothing to react to and the
+                // view stayed stranded wherever the collapse left it. A
+                // mutation is the one signal that is always there. Re-settling
+                // when already at the bottom is a no-op, so this is cheap
+                // however chatty the room.
+                let observer = stream_ref.cast::<HtmlElement>().and_then(|el| {
+                    use wasm_bindgen::JsCast;
+                    let target = el.clone();
+                    let was_pinned = was_pinned.clone();
+                    let callback = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+                        if !*was_pinned.borrow() {
+                            return;
+                        }
+                        scroll_to_latest(&target, false);
+                    });
+                    let observer =
+                        web_sys::MutationObserver::new(callback.as_ref().unchecked_ref()).ok()?;
+                    let init = web_sys::MutationObserverInit::new();
+                    init.set_child_list(true);
+                    init.set_subtree(true);
+                    observer.observe_with_options(&el, &init).ok()?;
+                    Some((observer, callback))
+                });
+
+                (gestures, media, observer)
+            });
+            move || {
+                if let Some((_, _, Some((observer, _)))) = &listeners {
+                    observer.disconnect();
+                }
+                drop(listeners)
+            }
+        });
+    }
+
+    // The on-screen keyboard.
+    //
+    // Focusing the composer on a phone takes roughly half the screen away, and
+    // the browser shrinks the stream rather than scrolling it — so the message
+    // you were looking at, including the one you just sent, ends up behind the
+    // keyboard. No scroll event fires for a resize, so nothing else here would
+    // notice. Re-settling on resize is what keeps "the newest message is at
+    // the bottom" true when the bottom moves.
+    //
+    // Instant, not smooth: this rides a layout change the user caused, and
+    // animating it would race the keyboard sliding up.
+    {
+        let stream_ref = stream_ref.clone();
+        let was_pinned = was_pinned.clone();
+        // Same keying, for the same reason: the element has to exist first.
+        use_effect_with((p.room_id.clone(), room_ready), move |_| {
+            let listener = web_sys::window().map(|window| {
+                gloo_events::EventListener::new(&window, "resize", move |_| {
+                    if !*was_pinned.borrow() {
+                        return;
+                    }
+                    if let Some(el) = stream_ref.cast::<HtmlElement>() {
+                        scroll_to_latest(&el, false);
+                    }
+                })
+            });
+            move || drop(listener)
+        });
+    }
+
+    // Opening a room is not an arrival: the backlog is already below the fold
+    // and animating a thousand pixels of it is a smear, not a transition. So
+    // the first settle after a room change is instant, and `was_pinned` is
+    // reset because the previous room's scroll position says nothing here.
+    {
+        let stream_ref = stream_ref.clone();
+        let was_pinned = was_pinned.clone();
+        let unseen = unseen.clone();
+        let settled = settled.clone();
+        use_effect_with(p.room_id.clone(), move |_| {
+            *was_pinned.borrow_mut() = true;
+            // Arm the instant first settle for the room being opened. The
+            // messages are usually not here yet — the count effect above is
+            // what actually performs it, once they are.
+            *settled.borrow_mut() = false;
+            unseen.set(0);
+            if let Some(el) = stream_ref.cast::<HtmlElement>() {
+                scroll_to_latest(&el, false);
             }
         });
     }
@@ -94,14 +500,94 @@ pub fn chat(p: &ChatProps) -> Html {
         return html! {};
     };
 
+    // Which threads are expanded, and which message the composer is replying
+    // into. Component state rather than store state: both are about *this
+    // screen right now*, and a thread left open in a room you navigated away
+    // from is not something to restore.
+
+    let toggle_thread = {
+        let open_threads = open_threads.clone();
+        Callback::from(move |id: MessageId| {
+            let mut next = (*open_threads).clone();
+            if !next.remove(&id) {
+                next.insert(id);
+            }
+            open_threads.set(next);
+        })
+    };
+    let start_reply = {
+        let reply_to = reply_to.clone();
+        let open_threads = open_threads.clone();
+        Callback::from(move |id: MessageId| {
+            // Opening the thread as well: replying into something you cannot
+            // see is how people answer the wrong message.
+            let mut next = (*open_threads).clone();
+            next.insert(id.clone());
+            open_threads.set(next);
+            reply_to.set(Some(id));
+        })
+    };
+    let cancel_reply = {
+        let reply_to = reply_to.clone();
+        Callback::from(move |_: MouseEvent| reply_to.set(None))
+    };
+
+    let on_knowledge = {
+        let store = store.clone();
+        let on_navigate = p.on_navigate.clone();
+        Callback::from(move |seed: crate::state::KnowledgeSeed| {
+            store.dispatch(Action::SeedKnowledge(seed));
+            on_navigate.emit(Route::Knowledge);
+        })
+    };
+
+    // One shared list for every row: the names highlighting looks for, and the
+    // handles that mean "you". Built once per render rather than per message —
+    // a hundred rows cloning a hundred-member roster is the most expensive
+    // thing a busy room could do to draw a chip.
+    let mention_names: Rc<Vec<String>> = Rc::new(
+        room.members
+            .iter()
+            .map(|m| m.user.display_name())
+            .chain(room.members.iter().map(|m| m.user_address.to_string()))
+            .collect(),
+    );
+    let my_handles: Rc<Vec<String>> = Rc::new(
+        room.members
+            .iter()
+            .find(|m| m.user_address == me)
+            .map(|m| vec![m.user.display_name(), m.user_address.to_string()])
+            .unwrap_or_else(|| vec![me.to_string()]),
+    );
+
     let is_admin = room.is_admin(&me);
     let rotation_pending = room.room.key_rotation_pending;
+    // What to call this conversation. A channel has a name somebody chose; a
+    // DM does not, and the server's placeholder must never reach the screen.
+    // See `RoomWithMembers::title_for` — the answer differs per viewer, so it
+    // can only be worked out here.
+    let title = room.title_for(&me);
     // Carries *why* an encrypted post cannot succeed, not merely that it
     // cannot: the composer's placeholder is the only explanation the user gets,
     // and the remedies differ.
     let composer_blocked = store.post_block(&p.room_id);
     let offline = !store.online;
     let bundle = store.bundle(&p.room_id).cloned();
+
+    // Invalidate the plaintext cache the moment its inputs change, so this
+    // very render decrypts fresh. Keyed on the bundle's *coverage*, not the
+    // room's `current_key_version`: after a rotation that happened while this
+    // device was away, the room names the new epoch before the key for it
+    // arrives, and the version alone would never notice the bundle catching
+    // up — every row of that epoch would stay cached as sealed.
+    {
+        let stamp = (p.room_id.clone(), bundle.as_ref().map(|b| b.coverage()));
+        let mut last = plaintext_stamp.borrow_mut();
+        if last.as_ref() != Some(&stamp) {
+            plaintext.borrow_mut().clear();
+            *last = Some(stamp);
+        }
+    }
     let now = format::now_ms();
     let tz = format::tz_offset_minutes();
 
@@ -110,19 +596,34 @@ pub fn chat(p: &ChatProps) -> Html {
     let on_send = {
         let store = store.clone();
         let room_id = p.room_id.clone();
+        let reply_to = reply_to.clone();
+        let roster = room.members.clone();
+        let me_for_send = me.clone();
         Callback::from(move |text: String| {
             let now = format::now_ms();
             let local_id = crate::state::next_local_id();
+            // Resolved here, from the text as typed and this room's roster.
+            // The server parses plaintext too, but it cannot parse ciphertext
+            // and cannot recover a name with a space in it — see
+            // `crate::mentions`.
+            let extras = actions::SendExtras {
+                parent: (*reply_to).clone(),
+                mentions: crate::mentions::resolve(&text, &roster, &me_for_send),
+            };
             store.dispatch(Action::QueueSend(
                 room_id.clone(),
                 local_id,
                 text.clone(),
                 now,
             ));
+            // The reply target is consumed by the send: the next message goes
+            // to the channel unless it is aimed again. A sticky thread is how
+            // people post an unrelated remark into somebody's conversation.
+            reply_to.set(None);
             let store2 = store.clone();
             let room_id = room_id.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                actions::send_message(store2, room_id, local_id, text).await;
+                actions::send_message(store2, room_id, local_id, text, extras).await;
             });
         })
     };
@@ -274,7 +775,10 @@ pub fn chat(p: &ChatProps) -> Html {
 
     // --- render ----------------------------------------------------------
 
-    let visible: Vec<&Message> = state.ordered(&store.blocks);
+    // The channel shows top-level messages only. Replies are in `state` —
+    // `/sync` delivered them — and are rendered under their parent when its
+    // thread is open, which is what makes opening one instant and offline.
+    let visible: Vec<&Message> = state.ordered_top_level(&store.blocks);
     let pending = store.pending.get(&p.room_id).cloned().unwrap_or_default();
     let typists: Vec<String> = store
         .typing
@@ -289,6 +793,175 @@ pub fn chat(p: &ChatProps) -> Html {
         })
         .collect();
 
+    // Every child of `.fn-stream` is built into a single sequence in which
+    // *every* entry carries a key, because Yew flattens `{ for … }` into the
+    // parent's child list rather than nesting it. The children of this element
+    // were once four expressions — two `if`s and two `for`s — and Yew saw one
+    // flat list of thirty, of which the first two (the `if`s, empty lists when
+    // their condition was false) had no key. One unkeyed sibling makes
+    // `fully_keyed` false for the whole list, so all twenty-eight rows were
+    // matched *by position, counting from the end*. Appending a message shifted
+    // every position by one and Yew tore down and rebuilt every row: images
+    // refetched, ciphertext re-decrypted, the list visibly flashed, and the
+    // scroll position was clamped so the newest message landed off-screen.
+    //
+    // Keying the rows alone did not fix it, and could not: the keys were never
+    // consulted. The conditionals have to be *in* the sequence, or absent from
+    // it — hence a `Vec` rather than markup.
+    let mut rows: Vec<Html> = Vec::with_capacity(visible.len() + pending.len() + 2);
+    if state.has_more_history && !visible.is_empty() {
+        rows.push(html! {
+            <button
+                type="button"
+                key="load-earlier"
+                class="topcoat-button--quiet"
+                disabled={*loading_older}
+                onclick={on_load_older.clone()}
+            >
+                { if *loading_older { t(lang, Key::loading) } else { t(lang, Key::load_earlier) } }
+            </button>
+        });
+    }
+    if visible.is_empty() && pending.is_empty() {
+        rows.push(html! {
+            <div class="fn-stream__item" key="empty">
+                { empty_stream(lang, &load, room.has_encryption) }
+            </div>
+        });
+    }
+
+    rows.extend(visible.iter().enumerate().map(|(i, m)| {
+        let prev: Option<&Message> = (i > 0).then(|| visible[i - 1]);
+        let body = decrypt_cached(&plaintext, &bundle, &p.room_id, m);
+        html! {
+            // Keyed on the **outermost** node of each list item.
+            //
+            // This used to be a bare `<>` fragment with the key on
+            // the `MessageRow` inside it. Yew matches list items by
+            // the key on the node it iterates, so a fragment whose
+            // key is one level down is an *unkeyed* list: every
+            // render tore down all eighteen rows and built them
+            // again. That is the flicker — images refetch,
+            // ciphertext re-decrypts, every row collapses to
+            // nothing and springs back — and it is also what
+            // clamped the scroll position and stranded the newest
+            // message off-screen.
+            //
+            // `display: contents` on the wrapper, so the rows stay
+            // direct flex children of the stream and the gap
+            // between them is unchanged. The element exists only
+            // to carry the key.
+            <div class="fn-stream__item" key={m.id.to_string()}>
+                if starts_new_day(prev, m, tz) {
+                    <DayMark timestamp={m.message_timestamp} {now} {tz} />
+                }
+                <MessageRow
+                    key={m.id.to_string()}
+                    message={(*m).clone()}
+                    {body}
+                    is_own={m.sender_address == me}
+                    grouped={!starts_new_group(prev, m, tz)}
+                    room_encrypted={room.has_encryption}
+                    reactions={state.reactions_for(&m.id, &store.blocks)}
+                    me={me.clone()}
+                    chain={store.chain.clone()}
+                    {tz}
+                    on_react={on_react.clone()}
+                    on_copy={on_copy.clone()}
+                    on_delete={on_delete.clone()}
+                    on_edit={on_edit.clone()}
+                    on_open_picker={{
+                        let picker_for = picker_for.clone();
+                        Callback::from(move |id: MessageId| picker_for.set(Some(Some(id))))
+                    }}
+                    picker_open={picker_target.as_ref() == Some(&m.id)}
+                    on_close_picker={{
+                        let picker_for = picker_for.clone();
+                        Callback::from(move |_: ()| picker_for.set(None))
+                    }}
+                    on_knowledge={on_knowledge.clone()}
+                    mention_names={mention_names.clone()}
+                    my_handles={my_handles.clone()}
+                    reply_count={state.reply_count(m, &store.blocks)}
+                    thread_open={open_threads.contains(&m.id)}
+                    on_toggle_thread={toggle_thread.clone()}
+                    on_reply={start_reply.clone()}
+                />
+                if open_threads.contains(&m.id) {
+                    <div class="fn-thread" role="group"
+                         aria-label={t(lang, Key::thread)}>
+                        { for state.replies_to(&m.id, &store.blocks).into_iter().map(|r| {
+                            let body =
+                                decrypt_cached(&plaintext, &bundle, &p.room_id, r);
+                            html! {
+                                <MessageRow
+                                    key={r.id.to_string()}
+                                    message={r.clone()}
+                                    {body}
+                                    is_own={r.sender_address == me}
+                                    grouped=false
+                                    room_encrypted={room.has_encryption}
+                                    reactions={state.reactions_for(&r.id, &store.blocks)}
+                                    me={me.clone()}
+                                    chain={store.chain.clone()}
+                                    {tz}
+                                    on_react={on_react.clone()}
+                                    on_copy={on_copy.clone()}
+                                    on_delete={on_delete.clone()}
+                                    on_edit={on_edit.clone()}
+                                    on_open_picker={{
+                                        let picker_for = picker_for.clone();
+                                        Callback::from(move |id: MessageId| {
+                                            picker_for.set(Some(Some(id)))
+                                        })
+                                    }}
+                                    picker_open={picker_target.as_ref() == Some(&r.id)}
+                                    on_close_picker={{
+                                        let picker_for = picker_for.clone();
+                                        Callback::from(move |_: ()| picker_for.set(None))
+                                    }}
+                                    on_knowledge={on_knowledge.clone()}
+                                    mention_names={mention_names.clone()}
+                                    my_handles={my_handles.clone()}
+                                    in_thread=true
+                                />
+                            }
+                        }) }
+                        // Always offered, even on a thread that
+                        // already has replies: the alternative is
+                        // scrolling back to the parent to find the
+                        // one control that continues the thread
+                        // you are looking at.
+                        //
+                        // Keyed for the same reason every row is:
+                        // it is a sibling of the replies inside
+                        // this list, and an unkeyed sibling turns
+                        // keyed matching off for all of them.
+                        <button
+                            type="button"
+                            key="reply-in-thread"
+                            class="fn-thread__reply"
+                            onclick={{
+                                let start_reply = start_reply.clone();
+                                let id = m.id.clone();
+                                Callback::from(move |_: MouseEvent| {
+                                    start_reply.emit(id.clone())
+                                })
+                            }}
+                        >{ t(lang, Key::reply_in_thread) }</button>
+                    </div>
+                }
+            </div>
+        }
+    }));
+    rows.extend(pending.iter().map(|q| {
+        html! {
+                        <div class="fn-stream__item" key={format!("pending-{}", q.local_id)}>
+                            { pending_bubble(lang, q, &store, &p.room_id) }
+                        </div>
+        }
+    }));
+
     html! {
         <div class="fn-chat">
             <header class="fn-chat__head">
@@ -300,13 +973,13 @@ pub fn chat(p: &ChatProps) -> Html {
                     seed={p.room_id.to_string()}
                     size={IdentSize::Sm}
                     zoom={crate::components::common::Zoom {
-                        title: room.room.name.clone(),
+                        title: title.clone(),
                         subtitle: None,
                         address: None,
                     }}
                 />
                 <div class="fn-chat__title fn-grow">
-                    <span>{ &room.room.name }</span>
+                    <span>{ &title }</span>
                     if room.has_encryption {
                         <Lock pending={rotation_pending} />
                     }
@@ -373,7 +1046,7 @@ pub fn chat(p: &ChatProps) -> Html {
             // Rendered unconditionally: `Popover` needs to see `open` turn
             // false to run the exit, which it cannot do if the parent has
             // already stopped rendering it.
-            { room_menu(lang, &store, &room, is_admin, *menu_open, menu_open.clone(), &p.on_navigate) }
+            { room_menu(lang, &store, &room, &title, is_admin, menu_open.clone(), &p.on_navigate) }
 
             if offline {
                 <super::common::OfflineBanner />
@@ -394,79 +1067,39 @@ pub fn chat(p: &ChatProps) -> Html {
                 { key_banner(lang, bundle.as_deref()) }
             }
 
+            // The wrapper exists so the jump pill has a positioned ancestor
+            // that is *not* the scroller — anchored to the stream itself it
+            // would scroll away with the content it is offering to escape.
+            // It also keeps `.fn-chat`'s four grid rows intact.
+            <div class="fn-stream-wrap">
             <div
                 ref={stream_ref}
                 class="fn-stream fn-scroll"
                 role="log"
                 aria-live="polite"
                 aria-relevant="additions"
-                aria-label={t(lang, Key::messages_in_room).replace("{room}", &room.room.name)}
+                aria-label={t(lang, Key::messages_in_room).replace("{room}", &title)}
+                onscroll={on_stream_scroll}
             >
-                if state.has_more_history && !visible.is_empty() {
-                    <button
-                        type="button"
-                        class="topcoat-button--quiet"
-                        disabled={*loading_older}
-                        onclick={on_load_older}
-                    >
-                        { if *loading_older { t(lang, Key::loading) } else { t(lang, Key::load_earlier) } }
-                    </button>
-                }
-
-                if visible.is_empty() && pending.is_empty() {
-                    { empty_stream(lang, &load, room.has_encryption) }
-                }
-
-                { for visible.iter().enumerate().map(|(i, m)| {
-                    let prev: Option<&Message> = (i > 0).then(|| visible[i - 1]);
-                    let body = match &bundle {
-                        Some(b) => decrypt_message(b, &p.room_id, m),
-                        None if m.is_encrypted => Decrypted::NoKeyForEpoch(m.key_version()),
-                        None => Decrypted::Plaintext(m.content.clone()),
-                    };
-                    html! {
-                        <>
-                            if starts_new_day(prev, m, tz) {
-                                <DayMark timestamp={m.message_timestamp} {now} {tz} />
-                            }
-                            <MessageRow
-                                key={m.id.to_string()}
-                                message={(*m).clone()}
-                                {body}
-                                is_own={m.sender_address == me}
-                                grouped={!starts_new_group(prev, m, tz)}
-                                room_encrypted={room.has_encryption}
-                                reactions={state.reactions_for(&m.id, &store.blocks)}
-                                me={me.clone()}
-                                chain={store.chain.clone()}
-                                {tz}
-                                on_react={on_react.clone()}
-                                on_copy={on_copy.clone()}
-                                on_delete={on_delete.clone()}
-                                on_edit={on_edit.clone()}
-                                on_open_picker={{
-                                    let picker_for = picker_for.clone();
-                                    Callback::from(move |id: MessageId| picker_for.set(Some(Some(id))))
-                                }}
-                                picker_open={picker_target.as_ref() == Some(&m.id)}
-                                on_close_picker={{
-                                    let picker_for = picker_for.clone();
-                                    Callback::from(move |_: ()| picker_for.set(None))
-                                }}
-                                on_knowledge={{
-                                    let store = store.clone();
-                                    let on_navigate = p.on_navigate.clone();
-                                    Callback::from(move |seed: crate::state::KnowledgeSeed| {
-                                        store.dispatch(Action::SeedKnowledge(seed));
-                                        on_navigate.emit(Route::Knowledge);
-                                    })
-                                }}
-                            />
-                        </>
-                    }
-                }) }
-
-                { for pending.iter().map(|q| pending_bubble(lang, q, &store, &p.room_id)) }
+                { for rows.into_iter() }
+            </div>
+            // The way back down. Only while scrolled away *and* something has
+            // arrived since — a permanent "jump to bottom" control is one more
+            // thing on screen answering a question nobody asked.
+            if *unseen > 0 {
+                <button
+                    type="button"
+                    class="fn-jump-latest"
+                    onclick={jump_to_latest}
+                >
+                    { icons::back(14) }
+                    <span>{ t(lang, if *unseen == 1 {
+                                Key::new_message_one
+                            } else {
+                                Key::new_message_many
+                            }).replace("{n}", &unseen.to_string()) }</span>
+                </button>
+            }
             </div>
 
             <div class="fn-typing" aria-live="polite" aria-atomic="true">
@@ -494,7 +1127,18 @@ pub fn chat(p: &ChatProps) -> Html {
             />
 
             <Composer
-                room_name={room.room.name.clone()}
+                members={room.members.clone()}
+                me={Some(me.clone())}
+                replying_to={(*reply_to).as_ref().and_then(|id| {
+                    // Name the message being replied to by its author, which
+                    // is what somebody looking at the chip needs to recognise.
+                    state.messages.get(id).map(|m| m.sender
+                        .as_ref()
+                        .map(|u| u.display_name())
+                        .unwrap_or_else(|| m.sender_address.abbreviated()))
+                })}
+                on_cancel_reply={cancel_reply}
+                room_name={title.clone()}
                 blocked={composer_blocked}
                 {offline}
                 on_send={on_send}
@@ -651,7 +1295,7 @@ fn pending_bubble(
             let room_id = room_id.clone();
             let text = text.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                actions::send_message(store, room_id, local_id, text).await;
+                actions::send_message(store, room_id, local_id, text, Default::default()).await;
             });
         })
     };
@@ -686,13 +1330,15 @@ fn room_menu(
     lang: Lang,
     store: &crate::state::Store,
     room: &crate::api::RoomWithMembers,
+    title: &str,
     is_admin: bool,
-    is_open: bool,
     open: UseStateHandle<bool>,
     on_navigate: &Callback<Route>,
 ) -> Html {
+    let is_open = *open;
     let id = room.id().clone();
-    let name = room.room.name.clone();
+    let name = title.to_owned();
+    let direct = room.is_direct();
 
     let item = |label: &'static str, action: Modal, open: UseStateHandle<bool>| {
         let store = store.clone();
@@ -745,10 +1391,15 @@ fn room_menu(
     html! {
         <Popover open={is_open} class="fn-picker" role="menu" label={t(lang, Key::room_actions)}
             on_dismiss={{ let open = open.clone(); Callback::from(move |_: ()| open.set(false)) }}>
-            if is_admin || room.has_encryption {
+            // Everything gated on `!direct` is a channel verb the server
+            // refuses for a DM: there is nobody to invite into a private
+            // conversation, no name anybody chose to change, and every member
+            // of a DM is already an admin of it. Offering a control that
+            // always errors is worse than not offering it.
+            if !direct && (is_admin || room.has_encryption) {
                 { item(t(lang, Key::invite_people), Modal::Invite(id.clone()), open.clone()) }
             }
-            if is_admin {
+            if !direct && is_admin {
                 { item(t(lang, Key::rename_room), Modal::RenameRoom(id.clone(), name.clone()), open.clone()) }
                 { item(t(lang, Key::manage_admins), Modal::ManageAdmins(id.clone()), open.clone()) }
             }
@@ -767,11 +1418,16 @@ fn room_menu(
                 }}
             >{ t(lang, Key::view_members) }</button>
 
-            { confirm(t(lang, Key::leave_room), false,
-                      t(lang, Key::leave_room_title).replace("{name}", &name),
-                      t(lang, Key::leave_room_body).to_owned(),
-                      t(lang, Key::leave_room).to_owned(),
-                      ConfirmAction::LeaveRoom(id.clone()), open.clone()) }
+            // Leaving is a channel verb too — a departed member would leave a
+            // DM still keyed to their name, which they could then never
+            // re-open. Hiding, below, is the reversible answer for both.
+            if !direct {
+                { confirm(t(lang, Key::leave_room), false,
+                          t(lang, Key::leave_room_title).replace("{name}", &name),
+                          t(lang, Key::leave_room_body).to_owned(),
+                          t(lang, Key::leave_room).to_owned(),
+                          ConfirmAction::LeaveRoom(id.clone()), open.clone()) }
+            }
             { confirm(t(lang, Key::hide_room), false,
                       t(lang, Key::hide_room_title).replace("{name}", &name),
                       t(lang, Key::hide_room_body).to_owned(),
@@ -816,4 +1472,135 @@ pub fn no_room() -> Html {
             description={t(lang, Key::pick_a_room_body)}
         />
     }
+}
+
+/// A message's readable body, decrypted at most once per version.
+///
+/// The cache is a plain map behind a `RefCell` rather than anything cleverer:
+/// it is read and written only from the render of one component, on one
+/// thread, and the entry it wants is the one keyed by the id in hand.
+fn decrypt_cached(
+    cache: &std::rc::Rc<std::cell::RefCell<HashMap<MessageId, (i64, Decrypted)>>>,
+    bundle: &Option<std::rc::Rc<crate::crypto::RoomKeyBundle>>,
+    room_id: &RoomId,
+    m: &Message,
+) -> Decrypted {
+    if let Some((serial, body)) = cache.borrow().get(&m.id) {
+        if *serial == m.msg_serial {
+            return body.clone();
+        }
+    }
+    let body = match bundle {
+        Some(b) => decrypt_message(b, room_id, m),
+        None if m.is_encrypted => Decrypted::NoKeyForEpoch(m.key_version()),
+        None => Decrypted::Plaintext(m.content.clone()),
+    };
+    cache
+        .borrow_mut()
+        .insert(m.id.clone(), (m.msg_serial, body.clone()));
+    body
+}
+
+/// Settle the stream on the newest message.
+///
+/// `smooth` distinguishes the two cases, and they are genuinely different: a
+/// message *arriving* wants the animation, because a bubble that simply
+/// appears below the fold reads as a jump cut and the motion is what says
+/// "this new thing is now at the bottom". *Opening a room* does not — the
+/// backlog was already there, and animating three thousand pixels of it past
+/// the reader is a smear, not a transition.
+///
+/// The behaviour is always passed **explicitly**, never left to the
+/// stylesheet. `.fn-scroll` carries `scroll-behavior: smooth`, which silently
+/// animates a bare `scrollTop` assignment too — so the "instant" path was
+/// instant only in the source until this was spelled out. Options-level
+/// behaviour overrides the CSS property, which is what makes this reliable.
+///
+/// Smooth collapses to instant under `prefers-reduced-motion`. Not a nicety:
+/// a scroll animation is exactly the vestibular trigger that setting exists
+/// for, and the stylesheet already forces `scroll-behavior: auto` there.
+#[cfg(target_arch = "wasm32")]
+fn scroll_to_latest(el: &HtmlElement, smooth: bool) {
+    // Go to the last row, not to a computed height.
+    //
+    // `scrollTop = scrollHeight` is arithmetic over every row above, and it is
+    // stale the instant one of them is not yet the height it will become —
+    // which is every row carrying a video or an image, since they render
+    // before the poster decodes. Asking the browser to bring the *last
+    // element* into view carries no such assumption: whatever is above it,
+    // "the last one, at the bottom" means the same thing however tall the
+    // rows turn out to be.
+    let Some(last) = el.last_element_child() else {
+        return;
+    };
+
+    // Animate a hop, jump a journey.
+    //
+    // "Is this the first settle?" turned out to be the wrong question: a
+    // room's backlog does not arrive in one count change. It lands in waves
+    // (`/messages` backfill, then `/sync`, then the DOM painting the rows),
+    // so the flag was spent on a partial stream and the *rest* of the backlog
+    // then got the smooth path — three thousand pixels of history sliding
+    // past on every room open.
+    //
+    // Distance is the honest signal. More than two screens to cover is a
+    // load, not an arrival, and nobody wants to watch it; a message or two is
+    // an arrival, and the motion is what says the new bubble is the one now
+    // at the bottom. This also stops the jump pill from smearing a reader
+    // back down from the top of a long history.
+    let travel = el.scroll_height() as f64 - el.scroll_top() as f64 - el.client_height() as f64;
+    let long_haul = travel > (el.client_height() as f64) * 2.0;
+
+    // `scrollIntoView` alone stops at the row's own bottom edge and leaves the
+    // container's bottom padding uncovered — measurably 8px short of the end
+    // here. So the last row decides *whether* there is anywhere to go, and the
+    // scroll itself targets the true bottom. That keeps the property the
+    // suggestion was after — never compute a height from the rows above — while
+    // still landing flush.
+    let _ = &last;
+
+    if smooth && !long_haul && !reduced_motion() {
+        let opts = web_sys::ScrollToOptions::new();
+        opts.set_top(el.scroll_height() as f64);
+        opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+        el.scroll_to_with_scroll_to_options(&opts);
+        return;
+    }
+
+    // Jumping needs an *inline* override, not `behavior: "auto"`.
+    //
+    // `.fn-scroll` carries `scroll-behavior: smooth`, and that CSS property
+    // animates `scrollIntoView` and a bare `scrollTop` assignment alike.
+    // Passing `behavior: "auto"` in the options is supposed to win and —
+    // measured in this Chromium, not assumed — does not: the container kept
+    // animating, which is why "instant" room-opens were still smearing three
+    // thousand pixels of backlog past the reader. An inline style outranks
+    // the stylesheet, so the property is switched off for the call and put
+    // back immediately.
+    let style = el.style();
+    let previous = style
+        .get_property_value("scroll-behavior")
+        .unwrap_or_default();
+    let _ = style.set_property("scroll-behavior", "auto");
+    el.set_scroll_top(el.scroll_height());
+    if previous.is_empty() {
+        let _ = style.remove_property("scroll-behavior");
+    } else {
+        let _ = style.set_property("scroll-behavior", &previous);
+    }
+}
+
+/// Host builds have no DOM; the component is only rendered under wasm.
+#[cfg(not(target_arch = "wasm32"))]
+fn scroll_to_latest(_el: &HtmlElement, _smooth: bool) {}
+
+#[cfg(target_arch = "wasm32")]
+fn reduced_motion() -> bool {
+    web_sys::window()
+        .and_then(|w| {
+            w.match_media("(prefers-reduced-motion: reduce)")
+                .ok()
+                .flatten()
+        })
+        .is_some_and(|m| m.matches())
 }

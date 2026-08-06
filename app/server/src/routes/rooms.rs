@@ -17,6 +17,7 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/rooms", post(create).get(list))
+        .route("/rooms/dm", post(open_dm))
         .route("/rooms/hidden", get(list_hidden))
         .route("/rooms/{roomId}", get(detail).patch(rename).delete(remove))
         .route("/rooms/{roomId}/hide", post(hide).delete(unhide))
@@ -49,12 +50,23 @@ async fn require_member(state: &AppState, room: &RoomId, caller: &WalletAddress)
     }
 }
 
-async fn require_admin(
+/// Require that the caller can administer this room.
+///
+/// A server administrator passes without being a room admin, and without
+/// being a member. That is the point of the role: a room whose last admin has
+/// left is otherwise unmanageable forever, and "ask the person who is gone"
+/// is not an answer an operator can act on. It is a real power and it is
+/// meant to be — it is also why the list of who holds it lives in the
+/// deployment's configuration rather than anywhere a request can reach.
+pub(super) async fn require_admin(
     state: &AppState,
     room: &RoomId,
     caller: &WalletAddress,
     message: &str,
 ) -> ApiResult<()> {
+    if super::misc::is_server_admin(caller.as_str()) {
+        return Ok(());
+    }
     let room_id = room.as_str().to_owned();
     let address = caller.as_str().to_owned();
     let admin = state
@@ -66,6 +78,39 @@ async fn require_admin(
     } else {
         Err(ApiError::forbidden(message))
     }
+}
+
+/// Refuse a verb that only makes sense for a channel.
+///
+/// A DM has no name anybody chose, no roster to curate and no membership to
+/// grant, so rename / invite / kick / promote have nothing to act on. Refusing
+/// is better than quietly succeeding: a renamed DM would show one title to the
+/// person who set it and a derived one to everybody else, and a DM you could
+/// be added to would not be the conversation the other person opened.
+///
+/// 400 rather than 403 on purpose — the caller is not unauthorised, the
+/// request does not apply.
+async fn require_channel(state: &AppState, room: &RoomId, verb: &str) -> ApiResult<()> {
+    if is_direct(state, room).await? {
+        return Err(ApiError::bad_request(format!(
+            "Cannot {verb} a direct message."
+        )));
+    }
+    Ok(())
+}
+
+/// Whether this room is a DM. Separate from [`require_channel`] so a caller
+/// that wants its own wording — `leave` does — can ask the question without
+/// having to catch and reinterpret an error, which would also swallow the
+/// database failures this can legitimately return.
+async fn is_direct(state: &AppState, room: &RoomId) -> ApiResult<bool> {
+    let room_id = room.as_str().to_owned();
+    let record = state
+        .db
+        .call(move |conn| rooms::get_room(conn, &room_id))
+        .await?
+        .ok_or_else(|| ApiError::not_found("Room not found"))?;
+    Ok(record.is_direct())
 }
 
 async fn require_room_exists(state: &AppState, room: &RoomId) -> ApiResult<()> {
@@ -116,6 +161,116 @@ async fn create(
     }
 
     Ok(Json(room).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct DmBody {
+    /// The one-recipient shorthand, which is the overwhelmingly common case.
+    #[serde(rename = "walletAddress")]
+    wallet_address: Option<String>,
+    /// The general form. Merged with the shorthand rather than exclusive with
+    /// it, so a client that sends both is not a request anyone has to reason
+    /// about.
+    #[serde(rename = "walletAddresses")]
+    wallet_addresses: Option<Vec<String>>,
+}
+
+/// `POST /api/rooms/dm` — open a direct message, or return the existing one.
+///
+/// **Idempotent by identity, not by convention.** The room is keyed on its
+/// member set (`rooms::dm_key`), so this endpoint is the answer to "the
+/// conversation between these people" rather than a create call that happens
+/// to be safe to retry. Two people can press "message" at the same moment from
+/// two devices and land in one room.
+///
+/// The caller is always a member: you cannot open a conversation you are not
+/// in. Naming only yourself is allowed and gives the private room a person
+/// keeps notes in — the same mechanism, with a one-element set.
+///
+/// Recipients must have registered, because a DM to an address nobody has ever
+/// signed in with is a room with a member the roster cannot render, and the
+/// mistake is far more often a mistyped address than a genuine invitation to
+/// somebody who has not arrived yet. Channel invitations remain the way to
+/// reach someone who is not here.
+///
+/// Returns the enriched room, not the bare one: a client has to name a DM
+/// after its other members, so it needs the roster in the same response that
+/// tells it the room exists.
+async fn open_dm(
+    State(state): State<AppState>,
+    AuthUser(caller): AuthUser,
+    ValidJson(body): ValidJson<DmBody>,
+) -> ApiResult<Response> {
+    let raw: Vec<String> = body
+        .wallet_address
+        .into_iter()
+        .chain(body.wallet_addresses.unwrap_or_default())
+        .collect();
+    if raw.is_empty() {
+        return Err(validate::required("walletAddress", "a wallet address"));
+    }
+
+    // The caller first, so a single-element request is a note to self rather
+    // than an empty set, and so every parsed address below is a recipient.
+    let mut members = vec![caller.as_str().to_owned()];
+    for address in &raw {
+        let parsed = validate::wallet_address("walletAddress", Some(address.as_str()))?;
+        members.push(parsed.as_str().to_owned());
+    }
+
+    // All members are admins (see `rooms::create_dm`), so the DM ceiling is
+    // the admin ceiling. Counting the canonical set, not the request, means a
+    // list padded with duplicates is not rejected for being long.
+    let distinct = rooms::dm_key(&members).split('|').count() as i64;
+    if distinct > MAX_ADMINS {
+        return Err(ApiError::bad_request(format!(
+            "A direct message can include at most {MAX_ADMINS} people. Create a room instead."
+        )));
+    }
+
+    let id = format!("room_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
+    let address = caller.as_str().to_owned();
+    let (room_id, detail) = state
+        .db
+        .call({
+            let members = members.clone();
+            move |conn| {
+                for member in &members {
+                    if users::get_user(conn, member)?.is_none() {
+                        return Err(ApiError::not_found(
+                            "That wallet has not signed in to this server yet.",
+                        ));
+                    }
+                }
+                let room = rooms::create_dm(conn, &id, &members)?;
+                let detail = storage::room_detail(conn, &room.id, &address, true)?;
+                Ok((room.id, detail))
+            }
+        })
+        .await?;
+
+    let detail = detail.ok_or_else(|| ApiError::not_found("Room not found"))?;
+
+    // Everyone in it needs the room in their subscription set and in their
+    // room list — unlike a channel, whose creator is its only member, a DM is
+    // live for somebody who did not ask for it.
+    for member in &members {
+        let Ok(wallet) = WalletAddress::new(member) else {
+            continue;
+        };
+        if let Err(e) = state.hub.refresh_user_rooms(&wallet).await {
+            tracing::warn!(error = %e, "could not refresh room subscriptions after opening a DM");
+        }
+        if wallet != caller {
+            state
+                .hub
+                .publish_best_effort(Target::User { wallet }, None, ServerEvent::RoomsUpdated)
+                .await;
+        }
+    }
+
+    tracing::debug!(room = %room_id, "direct message opened");
+    Ok(Json(detail).into_response())
 }
 
 /// `GET /api/rooms` — the caller's rooms with unread state.
@@ -184,6 +339,7 @@ async fn rename(
         "Only room admins can update the room",
     )
     .await?;
+    require_channel(&state, &room, "rename").await?;
 
     let name = validate::room_name(body.name.as_deref())?;
     let room_id = room.as_str().to_owned();
@@ -275,6 +431,16 @@ async fn leave(
     let room = validate::room_id(&room_id)?;
     require_room_exists(&state, &room).await?;
     require_member(&state, &room, &caller).await?;
+    // Leaving a DM has no meaning the other side would recognise: the
+    // conversation is its member set, so a departed member would leave a room
+    // that still answers to a key naming them — and re-opening the DM would
+    // find it and refuse them entry to their own history. Hiding is the verb
+    // for "stop showing me this", and it is reversible.
+    if is_direct(&state, &room).await? {
+        return Err(ApiError::bad_request(
+            "Cannot leave a direct message. Hide it instead.",
+        ));
+    }
 
     let room_id = room.as_str().to_owned();
     let address = caller.as_str().to_owned();
@@ -329,6 +495,7 @@ async fn kick(
         "Only room admins can remove members",
     )
     .await?;
+    require_channel(&state, &room, "remove someone from").await?;
 
     let target = validate::wallet_address("userAddress", body.user_address.as_deref())?;
     if target == caller {
@@ -449,6 +616,9 @@ async fn add_admin(
         "Only room admins can add new admins",
     )
     .await?;
+    // Every member of a DM is already an admin of it, so there is nobody to
+    // promote and no hierarchy the promotion would express.
+    require_channel(&state, &room, "change the admins of").await?;
 
     let room_id = room.as_str().to_owned();
     let address = target.as_str().to_owned();
@@ -490,6 +660,7 @@ async fn remove_admin(
 
     require_room_exists(&state, &room).await?;
     require_admin(&state, &room, &caller, "Only room admins can remove admins").await?;
+    require_channel(&state, &room, "change the admins of").await?;
 
     let room_id = room.as_str().to_owned();
     let address = target.as_str().to_owned();
@@ -634,6 +805,166 @@ mod tests {
         assert_eq!(listed.json()[0]["memberCount"], 1);
         assert_eq!(listed.json()[0]["unreadCount"], 0);
         assert_eq!(listed.json()[0]["lastReadSerial"], 0);
+        assert_eq!(listed.json()[0]["kind"], "channel");
+    }
+
+    #[tokio::test]
+    async fn opening_a_dm_is_idempotent_from_either_side() {
+        let state = state("dm-open");
+        let alice = wallet("alice");
+        let bob = wallet("bob");
+        let alice_token = register(&state, &alice, "alice");
+        let bob_token = register(&state, &bob, "bob");
+        let router = build(state);
+
+        let opened = send(
+            &router,
+            "POST",
+            "/api/rooms/dm",
+            Some(&alice_token),
+            Some(serde_json::json!({ "walletAddress": bob.as_str() })),
+        )
+        .await;
+        assert_eq!(opened.status, StatusCode::OK);
+        assert_eq!(opened.json()["kind"], "dm");
+        // Enriched, not bare: the client has to name the DM after its other
+        // member, so the roster travels with it.
+        assert_eq!(opened.json()["memberCount"], 2);
+        let room_id = opened.json()["id"].as_str().unwrap().to_owned();
+
+        // Bob opening "the conversation with Alice" must find Alice's room,
+        // not open a second one beside it.
+        let from_bob = send(
+            &router,
+            "POST",
+            "/api/rooms/dm",
+            Some(&bob_token),
+            Some(serde_json::json!({ "walletAddress": alice.as_str() })),
+        )
+        .await;
+        assert_eq!(from_bob.json()["id"], room_id);
+
+        for token in [&alice_token, &bob_token] {
+            let listed = send(&router, "GET", "/api/rooms", Some(token), None).await;
+            assert_eq!(listed.json().as_array().unwrap().len(), 1);
+            assert_eq!(listed.json()[0]["id"], room_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dm_refuses_every_verb_that_needs_a_channel() {
+        let state = state("dm-verbs");
+        let alice = wallet("alice");
+        let bob = wallet("bob");
+        let alice_token = register(&state, &alice, "alice");
+        register(&state, &bob, "bob");
+        let carol = wallet("carol");
+        register(&state, &carol, "carol");
+        let router = build(state);
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms/dm",
+            Some(&alice_token),
+            Some(serde_json::json!({ "walletAddress": bob.as_str() })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        // Alice is an admin of the DM, so none of these are refused for
+        // *permission* — they are refused because the verb does not apply.
+        let cases: Vec<(&str, String, Option<serde_json::Value>)> = vec![
+            (
+                "PATCH",
+                format!("/api/rooms/{room}"),
+                Some(serde_json::json!({ "name": "Renamed" })),
+            ),
+            (
+                "POST",
+                format!("/api/rooms/{room}/invite"),
+                Some(serde_json::json!({ "userAddress": carol.as_str() })),
+            ),
+            (
+                "POST",
+                format!("/api/rooms/{room}/kick"),
+                Some(serde_json::json!({ "userAddress": bob.as_str() })),
+            ),
+            (
+                "POST",
+                format!("/api/rooms/{room}/leave"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/api/rooms/{room}/admins"),
+                Some(serde_json::json!({ "walletAddress": bob.as_str() })),
+            ),
+        ];
+        for (method, path, body) in cases {
+            let response = send(&router, method, &path, Some(&alice_token), body).await;
+            assert_eq!(
+                response.status,
+                StatusCode::BAD_REQUEST,
+                "{method} {path} should not apply to a direct message"
+            );
+        }
+
+        // Hiding is the one that *is* offered instead of leaving.
+        let hidden = send(
+            &router,
+            "POST",
+            &format!("/api/rooms/{room}/hide"),
+            Some(&alice_token),
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(hidden.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_dm_to_an_unknown_wallet_is_refused() {
+        let state = state("dm-stranger");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let stranger = wallet("nobody-here");
+        let router = build(state);
+
+        let response = send(
+            &router,
+            "POST",
+            "/api/rooms/dm",
+            Some(&token),
+            Some(serde_json::json!({ "walletAddress": stranger.as_str() })),
+        )
+        .await;
+        // A mistyped address is far likelier than an invitation to somebody
+        // who has genuinely never arrived, so this fails loudly rather than
+        // creating a room with an unrenderable member.
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_dm_naming_only_yourself_is_a_private_notebook() {
+        let state = state("dm-self");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        let opened = send(
+            &router,
+            "POST",
+            "/api/rooms/dm",
+            Some(&token),
+            Some(serde_json::json!({ "walletAddress": alice.as_str() })),
+        )
+        .await;
+        assert_eq!(opened.status, StatusCode::OK);
+        assert_eq!(opened.json()["kind"], "dm");
+        assert_eq!(opened.json()["memberCount"], 1);
     }
 
     #[tokio::test]
