@@ -36,7 +36,7 @@ pub use hidden::HiddenRooms;
 pub use invite::Invite;
 pub use mentions::Mentions;
 pub use more::MoreSheet;
-pub use new_dm::{open_with as open_dm_with, NewDirectMessage};
+pub use new_dm::NewDirectMessage;
 pub use rename::RenameRoom;
 pub use server::ServerInfoDialog;
 pub use wallet::Wallet;

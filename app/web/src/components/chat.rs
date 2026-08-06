@@ -131,26 +131,14 @@ pub fn chat(p: &ChatProps) -> Html {
     // plaintext is stale — so a message is re-decrypted when, and only when,
     // its content actually changed.
     let plaintext = use_mut_ref(HashMap::<MessageId, (i64, Decrypted)>::new);
-    // The key epoch this cache was built under. A room key arriving (or
-    // rotating) turns "no key for this epoch" into readable text, and nothing
-    // about the *messages* changes to say so.
-    // Read from the store rather than from the unwrapped bundle: this has to
-    // be a hook-safe expression, and `bundle` is only bound further down,
-    // after the early return for a room that has not loaded.
-    let bundle_epoch = (
-        store
-            .room(&p.room_id)
-            .map(|r| r.room.current_key_version)
-            .unwrap_or(-1),
-        store.bundle(&p.room_id).is_some(),
-    );
-
-    {
-        let plaintext = plaintext.clone();
-        use_effect_with((p.room_id.clone(), bundle_epoch), move |_| {
-            plaintext.borrow_mut().clear();
-        });
-    }
+    // What the cache's entries were computed under: the room, and the
+    // bundle's epoch coverage. Compared and cleared *during* render, below,
+    // once `bundle` is in hand — an effect is one frame too late. Effects run
+    // after the render commits, and clearing a RefCell schedules nothing, so
+    // the render that first saw the new key would have served every row from
+    // the stale cache and the sealed bubbles would sit there until something
+    // unrelated re-rendered.
+    let plaintext_stamp = use_mut_ref(|| Option::<(RoomId, Option<(usize, Option<i64>)>)>::None);
 
     let was_pinned = use_mut_ref(|| true);
     // When the reader last touched the scroll themselves.
@@ -585,6 +573,21 @@ pub fn chat(p: &ChatProps) -> Html {
     let composer_blocked = store.post_block(&p.room_id);
     let offline = !store.online;
     let bundle = store.bundle(&p.room_id).cloned();
+
+    // Invalidate the plaintext cache the moment its inputs change, so this
+    // very render decrypts fresh. Keyed on the bundle's *coverage*, not the
+    // room's `current_key_version`: after a rotation that happened while this
+    // device was away, the room names the new epoch before the key for it
+    // arrives, and the version alone would never notice the bundle catching
+    // up — every row of that epoch would stay cached as sealed.
+    {
+        let stamp = (p.room_id.clone(), bundle.as_ref().map(|b| b.coverage()));
+        let mut last = plaintext_stamp.borrow_mut();
+        if last.as_ref() != Some(&stamp) {
+            plaintext.borrow_mut().clear();
+            *last = Some(stamp);
+        }
+    }
     let now = format::now_ms();
     let tz = format::tz_offset_minutes();
 
@@ -1043,7 +1046,7 @@ pub fn chat(p: &ChatProps) -> Html {
             // Rendered unconditionally: `Popover` needs to see `open` turn
             // false to run the exit, which it cannot do if the parent has
             // already stopped rendering it.
-            { room_menu(lang, &store, &room, &title, is_admin, *menu_open, menu_open.clone(), &p.on_navigate) }
+            { room_menu(lang, &store, &room, &title, is_admin, menu_open.clone(), &p.on_navigate) }
 
             if offline {
                 <super::common::OfflineBanner />
@@ -1329,10 +1332,10 @@ fn room_menu(
     room: &crate::api::RoomWithMembers,
     title: &str,
     is_admin: bool,
-    is_open: bool,
     open: UseStateHandle<bool>,
     on_navigate: &Callback<Route>,
 ) -> Html {
+    let is_open = *open;
     let id = room.id().clone();
     let name = title.to_owned();
     let direct = room.is_direct();

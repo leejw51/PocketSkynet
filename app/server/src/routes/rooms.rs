@@ -92,7 +92,7 @@ pub(super) async fn require_admin(
 /// request does not apply.
 async fn require_channel(state: &AppState, room: &RoomId, verb: &str) -> ApiResult<()> {
     if is_direct(state, room).await? {
-        return Err(ApiError::bad_request(&format!(
+        return Err(ApiError::bad_request(format!(
             "Cannot {verb} a direct message."
         )));
     }
@@ -223,7 +223,7 @@ async fn open_dm(
     // list padded with duplicates is not rejected for being long.
     let distinct = rooms::dm_key(&members).split('|').count() as i64;
     if distinct > MAX_ADMINS {
-        return Err(ApiError::bad_request(&format!(
+        return Err(ApiError::bad_request(format!(
             "A direct message can include at most {MAX_ADMINS} people. Create a room instead."
         )));
     }

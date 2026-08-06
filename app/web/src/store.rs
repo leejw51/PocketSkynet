@@ -237,7 +237,7 @@ impl RoomState {
             .values()
             .filter(|m| !blocks.hides(&m.sender_address))
             .collect();
-        v.sort_by(|a, b| order_key(a).cmp(&order_key(b)));
+        v.sort_by_key(|m| order_key(m));
         v
     }
 
@@ -284,7 +284,7 @@ impl RoomState {
             .filter(|m| !m.is_deleted && m.kind().is_renderable())
             .filter(|m| !blocks.hides(&m.sender_address))
             .collect();
-        v.sort_by(|a, b| order_key(a).cmp(&order_key(b)));
+        v.sort_by_key(|m| order_key(m));
         v
     }
 

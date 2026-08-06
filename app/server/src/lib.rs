@@ -1219,7 +1219,6 @@ mod test_support {
     use crate::auth::JwtKeys;
     use crate::config::Config;
     use crate::db::Db;
-    use crate::error::{ApiError, ApiResult};
     use crate::hub::Hub;
     use crate::jsonl::JsonlLog;
     use crate::ratelimit::RateLimiter;

@@ -82,9 +82,9 @@ pub fn admin_console(p: &AdminConsoleProps) -> Html {
         });
     }
 
-    /// Run one admin action, then refetch. Every one of these changes what the
-    /// lists say about somebody, so refetching is not laziness — a locally
-    /// patched row would be the client's opinion of what the server did.
+    // Run one admin action, then refetch. Every one of these changes what the
+    // lists say about somebody, so refetching is not laziness — a locally
+    // patched row would be the client's opinion of what the server did.
     let act = {
         let store = store.clone();
         let busy = busy.clone();

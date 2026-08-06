@@ -17,11 +17,10 @@ use yew::prelude::*;
 
 use crate::api::User;
 use crate::route::Route;
-use crate::state::{use_store, Action, Load};
+use crate::state::{use_store, Load};
 
 use super::super::common::{Addr, Empty, Ident, IdentSize, Skeleton};
 use super::super::modal::Modal as Dialog;
-use super::super::toast;
 use crate::i18n::{t, Key};
 
 #[derive(Properties, PartialEq)]
@@ -237,38 +236,5 @@ pub fn new_direct_message(p: &NewDirectMessageProps) -> Html {
                 } }
             </div>
         </Dialog>
-    }
-}
-
-/// Open the dialog from anywhere that has a store.
-pub fn open(store: &crate::state::Store) {
-    store.dispatch(Action::OpenModal(crate::state::Modal::NewDirectMessage));
-}
-
-/// Open (or find) the DM with one person and go to it.
-///
-/// The entry point used from a member row or a profile card, where the person
-/// is already chosen and a picker would be a step backwards.
-pub async fn open_with(
-    store: &crate::state::Store,
-    who: &WalletAddress,
-    on_navigate: &Callback<Route>,
-) {
-    match store.client.open_dm(std::slice::from_ref(who)).await {
-        Ok(room) => {
-            let id = room.id().clone();
-            crate::actions::refresh_rooms(store.clone()).await;
-            on_navigate.emit(Route::Room(id));
-        }
-        Err(e) if e.is_not_found() => toast::error(
-            store,
-            "That wallet hasn't signed in yet",
-            Some("Invite them to a room instead.".into()),
-        ),
-        Err(e) => toast::error(
-            store,
-            "Couldn't open the conversation",
-            Some(e.user_message()),
-        ),
     }
 }

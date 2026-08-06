@@ -79,7 +79,7 @@ pub fn composer(p: &ComposerProps) -> Html {
     let send_btn = use_node_ref();
     let file_input = use_node_ref();
     let last_typing = use_mut_ref(|| 0f64);
-    /// The `@` being completed, and which suggestion is highlighted.
+    // The `@` being completed, and which suggestion is highlighted.
     let mention = use_state(|| Option::<crate::mentions::ActiveMention>::None);
     let mention_index = use_state(|| 0usize);
 
@@ -92,7 +92,7 @@ pub fn composer(p: &ComposerProps) -> Html {
     let suggestions: Vec<_> = suggestions.into_iter().take(6).collect();
     let picked = mention_index.min(suggestions.len().saturating_sub(1));
 
-    /// Accept a suggestion: rewrite the field and put the caret after it.
+    // Accept a suggestion: rewrite the field and put the caret after it.
     let accept = {
         let text = text.clone();
         let mention = mention.clone();

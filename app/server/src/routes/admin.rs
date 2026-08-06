@@ -333,6 +333,26 @@ async fn delete_room(
     Ok(super::message("Room deleted"))
 }
 
+/// Tell a wallet's live connections that their credential is no longer good.
+///
+/// Best-effort by design: the authoritative check is at the extractor, on the
+/// next request. This only saves a suspended client from sitting on an open
+/// stream believing everything is fine until something makes it reconnect.
+async fn disconnect(state: &AppState, wallet: &WalletAddress) {
+    state
+        .hub
+        .publish_best_effort(
+            Target::User {
+                wallet: wallet.clone(),
+            },
+            None,
+            ServerEvent::SessionExpired {
+                reason: "Account suspended".to_owned(),
+            },
+        )
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use crate::routes::build;
@@ -750,24 +770,4 @@ mod tests {
         .await;
         assert_eq!(by_boss.status, StatusCode::OK, "{:?}", by_boss.body);
     }
-}
-
-/// Tell a wallet's live connections that their credential is no longer good.
-///
-/// Best-effort by design: the authoritative check is at the extractor, on the
-/// next request. This only saves a suspended client from sitting on an open
-/// stream believing everything is fine until something makes it reconnect.
-async fn disconnect(state: &AppState, wallet: &WalletAddress) {
-    state
-        .hub
-        .publish_best_effort(
-            Target::User {
-                wallet: wallet.clone(),
-            },
-            None,
-            ServerEvent::SessionExpired {
-                reason: "Account suspended".to_owned(),
-            },
-        )
-        .await;
 }

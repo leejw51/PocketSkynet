@@ -213,6 +213,22 @@ impl RoomKeyBundle {
         &self.failed
     }
 
+    /// A value that changes exactly when the set of held epochs changes.
+    ///
+    /// This is the invalidation key for anything caching *results of*
+    /// decryption. It deliberately fingerprints the bundle, not the room
+    /// record: after a rotation happened while this device was away, the room
+    /// already names the new epoch before the key for it arrives, so a cache
+    /// keyed on `current_key_version` would never notice the bundle catching
+    /// up — and rows would stay sealed until something unrelated cleared it.
+    /// Epochs are only ever added, so (count, newest) cannot alias.
+    pub fn coverage(&self) -> (usize, Option<i64>) {
+        (
+            self.epochs.len(),
+            self.epochs.last_key_value().map(|(v, _)| *v),
+        )
+    }
+
     pub fn insert(&mut self, version: i64, key: [u8; 32]) {
         self.epochs.insert(version, key);
         self.failed.retain(|v| *v != version);
@@ -650,6 +666,29 @@ mod tests {
             last_reply_at: None,
             sender: None,
         }
+    }
+
+    #[test]
+    fn coverage_changes_whenever_an_epoch_is_added_in_either_direction() {
+        // The chat view's plaintext cache invalidates on this value, so it
+        // must move for *any* addition — most importantly a backfilled older
+        // epoch, where the newest version alone would not budge and rows of
+        // that epoch would stay cached as sealed forever.
+        let mut b = RoomKeyBundle::default();
+        let empty = b.coverage();
+        b.insert(3, [3u8; 32]);
+        let after_first = b.coverage();
+        assert_ne!(empty, after_first);
+        // Backfill an OLDER epoch: newest stays 3, count is what moves.
+        b.insert(1, [1u8; 32]);
+        let after_backfill = b.coverage();
+        assert_ne!(after_first, after_backfill);
+        // A newer epoch moves it too, and re-inserting an epoch does not.
+        b.insert(4, [4u8; 32]);
+        let after_newer = b.coverage();
+        assert_ne!(after_backfill, after_newer);
+        b.insert(4, [9u8; 32]);
+        assert_eq!(after_newer, b.coverage());
     }
 
     #[test]

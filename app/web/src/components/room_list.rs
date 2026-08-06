@@ -503,7 +503,7 @@ fn body(
                     // for *all* of them, and every row was then matched by
                     // position. Marking one room read renumbered the sections
                     // and rebuilt the whole sidebar.
-                    { for sectioned(&rooms).into_iter().flat_map(|(heading, section)| {
+                    { for sectioned(rooms).into_iter().flat_map(|(heading, section)| {
                         let head = heading.map(|h| html! {
                             <span key={format!("section-{h:?}")}
                                   class="fn-room-section" role="presentation">
@@ -558,7 +558,11 @@ fn body(
 /// Returns one unlabelled section when the list is all one kind. A heading
 /// over the only list on screen labels something nobody could have confused,
 /// and on a phone it costs a row of the few that fit.
-fn sectioned(rooms: &[&RoomWithMembers]) -> Vec<(Option<Key>, Vec<(usize, RoomWithMembers)>)> {
+/// One sidebar section: its heading (when there is more than one section)
+/// and the rows under it, each keeping the index it had in the flat list.
+type Section = (Option<Key>, Vec<(usize, RoomWithMembers)>);
+
+fn sectioned(rooms: &[&RoomWithMembers]) -> Vec<Section> {
     let mut channels = Vec::new();
     let mut directs = Vec::new();
     for (i, r) in rooms.iter().enumerate() {
