@@ -5,8 +5,9 @@ use std::collections::HashSet;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::models::{
-    EmoticonAggregation, Message, User, MESSAGE_JOIN_COLUMNS, MSG_TYPE_ADD, MSG_TYPE_DELETE,
-    MSG_TYPE_DELETE_ALL, MSG_TYPE_EDIT, MSG_TYPE_EMOTICON_ADD, MSG_TYPE_EMOTICON_REMOVE,
+    EmoticonAggregation, Message, User, MESSAGE_JOIN_COLUMNS, MESSAGE_THREAD_COLUMNS, MSG_TYPE_ADD,
+    MSG_TYPE_DELETE, MSG_TYPE_DELETE_ALL, MSG_TYPE_EDIT, MSG_TYPE_EMOTICON_ADD,
+    MSG_TYPE_EMOTICON_REMOVE,
 };
 use super::now_ms;
 use crate::error::{ApiError, ApiResult};
@@ -80,6 +81,14 @@ pub struct NewMessage {
     pub hmac: Option<String>,
     pub enc_ver: i64,
     pub key_version: i64,
+    /// The thread to post into, already resolved to its root by the route.
+    /// `None` is a top-level message.
+    pub parent_message_id: Option<String>,
+    /// Addresses this message names. Written as `message_mentions` rows in the
+    /// same transaction as the message, so a mention cannot exist for a
+    /// message that failed to insert, nor a message arrive in a room without
+    /// the inbox entry that was supposed to accompany it.
+    pub mentions: Vec<String>,
 }
 
 pub fn create_message(conn: &mut Connection, new: NewMessage) -> ApiResult<Message> {
@@ -91,9 +100,10 @@ pub fn create_message(conn: &mut Connection, new: NewMessage) -> ApiResult<Messa
         "INSERT INTO messages (id, room_id, sender_address, content, msg_hash,
                                message_timestamp, msg_type, msg_serial, is_deleted,
                                edited_at, created_at, is_encrypted, iv, hmac,
-                               enc_ver, key_version, tx_hash, target_message_id, emoticon_code)
+                               enc_ver, key_version, tx_hash, target_message_id, emoticon_code,
+                               parent_message_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, NULL, ?6, ?9, ?10, ?11, ?12, ?13,
-                 NULL, NULL, NULL)",
+                 NULL, NULL, NULL, ?14)",
         params![
             new.id,
             new.room_id,
@@ -108,8 +118,11 @@ pub fn create_message(conn: &mut Connection, new: NewMessage) -> ApiResult<Messa
             new.hmac,
             new.enc_ver,
             new.key_version,
+            new.parent_message_id,
         ],
     )?;
+
+    super::mentions::record(&tx, &new.id, &new.room_id, serial, &new.mentions)?;
 
     let message = read_message(&tx, &new.id, true)?
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("message vanished after insert")))?;
@@ -118,6 +131,94 @@ pub fn create_message(conn: &mut Connection, new: NewMessage) -> ApiResult<Messa
     crate::search::store::index_message(&tx, &message)?;
     tx.commit()?;
     Ok(message)
+}
+
+/// Every reply in a thread, oldest first, with the root at the head.
+///
+/// The root is fetched separately rather than with an `OR id = :root` on the
+/// reply query, because it has to be there even when it was soft-deleted:
+/// destroying the first message of a thread must not orphan the twenty replies
+/// under it, and the tombstone is what tells the client to render "message
+/// deleted" above them rather than an unexplained list.
+///
+/// Block-filtered like every other read path — including the root, which is
+/// why the return is an `Option`: a thread started by somebody the viewer has
+/// blocked is a thread they cannot open.
+pub fn get_thread(
+    conn: &Connection,
+    root_id: &str,
+    viewer: &str,
+) -> ApiResult<Option<Vec<Message>>> {
+    let root_sql = format!(
+        "SELECT {MESSAGE_JOIN_COLUMNS} FROM messages m
+         LEFT JOIN users u ON u.wallet_address = m.sender_address
+         WHERE m.id = :root AND {NOT_BLOCKED}"
+    );
+    let now = now_ms();
+    let root = conn
+        .query_row(
+            &root_sql,
+            rusqlite::named_params! { ":root": root_id, ":viewer": viewer },
+            |row| Message::from_joined_row(row, now),
+        )
+        .optional()?;
+    let Some(root) = root else {
+        return Ok(None);
+    };
+
+    let sql = format!(
+        "SELECT {MESSAGE_JOIN_COLUMNS} FROM messages m
+         LEFT JOIN users u ON u.wallet_address = m.sender_address
+         WHERE m.parent_message_id = :root
+           AND m.is_deleted = 0
+           AND m.msg_type NOT IN ({EVENT_TYPES})
+           AND {NOT_BLOCKED}
+         ORDER BY m.message_timestamp ASC, m.msg_serial ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::named_params! { ":root": root_id, ":viewer": viewer },
+        |row| Message::from_joined_row(row, now),
+    )?;
+
+    let mut out = vec![root];
+    out.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+    Ok(Some(out))
+}
+
+/// The thread a reply to `id` belongs in.
+///
+/// Replying to a reply joins the thread that reply is already in rather than
+/// starting a nested one — one level, always. Anything deeper would make a
+/// thread a tree whose depth no renderer can bound and whose "reply count"
+/// would have to mean something different at every level.
+///
+/// `include_deleted` splits the two callers, and they genuinely want opposite
+/// things. *Replying* to a deleted message must fail — there is nothing left
+/// to answer. *Reading* the thread of one must not, or destroying the first
+/// message would take the whole conversation under it with it.
+///
+/// `None` means there is no such message at all.
+pub fn thread_root(
+    conn: &Connection,
+    id: &str,
+    include_deleted: bool,
+) -> ApiResult<Option<(String, String)>> {
+    let sql = format!(
+        "SELECT id, parent_message_id, room_id FROM messages WHERE id = ?1 {}",
+        if include_deleted {
+            ""
+        } else {
+            "AND is_deleted = 0"
+        }
+    );
+    let found: Option<(String, Option<String>, String)> = conn
+        .query_row(&sql, params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?;
+    let Some((own_id, parent, room_id)) = found else {
+        return Ok(None);
+    };
+    Ok(Some((parent.unwrap_or(own_id), room_id)))
 }
 
 /// Append a reaction event.
@@ -225,6 +326,27 @@ pub fn get_message_any(conn: &Connection, id: &str) -> ApiResult<Option<Message>
 /// `since`/`before` are **timestamps** here, unlike `/sync`'s serial cursor. A
 /// value of `0` means "no filter" rather than "since the epoch", which is what
 /// makes an unparseable query parameter degrade instead of failing.
+///
+/// # The tiebreak
+///
+/// `message_timestamp` is milliseconds, and a burst of messages shares one.
+/// The tiebreak used to be `m.id`, which reads as a stable secondary sort and
+/// is not one: an id is `msg_{millis}_{uuid}`, so within a millisecond the
+/// ordering was the ordering of a random UUID — different on every insert, and
+/// wrong roughly half the time. `msg_serial` is the room's own monotonic
+/// counter, allocated in the same transaction as the row (see [`next_serial`]),
+/// which makes it the only column that is guaranteed to increase with
+/// insertion order.
+///
+/// It is not perfectly immutable — an edit advances a message's serial so
+/// `/sync` redelivers it — so an edited message can move within its own
+/// millisecond. That is a far smaller wrong than randomness, and `FINDINGS.md`
+/// proposed exactly this fix.
+/// `include_replies` puts thread replies back into the channel view. Off by
+/// default, and that default is the point of threads: a twenty-message thread
+/// should cost the channel one line, not twenty. What the channel gets instead
+/// is [`MESSAGE_THREAD_COLUMNS`] on the parent — a count and a timestamp — so
+/// the line it does cost says how much was said under it.
 pub fn get_messages(
     conn: &Connection,
     room_id: &str,
@@ -232,17 +354,24 @@ pub fn get_messages(
     since: i64,
     before: i64,
     limit: i64,
+    include_replies: bool,
 ) -> ApiResult<Vec<Message>> {
+    let thread_filter = if include_replies {
+        ""
+    } else {
+        "AND m.parent_message_id IS NULL"
+    };
     let sql = format!(
-        "SELECT {MESSAGE_JOIN_COLUMNS} FROM messages m
+        "SELECT {MESSAGE_JOIN_COLUMNS}, {MESSAGE_THREAD_COLUMNS} FROM messages m
          LEFT JOIN users u ON u.wallet_address = m.sender_address
          WHERE m.room_id = :room
            AND m.is_deleted = 0
            AND m.msg_type NOT IN ({EVENT_TYPES})
+           {thread_filter}
            AND (:since = 0 OR m.message_timestamp >= :since)
            AND (:before = 0 OR m.message_timestamp < :before)
            AND {NOT_BLOCKED}
-         ORDER BY m.message_timestamp DESC, m.id DESC
+         ORDER BY m.message_timestamp DESC, m.msg_serial DESC
          LIMIT :limit"
     );
 
@@ -256,7 +385,7 @@ pub fn get_messages(
             ":viewer": viewer,
             ":limit": limit,
         },
-        |row| Message::from_joined_row(row, now),
+        |row| Message::from_threaded_row(row, now),
     )?;
 
     let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -373,7 +502,7 @@ pub fn last_message(conn: &Connection, room_id: &str, viewer: &str) -> ApiResult
            AND m.is_deleted = 0
            AND m.msg_type NOT IN ({EVENT_TYPES})
            AND {NOT_BLOCKED}
-         ORDER BY m.message_timestamp DESC, m.id DESC
+         ORDER BY m.message_timestamp DESC, m.msg_serial DESC
          LIMIT 1"
     );
     let now = now_ms();
@@ -408,11 +537,18 @@ pub struct MessageEdit {
 /// neither becomes plaintext. §15 #7 asks that an *encrypted* message never be
 /// downgraded this way — that check lives in the route, which knows the
 /// caller's intent; this function performs whichever transition it is told to.
+/// `mentions` is the message's *new* mention set, replacing the old one in the
+/// same transaction as the content it was derived from. Kept together on
+/// purpose: an edit that commits and then fails to rewrite its mentions leaves
+/// an inbox pointing at a message that no longer says what it did — the exact
+/// drift the "message and its index appear together or not at all" rule in
+/// [`create_message`] exists to prevent.
 pub fn update_message(
     conn: &mut Connection,
     id: &str,
     room_id: &str,
     edit: MessageEdit,
+    mentions: &[String],
 ) -> ApiResult<Option<Message>> {
     let tx = conn.transaction()?;
     let now = now_ms();
@@ -444,6 +580,7 @@ pub fn update_message(
 
     let message = read_message(&tx, id, true)?;
     if let Some(m) = &message {
+        super::mentions::replace(&tx, id, room_id, m.msg_serial, mentions)?;
         // An edit that turned encrypted also *unindexes* — the index must
         // never remember a plaintext the message no longer shows.
         crate::search::store::reindex_message(
@@ -463,6 +600,10 @@ pub fn update_message(
 /// Soft-delete with a maximal scrub: content and hash are emptied, the crypto
 /// fields are cleared, and the serial advances so every client learns of it.
 /// The row survives only as a tombstone that `/sync` can deliver.
+///
+/// `parent_message_id` is deliberately **kept**. The tombstone has to stay in
+/// its thread, or deleting one reply would move it into the channel as an
+/// unexplained deleted message while its thread lost a row.
 pub fn soft_delete_message(conn: &mut Connection, id: &str, room_id: &str) -> ApiResult<bool> {
     let tx = conn.transaction()?;
     let serial = next_serial(&tx, room_id)?;
@@ -475,6 +616,10 @@ pub fn soft_delete_message(conn: &mut Connection, id: &str, room_id: &str) -> Ap
     )?;
     if changed > 0 {
         crate::search::store::unindex(&tx, crate::search::store::KIND_MESSAGE, id)?;
+        // Part of the scrub, not bookkeeping: a mention is a pointer into the
+        // content, and the content is gone. Leaving the row would keep a
+        // deleted message in somebody's inbox forever.
+        super::mentions::forget(&tx, id)?;
     }
     tx.commit()?;
     Ok(changed > 0)
@@ -675,6 +820,8 @@ mod tests {
                 hmac: None,
                 enc_ver: 1,
                 key_version: 1,
+                parent_message_id: None,
+                mentions: Vec::new(),
             },
         )
         .unwrap()
@@ -746,6 +893,8 @@ mod tests {
                             hmac: None,
                             enc_ver: 1,
                             key_version: 1,
+                            parent_message_id: None,
+                            mentions: Vec::new(),
                         },
                     )
                 })
@@ -783,7 +932,7 @@ mod tests {
             assert!(types.contains(&"emoticon_add"));
             assert!(types.contains(&"delete"));
 
-            let listed = get_messages(conn, ROOM, ALICE, 0, 0, 50).unwrap();
+            let listed = get_messages(conn, ROOM, ALICE, 0, 0, 50, false).unwrap();
             assert!(listed.is_empty(), "/messages hides deleted and event rows");
             Ok(())
         })
@@ -840,7 +989,7 @@ mod tests {
             assert_eq!(synced.len(), 1, "alice must not see bob's events");
             assert_eq!(synced[0].id, mine.id);
 
-            let listed = get_messages(conn, ROOM, ALICE, 0, 0, 50).unwrap();
+            let listed = get_messages(conn, ROOM, ALICE, 0, 0, 50, false).unwrap();
             assert_eq!(listed.len(), 1);
 
             // §15 #9: the badge must agree with what /sync will hand over.
@@ -893,6 +1042,7 @@ mod tests {
                     enc_ver: 1,
                     key_version: 1,
                 },
+                &[],
             )
             .unwrap()
             .unwrap();
@@ -928,6 +1078,7 @@ mod tests {
                     enc_ver: 2,
                     key_version: 3,
                 },
+                &[],
             )
             .unwrap()
             .unwrap();
@@ -1112,6 +1263,8 @@ mod tests {
                     hmac: None,
                     enc_ver: 1,
                     key_version: 1,
+                    parent_message_id: None,
+                    mentions: Vec::new(),
                 },
             )
             .unwrap();
@@ -1135,7 +1288,7 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
 
-            let page = get_messages(conn, ROOM, ALICE, 0, 0, 3).unwrap();
+            let page = get_messages(conn, ROOM, ALICE, 0, 0, 3, false).unwrap();
             assert_eq!(page.len(), 3, "§15 #8: pages are full, not short");
             assert!(
                 page[0].message_timestamp <= page[2].message_timestamp,
@@ -1143,7 +1296,7 @@ mod tests {
             );
 
             let oldest = page[0].message_timestamp;
-            let older = get_messages(conn, ROOM, ALICE, 0, oldest, 3).unwrap();
+            let older = get_messages(conn, ROOM, ALICE, 0, oldest, 3, false).unwrap();
             assert_eq!(older.len(), 2);
             assert!(older.iter().all(|m| m.message_timestamp < oldest));
             Ok(())

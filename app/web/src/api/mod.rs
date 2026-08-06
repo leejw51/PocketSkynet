@@ -18,12 +18,16 @@
 pub mod error;
 pub mod types;
 
+/// Public for the admin console's view types.
+pub mod admin;
 mod auth;
 /// Public for [`downloads::Support`], which the save action branches on.
 pub mod downloads;
 pub mod files;
 mod invitations;
 mod keys;
+/// Public for the [`mentions::Mention`] type the inbox renders.
+pub mod mentions;
 pub mod messages;
 /// Public because [`messages::MessageBody`] is the shape `crate::crypto` builds
 /// and the composer sends; everything else in these modules is `impl Client`.

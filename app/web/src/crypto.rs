@@ -368,6 +368,12 @@ pub fn plaintext_body(content: &str) -> MessageBody {
         hmac: None,
         enc_ver: 1,
         key_version: 1,
+        // Threading and mentions are the caller's business — the composer
+        // knows which thread it is in and who the autocomplete resolved, and
+        // neither is derivable from the ciphertext this module produces. See
+        // `MessageBody::in_thread` / `naming`.
+        parent_message_id: None,
+        mentions: Vec::new(),
     }
 }
 
@@ -394,6 +400,8 @@ pub fn encrypted_body(
         hmac: Some(enc.hmac),
         enc_ver: 2,
         key_version,
+        parent_message_id: None,
+        mentions: Vec::new(),
     })
 }
 
@@ -637,6 +645,9 @@ mod tests {
             tx_hash: None,
             target_message_id: None,
             emoticon_code: None,
+            parent_message_id: None,
+            reply_count: None,
+            last_reply_at: None,
             sender: None,
         }
     }

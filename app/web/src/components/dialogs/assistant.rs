@@ -186,7 +186,7 @@ pub fn assistant(p: &AssistantProps) -> Html {
             let store2 = store.clone();
             let room_id2 = room_id.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                actions::send_message(store2, room_id2, local_id, text).await;
+                actions::send_message(store2, room_id2, local_id, text, Default::default()).await;
             });
             on_close.emit(());
         })

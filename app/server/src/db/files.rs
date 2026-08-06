@@ -153,7 +153,7 @@ pub fn list_for_room(
             let mut stmt = conn.prepare(&format!(
                 "SELECT {COLUMNS} FROM files
                  WHERE room_id = ?1
-                 ORDER BY created_at DESC, id DESC
+                 ORDER BY created_at DESC, rowid DESC
                  LIMIT ?2"
             ))?;
             for row in stmt.query_map(params![room_id, limit], FileMeta::from_row)? {
@@ -169,7 +169,7 @@ pub fn list_for_room(
                        JOIN hashtags h ON h.doc_id = d.id
                        WHERE d.kind = 'file' AND d.ref_id = f.id AND h.tag = ?2
                    )
-                 ORDER BY f.created_at DESC, f.id DESC
+                 ORDER BY f.created_at DESC, f.rowid DESC
                  LIMIT ?3"
             ))?;
             for row in stmt.query_map(params![room_id, tag, limit], FileMeta::from_row)? {
@@ -276,8 +276,12 @@ mod tests {
             .into_iter()
             .map(|f| f.id)
             .collect();
-        // Same millisecond in a test, so `id DESC` is what actually orders
-        // these — which is exactly why it is in the ORDER BY.
+        // Same millisecond, which is the case the tiebreak exists for — and
+        // the case the *old* tiebreak got wrong. `id DESC` looked stable and
+        // was not: a real id is `file_{millis}_{uuid}`, so within a
+        // millisecond it ordered by a random UUID. This test passed anyway
+        // because it hand-writes ids that happen to sort. `rowid` is
+        // insertion order, which is what "newest first" meant all along.
         assert_eq!(ids, vec!["f2", "f1"]);
     }
 

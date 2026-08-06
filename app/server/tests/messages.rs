@@ -829,7 +829,7 @@ async fn serials_stay_monotonic_across_a_purge() {
 }
 
 #[tokio::test]
-async fn any_member_can_purge_but_an_outsider_cannot() {
+async fn only_an_admin_can_purge_a_rooms_history() {
     let server = TestServer::start().await;
     let alice = new_user(&server, "alice").await;
     let bob = new_user(&server, "bob").await;
@@ -842,8 +842,17 @@ async fn any_member_can_purge_but_an_outsider_cannot() {
         .api
         .delete(&format!("/api/rooms/{room}/messages"))
         .await
-        .expect_error(403, "Not a member of this room");
+        .expect_status(403);
+    // Bob is a member, and may delete any single message in the room. Erasing
+    // the whole history is a different act — it destroys everybody's record in
+    // one request, with no undo — so it belongs to the role the room already
+    // has for irreversible things.
     bob.api
+        .delete(&format!("/api/rooms/{room}/messages"))
+        .await
+        .expect_error(403, "Only room admins can delete a room's entire history");
+    alice
+        .api
         .delete(&format!("/api/rooms/{room}/messages"))
         .await
         .expect_status(200);

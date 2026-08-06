@@ -40,6 +40,28 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at      INTEGER NOT NULL
 ) STRICT;
 
+-- Accounts a server admin has suspended (`routes/admin.rs`).
+--
+-- This table is the closest thing this server has to session revocation, and
+-- it is deliberately a *deny list* rather than a session registry. A JWT here
+-- is valid until it expires and carries no id to revoke, so the only place a
+-- decision can be re-made is at the point the token is presented — which means
+-- the check has to be cheap enough to run on every authenticated request. A
+-- row count that is normally zero, cached in memory and refreshed when an
+-- admin changes it (`AppState::suspensions`), is exactly that; a session table
+-- would be a write on every login to answer a question that is almost always
+-- "no".
+--
+-- Wallet identity is what makes suspension meaningful at all: there is no
+-- account to delete and no password to change, so "remove this person from the
+-- server" can only mean "stop honouring signatures from this address".
+CREATE TABLE IF NOT EXISTS suspended_users (
+    wallet_address TEXT    PRIMARY KEY,
+    reason         TEXT,
+    suspended_by   TEXT    NOT NULL,
+    created_at     INTEGER NOT NULL
+) STRICT;
+
 -- Per-account salt for the E2EE key-derivation message. Served only to its
 -- owner: a public salt would let any page reconstruct the derivation message
 -- and phish the signature that *is* the user's encryption private key.
@@ -70,8 +92,25 @@ CREATE TABLE IF NOT EXISTS rooms (
     description          TEXT,
     current_key_version  INTEGER NOT NULL DEFAULT 1,
     key_rotation_pending INTEGER NOT NULL DEFAULT 0,
+    -- 'channel' | 'dm' | 'group_dm'. A conversation is a room whichever it is:
+    -- same messages, same keys, same sync cursor. The kind only decides which
+    -- *management* verbs apply — a DM has no name to change, nobody to invite
+    -- and nobody to kick — and which list the client files it under.
+    kind                 TEXT    NOT NULL DEFAULT 'channel',
+    -- The member set that identifies a DM, as lowercased addresses sorted and
+    -- joined with '|'. This is what makes "message Bob" idempotent: the second
+    -- request finds the first request's room instead of opening a parallel
+    -- conversation nobody would notice was a duplicate until they replied in
+    -- the wrong one. NULL for channels, and the unique index below is partial
+    -- so all those NULLs do not collide.
+    dm_key               TEXT,
     created_at           INTEGER NOT NULL
 ) STRICT;
+
+-- `dm_key`'s unique index is NOT here. See `db::migrate`: an index over a
+-- retrofitted column cannot be created in the same batch that would have to
+-- add the column first, and a failing statement aborts the whole batch — so
+-- every index over a late column is created there, after the ALTERs.
 
 -- The next msgSerial a room will hand out. Bumped in the same transaction as
 -- the row that consumes it, which is the whole point of the table.
@@ -169,7 +208,21 @@ CREATE TABLE IF NOT EXISTS messages (
     key_version       INTEGER NOT NULL DEFAULT 1,
     tx_hash           TEXT,
     target_message_id TEXT,
-    emoticon_code     TEXT
+    emoticon_code     TEXT,
+    -- The thread this message replies in, or NULL for a top-level post.
+    --
+    -- Always the **root** of the thread, never the immediate message replied
+    -- to: replying to a reply joins the same thread rather than nesting a
+    -- second level, so a thread is one flat list and rendering it never has to
+    -- walk a tree of unbounded depth. `routes/messages.rs` does that
+    -- flattening on the way in, so the column can be read as a thread id.
+    --
+    -- Deliberately not a foreign key. A thread outlives its root: purging one
+    -- message must not silently take every reply with it, and the root is
+    -- soft-deleted (tombstoned in place) rather than removed in the ordinary
+    -- case, so there is nothing for a cascade to do that the tombstone does
+    -- not already say.
+    parent_message_id TEXT
 ) STRICT;
 
 -- The sync cursor index: every /sync query is (room_id, msg_serial > ?).
@@ -183,6 +236,31 @@ CREATE INDEX IF NOT EXISTS idx_messages_room_ts
 -- Reaction aggregation replays every event for one target message.
 CREATE INDEX IF NOT EXISTS idx_messages_target
     ON messages (target_message_id, msg_serial);
+
+-- `parent_message_id`'s index lives in `db::migrate` for the same reason
+-- `dm_key`'s does — see the note beside the rooms table.
+
+-- One row per person a message names. Derived state, not user input: the
+-- server extracts it from plaintext content, and for an encrypted room takes
+-- the addresses the client declares — see `db/mentions.rs` for why declaring
+-- them leaks nothing that room membership does not already say.
+--
+-- `msg_serial` is copied in rather than joined for: the inbox query orders and
+-- filters on it, and comparing it against `room_reads.last_read_serial` is
+-- what makes a mention read or unread without any read state of its own.
+CREATE TABLE IF NOT EXISTS message_mentions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id        TEXT    NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+    room_id           TEXT    NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
+    mentioned_address TEXT    NOT NULL,
+    msg_serial        INTEGER NOT NULL,
+    created_at        INTEGER NOT NULL,
+    UNIQUE (message_id, mentioned_address)
+) STRICT;
+
+-- The inbox read path: one person's mentions, newest first.
+CREATE INDEX IF NOT EXISTS idx_mentions_user
+    ON message_mentions (mentioned_address, msg_serial DESC);
 
 CREATE TABLE IF NOT EXISTS room_reads (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -116,9 +116,22 @@ pub struct Room {
     pub current_key_version: i64,
     #[serde(rename = "keyRotationPending")]
     pub key_rotation_pending: bool,
+    /// `"channel"`, `"dm"` or `"group_dm"` — see [`ROOM_KIND_CHANNEL`] and
+    /// friends. Always sent, never omitted: a client that files rooms into a
+    /// channel list and a DM list needs an answer for every room, and an
+    /// absent field would put DMs under the wrong heading rather than fail
+    /// loudly.
+    pub kind: String,
     #[serde(rename = "createdAt")]
     pub created_at: String,
 }
+
+/// An ordinary named room: the thing everything before DMs was.
+pub const ROOM_KIND_CHANNEL: &str = "channel";
+/// Exactly two people. Has no name, no invitations and no roster management.
+pub const ROOM_KIND_DM: &str = "dm";
+/// Three or more people, opened the same way and with the same restrictions.
+pub const ROOM_KIND_GROUP_DM: &str = "group_dm";
 
 impl Room {
     pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
@@ -128,8 +141,17 @@ impl Room {
             description: row.get("description")?,
             current_key_version: row.get("current_key_version")?,
             key_rotation_pending: row.get::<_, i64>("key_rotation_pending")? != 0,
+            kind: row.get("kind")?,
             created_at: iso_ms(row.get("created_at")?),
         })
+    }
+
+    /// Whether this room is a conversation between named people rather than a
+    /// channel. The management verbs a DM refuses all key on this, not on the
+    /// two kinds separately, so that adding a third kind of DM later cannot
+    /// leave one of those checks behind.
+    pub fn is_direct(&self) -> bool {
+        self.kind == ROOM_KIND_DM || self.kind == ROOM_KIND_GROUP_DM
     }
 }
 
@@ -167,6 +189,14 @@ pub struct RoomWithMembers {
     pub unread_count: Option<i64>,
     #[serde(rename = "lastReadSerial", skip_serializing_if = "Option::is_none")]
     pub last_read_serial: Option<i64>,
+    /// Unread messages in this room that name the caller.
+    ///
+    /// A separate number from `unreadCount` because it answers a different
+    /// question — "is any of this addressed to me?" — and that is the one
+    /// people actually triage by. Populated alongside `unreadCount`, on
+    /// `GET /api/rooms` only.
+    #[serde(rename = "mentionCount", skip_serializing_if = "Option::is_none")]
+    pub mention_count: Option<i64>,
 }
 
 /// A message row. `sender` is attached by the endpoints that document it and
@@ -207,6 +237,23 @@ pub struct Message {
     pub target_message_id: Option<String>,
     #[serde(rename = "emoticonCode")]
     pub emoticon_code: Option<String>,
+    /// The thread this message belongs to, or `null` for a top-level post.
+    /// Always the thread's **root**, never the message directly replied to —
+    /// see the column comment in `schema.sql`.
+    #[serde(rename = "parentMessageId")]
+    pub parent_message_id: Option<String>,
+    /// How many replies this message has, and when the newest arrived.
+    ///
+    /// Present only on `GET /api/rooms/{id}/messages`, which is the one read
+    /// path that hides replies and therefore owes the caller a summary of what
+    /// it hid. `/sync` omits both, deliberately: it delivers the reply rows
+    /// themselves, so a client folding the stream can keep its own counts
+    /// exact — and a count computed against an unfiltered query would
+    /// contradict the block-filtered rows the client actually received.
+    #[serde(rename = "replyCount", skip_serializing_if = "Option::is_none")]
+    pub reply_count: Option<i64>,
+    #[serde(rename = "lastReplyAt", skip_serializing_if = "Option::is_none")]
+    pub last_reply_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender: Option<User>,
 }
@@ -248,6 +295,9 @@ impl Message {
             tx_hash: row.get("tx_hash")?,
             target_message_id: row.get("target_message_id")?,
             emoticon_code: row.get("emoticon_code")?,
+            parent_message_id: row.get("parent_message_id")?,
+            reply_count: None,
+            last_reply_at: None,
             sender: None,
         })
     }
@@ -271,6 +321,23 @@ impl Message {
         });
         Ok(msg)
     }
+
+    /// [`Message::from_joined_row`] for a query that also selected
+    /// [`MESSAGE_THREAD_COLUMNS`].
+    ///
+    /// `reply_count` is normalised to `None` when it is zero. A message with
+    /// no thread should not carry a `replyCount: 0` that every client then has
+    /// to test before deciding not to render a footer — absent already means
+    /// that, and it keeps the common row smaller.
+    pub fn from_threaded_row(row: &Row<'_>, now_ms: i64) -> rusqlite::Result<Self> {
+        let mut msg = Self::from_joined_row(row, now_ms)?;
+        let replies: i64 = row.get("reply_count")?;
+        if replies > 0 {
+            msg.reply_count = Some(replies);
+            msg.last_reply_at = row.get("last_reply_at")?;
+        }
+        Ok(msg)
+    }
 }
 
 /// The column list for a `messages LEFT JOIN users` query. Kept in one place
@@ -279,9 +346,25 @@ pub const MESSAGE_JOIN_COLUMNS: &str = "\
     m.id, m.room_id, m.sender_address, m.content, m.msg_hash, m.message_timestamp, \
     m.msg_type, m.msg_serial, m.is_deleted, m.edited_at, m.created_at, m.is_encrypted, \
     m.iv, m.hmac, m.enc_ver, m.key_version, m.tx_hash, m.target_message_id, m.emoticon_code, \
+    m.parent_message_id, \
     u.username AS u_username, u.public_key AS u_public_key, \
     u.public_key_sig AS u_public_key_sig, u.profile_image AS u_profile_image, \
     u.created_at AS u_created_at, u.updated_at AS u_updated_at";
+
+/// Two more columns a thread-aware query selects: how many replies each row
+/// has and when the newest landed.
+///
+/// Correlated subqueries rather than a `GROUP BY` join, because the outer
+/// query already filters replies *out* — joining the very rows being excluded
+/// back in to count them reads as a contradiction, and the partial index on
+/// `parent_message_id` makes each lookup a direct seek.
+pub const MESSAGE_THREAD_COLUMNS: &str = "\
+    (SELECT COUNT(*) FROM messages r \
+       WHERE r.parent_message_id = m.id AND r.is_deleted = 0 AND r.msg_type IN ('add', 'edit')) \
+     AS reply_count, \
+    (SELECT MAX(r.message_timestamp) FROM messages r \
+       WHERE r.parent_message_id = m.id AND r.is_deleted = 0 AND r.msg_type IN ('add', 'edit')) \
+     AS last_reply_at";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RoomKey {
@@ -425,6 +508,9 @@ mod tests {
             tx_hash: None,
             target_message_id: None,
             emoticon_code: None,
+            parent_message_id: None,
+            reply_count: None,
+            last_reply_at: None,
             sender: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
@@ -444,6 +530,7 @@ mod tests {
             description: None,
             current_key_version: 1,
             key_rotation_pending: false,
+            kind: ROOM_KIND_CHANNEL.into(),
             created_at: iso_ms(0),
         };
         let enriched = RoomWithMembers {
@@ -455,6 +542,7 @@ mod tests {
             has_encryption: false,
             unread_count: None,
             last_read_serial: None,
+            mention_count: None,
         };
         let json = serde_json::to_value(&enriched).unwrap();
 

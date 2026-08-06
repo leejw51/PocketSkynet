@@ -34,6 +34,14 @@ getrandom = { version = "0.2", features = ["js"] }
 version = "0.3"
 features = [
     "Window",
+    # `HtmlElement::style()` — the inline override that makes an instant
+    # scroll actually instant against `.fn-scroll { scroll-behavior: smooth }`.
+    "CssStyleDeclaration",
+    # Watching the message stream re-render. A row's height is not final when
+    # it first paints, and the re-render that settles it destroys the scroll
+    # position — which no `scroll` or `load` event reliably announces.
+    "MutationObserver",
+    "MutationObserverInit",
     # `Window::match_media`, for the boot sequence's reduced-motion check.
     "MediaQueryList",
     "Document",

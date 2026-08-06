@@ -150,7 +150,7 @@ async fn one_payment_buys_one_action_across_both_features() {
 }
 
 #[tokio::test]
-async fn a_published_zip_is_hosted_publicly_sandboxed_and_community_deletable() {
+async fn a_published_zip_is_hosted_publicly_sandboxed_and_owner_deletable() {
     use std::io::Write;
 
     let server = paid_server().await;
@@ -216,9 +216,16 @@ async fn a_published_zip_is_hosted_publicly_sandboxed_and_community_deletable() 
         .expect_ok();
     assert_eq!(hits["results"].as_array().unwrap().len(), 1);
 
-    // Bob is not the owner. Bob removes it anyway; that is the contract.
+    // Bob is not the owner and this server has no admins configured (the
+    // harness scrubs VITE_FRUITNATION_ADMIN), so he cannot spend the payment
+    // Alice made. Publishing costs real money; deletion is not a refund.
     let id = site["id"].as_str().unwrap();
     bob.api
+        .delete(&format!("/api/sites/{id}"))
+        .await
+        .expect_status(403);
+    alice
+        .api
         .delete(&format!("/api/sites/{id}"))
         .await
         .expect_ok();

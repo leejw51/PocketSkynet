@@ -22,12 +22,14 @@ pub mod search;
 pub mod tls;
 pub mod validate;
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use crate::auth::JwtKeys;
 use crate::config::{Config, Secret};
 use crate::db::Db;
+use crate::error::{ApiError, ApiResult};
 use crate::hub::Hub;
 use crate::jsonl::JsonlLog;
 use crate::ratelimit::RateLimiter;
@@ -43,8 +45,52 @@ pub struct AppState {
     pub tickets: Arc<TicketStore>,
     pub cfg: Arc<Config>,
     pub limiter: Arc<RateLimiter>,
+    /// The suspended-account set, fronting the `suspended_users` table.
+    ///
+    /// Every authenticated request consults this, because a bearer token this
+    /// server cannot revoke means the only moment a suspension can take effect
+    /// is when the token is presented. A database round trip on the hot path
+    /// of every request to answer a question whose answer is almost always
+    /// "no" is the wrong shape; a set that is normally empty, loaded at
+    /// startup and rewritten by the admin routes that change it, is the right
+    /// one. Single-node is an explicit property of this server
+    /// (`docs/ROADMAP.md` §4), so there is no second process holding a stale
+    /// copy.
+    pub suspensions: Arc<RwLock<HashSet<String>>>,
     /// Process start, for `GET /api/health`'s uptime.
     pub started: Instant,
+}
+
+impl AppState {
+    /// Whether this address may no longer authenticate.
+    ///
+    /// Compared lowercased because a suspension is written from whatever the
+    /// admin route was given and read against a checksummed token claim.
+    pub fn is_suspended(&self, address: &str) -> bool {
+        let wanted = address.to_lowercase();
+        self.suspensions
+            .read()
+            .map(|set| set.contains(&wanted))
+            .unwrap_or(false)
+    }
+
+    /// Reload the suspension set from the database.
+    ///
+    /// Called after every change rather than having the mutating routes patch
+    /// the set themselves: the table is the truth, the set is a copy of it,
+    /// and re-reading is the only update that cannot drift.
+    pub async fn refresh_suspensions(&self) -> ApiResult<()> {
+        let addresses = self
+            .db
+            .call(|conn| db::admin::suspended_addresses(conn))
+            .await?;
+        let mut set = self
+            .suspensions
+            .write()
+            .map_err(|_| ApiError::Internal(anyhow::anyhow!("suspension lock poisoned")))?;
+        *set = addresses.iter().map(|a| a.to_lowercase()).collect();
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for AppState {
@@ -82,6 +128,10 @@ impl AppState {
             tickets: Arc::new(TicketStore::new()),
             cfg: Arc::new(cfg),
             limiter,
+            // Populated by `refresh_suspensions` once the server is up; an
+            // empty set until then is the safe direction to be wrong in for
+            // the few milliseconds before startup finishes reading it.
+            suspensions: Arc::new(RwLock::new(HashSet::new())),
             started: Instant::now(),
         })
     }
@@ -819,6 +869,20 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
     let host = cfg.host;
 
     let state = AppState::build(cfg, secret)?;
+    // Before the first request, so a suspension made in a previous run is in
+    // force from the moment this one starts answering.
+    if let Err(e) = state.refresh_suspensions().await {
+        tracing::warn!(error = %e, "could not load suspended accounts");
+    }
+    let admins = routes::misc::server_admins();
+    if admins.is_empty() {
+        tracing::info!(
+            "no server administrators configured (VITE_FRUITNATION_ADMIN); \
+             the admin routes will refuse everybody"
+        );
+    } else {
+        tracing::info!("server administrators: {}", admins.join(", "));
+    }
     let log = state.log.clone();
     let background_state = state.clone();
     let base_router = routes::build(state);
@@ -1155,6 +1219,7 @@ mod test_support {
     use crate::auth::JwtKeys;
     use crate::config::Config;
     use crate::db::Db;
+    use crate::error::{ApiError, ApiResult};
     use crate::hub::Hub;
     use crate::jsonl::JsonlLog;
     use crate::ratelimit::RateLimiter;
@@ -1210,8 +1275,29 @@ mod test_support {
             tickets: Arc::new(TicketStore::new()),
             cfg: Arc::new(cfg),
             limiter: Arc::new(RateLimiter::new(false)),
+            suspensions: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             started: Instant::now(),
         }
+    }
+
+    /// The wallet every admin test administers with.
+    ///
+    /// One shared address rather than a per-test one, because
+    /// `VITE_FRUITNATION_ADMIN` is read from the process environment and the
+    /// suite runs its tests on threads that share it. Two tests each setting
+    /// the variable to *their own* boss would take turns evicting each other;
+    /// every test setting it to the same value cannot.
+    pub fn boss() -> WalletAddress {
+        wallet("boss")
+    }
+
+    /// Make [`boss`] a server administrator for this process.
+    ///
+    /// Idempotent, and safe to call from concurrent tests: the value written
+    /// is always identical, so a racing write is a no-op rather than a
+    /// different answer.
+    pub fn arm_server_admin() {
+        std::env::set_var("VITE_FRUITNATION_ADMIN", boss().as_str());
     }
 
     pub fn wallet(tag: &str) -> WalletAddress {

@@ -291,6 +291,37 @@ pub fn message_content(raw: Option<&str>) -> ApiResult<String> {
     Ok(trimmed.to_owned())
 }
 
+/// `mentions` — the wallet addresses a message declares it names.
+///
+/// Every entry must parse as an address, because the alternative is worse than
+/// a rejection: a list that silently drops what it could not read would leave
+/// the sender believing they had notified somebody they had not. Membership is
+/// checked later, against the room, by `db::mentions::resolve`.
+///
+/// The length cap is [`crate::db::mentions::MAX_MENTIONS`] — see there for why
+/// a mention list is the one part of a message worth bounding.
+pub fn mention_addresses(raw: Option<Vec<String>>) -> ApiResult<Vec<String>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    if raw.len() > crate::db::mentions::MAX_MENTIONS {
+        return Err(ApiError::field(
+            "mentions",
+            &format!(
+                "A message can mention at most {} people",
+                crate::db::mentions::MAX_MENTIONS
+            ),
+        ));
+    }
+    raw.into_iter()
+        .map(|entry| {
+            WalletAddress::new(&entry)
+                .map(|w| w.as_str().to_owned())
+                .map_err(|_| ApiError::field("mentions", "Invalid wallet address format"))
+        })
+        .collect()
+}
+
 /// `filename` — 1–200 characters, display only, and **never** a path.
 ///
 /// The bytes are stored under a content hash, so this string never reaches the

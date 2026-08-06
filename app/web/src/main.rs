@@ -32,6 +32,7 @@ mod eip1193;
 mod format;
 mod i18n;
 mod identity;
+mod mentions;
 mod privy;
 mod progression;
 mod realtime;

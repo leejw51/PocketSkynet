@@ -304,6 +304,8 @@ mod tests {
                             hmac: None,
                             enc_ver: 1,
                             key_version: 1,
+                            parent_message_id: None,
+                            mentions: Vec::new(),
                         },
                     )?;
                     Ok(())

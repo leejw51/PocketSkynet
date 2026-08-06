@@ -9,6 +9,7 @@
 //! Every destructive confirmation names the object and states the consequence,
 //! and its button is labelled with the verb. `window.confirm` appears nowhere.
 
+mod admin;
 mod admins;
 mod assistant;
 mod blocked;
@@ -17,11 +18,14 @@ mod delete_message;
 mod files;
 mod hidden;
 mod invite;
+mod mentions;
 mod more;
+mod new_dm;
 mod rename;
 mod server;
 mod wallet;
 
+pub use admin::AdminConsole;
 pub use admins::ManageAdmins;
 pub use assistant::{AiKeysEditor, Assistant};
 pub use blocked::Blocked;
@@ -30,7 +34,9 @@ pub use delete_message::DeleteMessage;
 pub use files::Files;
 pub use hidden::HiddenRooms;
 pub use invite::Invite;
+pub use mentions::Mentions;
 pub use more::MoreSheet;
+pub use new_dm::{open_with as open_dm_with, NewDirectMessage};
 pub use rename::RenameRoom;
 pub use server::ServerInfoDialog;
 pub use wallet::Wallet;

@@ -202,6 +202,15 @@ async fn login(
         _ => (None, None),
     };
 
+    // Refused here as well as at the extractor. The extractor is what makes
+    // an *existing* token stop working; this is what stops a suspended wallet
+    // from simply signing in again and getting a fresh one.
+    if state.is_suspended(wallet.as_str()) {
+        return Err(ApiError::forbidden(
+            "This account has been suspended by a server administrator.",
+        ));
+    }
+
     let address = wallet.as_str().to_owned();
     let (user, salt) = state
         .db
@@ -233,6 +242,11 @@ async fn login(
         "token": token,
         "fruitnationWallet": super::misc::server_wallet(),
         "encryptionSalt": salt,
+        // The client cannot work this out for itself: the admin list is
+        // server-side configuration, and a client that guessed would either
+        // hide a console its user is entitled to or offer one every request
+        // behind it would refuse.
+        "isServerAdmin": super::misc::is_server_admin(wallet.as_str()),
     }))
     .into_response())
 }

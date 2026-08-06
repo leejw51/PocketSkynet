@@ -8,12 +8,14 @@
 //! registration order, so the collision cannot occur here — the tests at the
 //! bottom of this file assert it rather than trusting the claim.
 
+pub mod admin;
 pub mod auth;
 pub mod emoticons;
 pub mod files;
 pub mod images;
 pub mod invitations;
 pub mod keys;
+pub mod mentions;
 pub mod messages;
 pub mod misc;
 pub mod operators;
@@ -161,11 +163,13 @@ fn api_router(state: &AppState) -> Router<AppState> {
     let limited = Router::new()
         .merge(misc::router())
         .merge(auth::router(state))
+        .merge(admin::router())
         .merge(users::router())
         .merge(rooms::router())
         .merge(invitations::router())
         .merge(keys::router())
         .merge(messages::router())
+        .merge(mentions::router())
         .merge(files::router())
         .merge(images::router())
         .merge(search::router())

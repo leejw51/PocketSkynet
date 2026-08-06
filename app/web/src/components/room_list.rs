@@ -21,7 +21,7 @@ use crate::format;
 use crate::route::Route;
 use crate::state::{use_store, Action, Confirm, ConfirmAction, KnowledgeSeed, Load, Modal, Store};
 
-use super::common::{Badge, Empty, Ident, Lock, Skeleton, Unread};
+use super::common::{Badge, Empty, Ident, Lock, MentionBadge, Skeleton, Unread};
 use super::icons;
 use crate::i18n::{t, Key, Lang};
 
@@ -136,6 +136,13 @@ pub fn room_list(p: &RoomListProps) -> Html {
     let open_create = {
         let store = store.clone();
         Callback::from(move |_: MouseEvent| store.dispatch(Action::OpenModal(Modal::CreateRoom)))
+    };
+
+    let open_dm = {
+        let store = store.clone();
+        Callback::from(move |_: MouseEvent| {
+            store.dispatch(Action::OpenModal(Modal::NewDirectMessage))
+        })
     };
 
     // The ⚡ shortcut: an encrypted room, named automatically, created and
@@ -357,6 +364,18 @@ pub fn room_list(p: &RoomListProps) -> Html {
                     >
                         { icons::plus(18) }
                     </button>
+                    // Starting a conversation with a person is a different
+                    // act from making a room, and burying it inside the room
+                    // dialog would make "message Bob" begin with "create".
+                    <button
+                        type="button"
+                        class="topcoat-icon-button"
+                        aria-label={t(lang, Key::new_direct_message)}
+                        title={t(lang, Key::new_direct_message)}
+                        onclick={open_dm}
+                    >
+                        { icons::chat(18) }
+                    </button>
                 } else {
                     // Offline: the create buttons are replaced by the state
                     // that explains why they are gone.
@@ -472,39 +491,91 @@ fn body(
                     tabindex="-1"
                     {onkeydown}
                 >
-                    { for rooms.iter().enumerate().map(|(i, r)| {
-                        let selected = p.selected.as_ref() == Some(r.id());
-                        // The server's count is authoritative but is not
-                        // block-filtered and lags a live batch; fall back to the
-                        // locally folded count when it is absent.
-                        let unread = r.unread_count.or_else(|| {
-                            let me = me.as_ref()?;
-                            Some(store.room_state(r.id())?.local_unread(me, &store.blocks))
-                        }).unwrap_or(0);
-                        html! {
-                            <RoomRow
-                                key={r.id().to_string()}
-                                room={(*r).clone()}
-                                // `--i` drives the CSS entrance stagger
-                                // (app.css §14); the delay is capped there.
-                                index={i}
-                                selected={selected}
-                                // Roving tabindex: the selected row, or the first.
-                                tabbable={selected || (p.selected.is_none() && i == 0)}
-                                unread={unread}
-                                is_admin={me.as_ref().is_some_and(|m| r.is_admin(m))}
-                                now={now}
-                                tz={tz}
-                                lang={lang}
-                                on_navigate={p.on_navigate.clone()}
-                                open_swipe={open_swipe.clone()}
-                                on_swipe={on_swipe.clone()}
-                            />
-                        }
+                    // Flattened into one list in which every child carries a
+                    // key — the same rule React applies to an array of
+                    // children, and for the same reason.
+                    //
+                    // This was two nested lists with the section heading in an
+                    // unkeyed `if` beside the rows. Yew flattens `{ for … }`
+                    // into the parent's children rather than nesting it, so
+                    // the listbox saw one flat list whose first entry had no
+                    // key; a single unkeyed sibling turns keyed matching off
+                    // for *all* of them, and every row was then matched by
+                    // position. Marking one room read renumbered the sections
+                    // and rebuilt the whole sidebar.
+                    { for sectioned(&rooms).into_iter().flat_map(|(heading, section)| {
+                        let head = heading.map(|h| html! {
+                            <span key={format!("section-{h:?}")}
+                                  class="fn-room-section" role="presentation">
+                                { t(lang, h) }
+                            </span>
+                        });
+                        head.into_iter().chain(section.into_iter().map(|(i, r)| {
+                                    let selected = p.selected.as_ref() == Some(r.id());
+                                    // The server's count is authoritative but is not
+                                    // block-filtered and lags a live batch; fall back to the
+                                    // locally folded count when it is absent.
+                                    let unread = r.unread_count.or_else(|| {
+                                        let me = me.as_ref()?;
+                                        Some(store.room_state(r.id())?.local_unread(me, &store.blocks))
+                                    }).unwrap_or(0);
+                                    html! {
+                                        <RoomRow
+                                            key={r.id().to_string()}
+                                            room={r.clone()}
+                                            // `--i` drives the CSS entrance stagger
+                                            // (app.css §14); the delay is capped there.
+                                            index={i}
+                                            selected={selected}
+                                            // Roving tabindex: the selected row, or the first.
+                                            tabbable={selected || (p.selected.is_none() && i == 0)}
+                                            unread={unread}
+                                            mentions={r.mention_count.unwrap_or(0)}
+                                            is_admin={me.as_ref().is_some_and(|m| r.is_admin(m))}
+                                            now={now}
+                                            tz={tz}
+                                            lang={lang}
+                                            on_navigate={p.on_navigate.clone()}
+                                            open_swipe={open_swipe.clone()}
+                                            on_swipe={on_swipe.clone()}
+                                        />
+                                    }
+                        }))
                     }) }
                 </div>
             }
         }
+    }
+}
+
+/// Split the room list into channels and direct messages, keeping the index
+/// each row had in the flat list.
+///
+/// The index is what drives the CSS entrance stagger, so it has to count
+/// across the whole list rather than restart per section — otherwise the two
+/// sections animate on top of each other.
+///
+/// Returns one unlabelled section when the list is all one kind. A heading
+/// over the only list on screen labels something nobody could have confused,
+/// and on a phone it costs a row of the few that fit.
+fn sectioned(rooms: &[&RoomWithMembers]) -> Vec<(Option<Key>, Vec<(usize, RoomWithMembers)>)> {
+    let mut channels = Vec::new();
+    let mut directs = Vec::new();
+    for (i, r) in rooms.iter().enumerate() {
+        if r.is_direct() {
+            directs.push((i, (*r).clone()));
+        } else {
+            channels.push((i, (*r).clone()));
+        }
+    }
+
+    match (channels.is_empty(), directs.is_empty()) {
+        (false, true) => vec![(None, channels)],
+        (true, false) => vec![(None, directs)],
+        _ => vec![
+            (Some(Key::section_channels), channels),
+            (Some(Key::section_direct_messages), directs),
+        ],
     }
 }
 
@@ -779,9 +850,9 @@ mod swipe {
         };
     }
 
-    pub fn hide_confirm(lang: Lang, r: &RoomWithMembers) -> Confirm {
+    pub fn hide_confirm(lang: Lang, r: &RoomWithMembers, title: &str) -> Confirm {
         Confirm {
-            title: t(lang, Key::hide_room_title).replace("{name}", &r.room.name),
+            title: t(lang, Key::hide_room_title).replace("{name}", title),
             body: t(lang, Key::hide_room_body).into(),
             confirm_label: t(lang, Key::hide_room).into(),
             action: ConfirmAction::HideRoom(r.id().clone()),
@@ -790,11 +861,12 @@ mod swipe {
 
     /// The express swipe's destination. Hiding, not leaving: it is the
     /// reversible one, and a gesture should not be able to cost you a room key.
-    pub fn confirm_hide(store: &Store, r: &RoomWithMembers) {
+    pub fn confirm_hide(store: &Store, r: &RoomWithMembers, title: &str) {
         mark_intent();
         store.dispatch(Action::OpenModal(Modal::Confirm(hide_confirm(
             store.language,
             r,
+            title,
         ))));
     }
 
@@ -881,6 +953,10 @@ pub struct RoomRowProps {
     pub selected: bool,
     pub tabbable: bool,
     pub unread: u32,
+    /// Unread messages in this room that name the viewer. Server-supplied and
+    /// authoritative — a client cannot work it out for an encrypted room,
+    /// where it has no plaintext to look for its own name in.
+    pub mentions: u32,
     pub is_admin: bool,
     pub now: i64,
     pub tz: i32,
@@ -904,6 +980,15 @@ fn room_row(p: &RoomRowProps) -> Html {
     let selected = p.selected;
     let rotating = r.room.key_rotation_pending;
     let is_open = p.open_swipe.as_ref() == Some(&id);
+    // A DM has no name anybody chose — the server stores a placeholder because
+    // the column is NOT NULL, and the real title is whoever else is in it,
+    // which differs per viewer and so can only be worked out here. Derived
+    // rather than stored, so it also stays right when somebody renames
+    // themselves.
+    let title = store
+        .me()
+        .map(|me| r.title_for(me))
+        .unwrap_or_else(|| r.room.name.clone());
 
     let track = use_node_ref();
     let actions = use_node_ref();
@@ -996,6 +1081,10 @@ fn room_row(p: &RoomRowProps) -> Html {
     };
 
     // --- the gesture ------------------------------------------------------
+    // The express swipe's confirmation names the room, and for a DM that name
+    // is derived per viewer — so it has to be captured, not re-read from the
+    // room inside the handler.
+    let express_title = title.clone();
     let onpointerdown = {
         let drag = drag.clone();
         let track = track.clone();
@@ -1046,7 +1135,7 @@ fn room_row(p: &RoomRowProps) -> Html {
                 swipe::Outcome::Express => {
                     swipe::slide(&track, 0.0, true);
                     on_swipe.emit(None);
-                    swipe::confirm_hide(&store, &room);
+                    swipe::confirm_hide(&store, &room, &express_title);
                 }
             }
         })
@@ -1077,12 +1166,7 @@ fn room_row(p: &RoomRowProps) -> Html {
         .as_ref()
         .map(|m| format::room_list_time(m.message_timestamp, p.now, p.tz));
 
-    let first_letter = r
-        .room
-        .name
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string());
+    let first_letter = title.chars().next().map(|c| c.to_uppercase().to_string());
 
     html! {
         <div
@@ -1109,7 +1193,7 @@ fn room_row(p: &RoomRowProps) -> Html {
                     role="option"
                     aria-selected={selected.to_string()}
                     tabindex={if p.tabbable { "0" } else { "-1" }}
-                    data-name={r.room.name.clone()}
+                    data-name={title.clone()}
                     onclick={activate}
                     onkeydown={key_activate}
                 >
@@ -1118,26 +1202,33 @@ fn room_row(p: &RoomRowProps) -> Html {
                         class="fn-room-row__avatar"
                         corner={first_letter}
                         zoom={crate::components::common::Zoom {
-                            title: r.room.name.clone(),
+                            title: title.clone(),
                             subtitle: None,
                             address: None,
                         }}
                     />
                     <div class="fn-room-row__title">
-                        <span class="fn-room-row__name">{ &r.room.name }</span>
+                        <span class="fn-room-row__name">{ &title }</span>
                         if r.has_encryption {
                             <Lock pending={rotating} />
                         }
                     </div>
                     <div class="fn-room-row__meta">
-                        if is_admin {
+                        // Both of these are channel facts. Every member of a
+                        // DM is an admin of it — that is how a two-person
+                        // conversation avoids having an owner — so the badge
+                        // marks nothing, and "2 members" restates the name
+                        // already on the row above it.
+                        if is_admin && !r.is_direct() {
                             <Badge variant="admin">{ t(lang, Key::admin) }</Badge>
                         }
-                        <span>{ t(lang, if r.member_count == 1 {
-                                    Key::member_count_one
-                                } else {
-                                    Key::member_count_many
-                                }).replace("{n}", &r.member_count.to_string()) }</span>
+                        if !r.is_direct() {
+                            <span>{ t(lang, if r.member_count == 1 {
+                                        Key::member_count_one
+                                    } else {
+                                        Key::member_count_many
+                                    }).replace("{n}", &r.member_count.to_string()) }</span>
+                        }
                         if !preview.is_empty() {
                             <span class="fn-room-row__preview">{ preview }</span>
                         }
@@ -1146,10 +1237,11 @@ fn room_row(p: &RoomRowProps) -> Html {
                         if let Some(t) = time {
                             <span class="fn-room-row__time">{ t }</span>
                         }
+                        <MentionBadge count={p.mentions} />
                         <Unread count={unread} />
                     </div>
                 </div>
-                { drawer(lang, &store, r, is_open, actions) }
+                { drawer(lang, &store, r, &title, is_open, actions) }
             </div>
         </div>
     }
@@ -1166,7 +1258,14 @@ fn room_row(p: &RoomRowProps) -> Html {
 /// transform and nothing else: mounting two buttons mid-gesture is a layout
 /// pass in the middle of a finger movement. They leave the tab order and the
 /// accessibility tree while they are out of sight.
-fn drawer(lang: Lang, store: &Store, r: &RoomWithMembers, is_open: bool, actions: NodeRef) -> Html {
+fn drawer(
+    lang: Lang,
+    store: &Store,
+    r: &RoomWithMembers,
+    title: &str,
+    is_open: bool,
+    actions: NodeRef,
+) -> Html {
     let action = |label: String, icon: Html, danger: bool, c: Confirm| {
         let store = store.clone();
         let onclick = Callback::from(move |e: MouseEvent| {
@@ -1193,16 +1292,24 @@ fn drawer(lang: Lang, store: &Store, r: &RoomWithMembers, is_open: bool, actions
             ref={actions}
             class="fn-swipe__actions"
             role="group"
-            aria-label={t(lang, Key::swipe_actions_for).replace("{name}", &r.room.name)}
+            aria-label={t(lang, Key::swipe_actions_for).replace("{name}", title)}
         >
             { action(t(lang, Key::hide).to_owned(), icons::eye_off(18), false,
-                     swipe::hide_confirm(lang, r)) }
-            { action(t(lang, Key::leave).to_owned(), icons::power(18), true, Confirm {
-                title: t(lang, Key::leave_room_title).replace("{name}", &r.room.name),
-                body: t(lang, Key::leave_room_body).into(),
-                confirm_label: t(lang, Key::leave_room).into(),
-                action: ConfirmAction::LeaveRoom(r.id().clone()),
-            }) }
+                     swipe::hide_confirm(lang, r, title)) }
+            // Leaving is a channel verb. The server refuses it for a direct
+            // message — a departed member would leave a conversation still
+            // keyed to their name, which they could then never re-open —
+            // and offering a button that always errors is worse than not
+            // offering it. Hiding, above, is the DM's answer and is
+            // reversible.
+            if !r.is_direct() {
+                { action(t(lang, Key::leave).to_owned(), icons::power(18), true, Confirm {
+                    title: t(lang, Key::leave_room_title).replace("{name}", title),
+                    body: t(lang, Key::leave_room_body).into(),
+                    confirm_label: t(lang, Key::leave_room).into(),
+                    action: ConfirmAction::LeaveRoom(r.id().clone()),
+                }) }
+            }
         </div>
     }
 }

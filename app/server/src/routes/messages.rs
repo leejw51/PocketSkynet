@@ -3,14 +3,14 @@
 
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{patch, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use pocketskynet_core::{RoomId, ServerEvent, Target, WalletAddress};
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
 use crate::db::messages::{MessageEdit, NewMessage};
-use crate::db::{messages, rooms};
+use crate::db::{mentions, messages, rooms};
 use crate::error::{ApiError, ApiResult, ErrorCode};
 use crate::validate::{self, ValidJson};
 use crate::AppState;
@@ -22,6 +22,7 @@ pub fn router() -> Router<AppState> {
             post(send).get(list).delete(purge),
         )
         .route("/messages/{messageId}", patch(edit).delete(remove))
+        .route("/messages/{messageId}/thread", get(thread))
         .route("/messages/{messageId}/publish", post(publish))
         .merge(super::emoticons::router())
         .merge(super::sync::router())
@@ -41,6 +42,25 @@ pub struct MessageBody {
     pub enc_ver: Option<i64>,
     #[serde(rename = "keyVersion")]
     pub key_version: Option<i64>,
+    /// Post into the thread this message belongs to. Send only; an edit
+    /// cannot move a message between threads, because the reply it is an
+    /// answer to would then be answering something else.
+    #[serde(rename = "parentMessageId")]
+    pub parent_message_id: Option<String>,
+    /// The people this message names, as wallet addresses.
+    ///
+    /// Sent by the client rather than left entirely to the server's parser for
+    /// two reasons. Usernames may contain spaces and emoji, which no `@token`
+    /// grammar recovers from plaintext; and in an encrypted room there *is* no
+    /// plaintext — the server holds ciphertext and must keep holding only
+    /// that. Declaring the addresses leaks nothing the room does not already
+    /// publish: the server knows exactly who is in every room, so "this
+    /// message names Bob, who is in this room" adds no fact it did not have.
+    /// What stays private is the thing that matters — what was said.
+    ///
+    /// Advisory, not trusted: every address is checked against the room's
+    /// roster before it becomes a mention.
+    pub mentions: Option<Vec<String>>,
 }
 
 pub(super) async fn require_member(
@@ -124,25 +144,100 @@ async fn send(
         check_epoch(&state, &room, key_version).await?;
     }
 
-    let new = NewMessage {
-        id: format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4()),
-        room_id: room.as_str().to_owned(),
-        sender: caller.as_str().to_owned(),
-        content,
-        msg_hash,
-        is_encrypted,
-        iv,
-        hmac,
-        enc_ver,
-        key_version,
-    };
+    // Validated here so a malformed id is a 400 before any database work,
+    // rather than a "message not found" from inside the transaction.
+    let parent = body
+        .parent_message_id
+        .as_deref()
+        .map(validate::message_id)
+        .transpose()?;
+    let declared = validate::mention_addresses(body.mentions)?;
+
+    let id = format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
+    let room_id = room.as_str().to_owned();
+    let sender = caller.as_str().to_owned();
     let message = state
         .db
-        .call(move |conn| messages::create_message(conn, new))
+        .call(move |conn| {
+            let parent_message_id = match parent {
+                Some(parent) => Some(resolve_parent(conn, parent.as_str(), &room_id)?),
+                None => None,
+            };
+            let mentions = resolve_mentions(conn, &room_id, &content, is_encrypted, declared)?;
+
+            messages::create_message(
+                conn,
+                NewMessage {
+                    id,
+                    room_id,
+                    sender,
+                    content,
+                    msg_hash,
+                    is_encrypted,
+                    iv,
+                    hmac,
+                    enc_ver,
+                    key_version,
+                    parent_message_id,
+                    mentions,
+                },
+            )
+        })
         .await?;
 
     announce(&state, &room, &caller, message.msg_serial).await;
     Ok(Json(message).into_response())
+}
+
+/// The thread a reply belongs in, given the message the client replied to.
+///
+/// Flattens: replying to a reply joins its thread rather than nesting under
+/// it, so `parent_message_id` is always a thread root and a thread is always
+/// one flat list (see `db::messages::thread_root`).
+///
+/// Cross-room parents are refused rather than silently ignored. Accepting one
+/// would file a message in room A into a thread in room B, where members of B
+/// would read it without being in A — a membership check bypassed by a typo.
+fn resolve_parent(
+    conn: &rusqlite::Connection,
+    parent_id: &str,
+    room_id: &str,
+) -> ApiResult<String> {
+    let (root, parent_room) = messages::thread_root(conn, parent_id, false)?
+        .ok_or_else(|| ApiError::not_found("The message being replied to no longer exists"))?;
+    if parent_room != room_id {
+        return Err(ApiError::bad_request(
+            "Cannot reply to a message in another room",
+        ));
+    }
+    Ok(root)
+}
+
+/// Who a message names, as wallet addresses that are actually in the room.
+///
+/// Two sources, unioned:
+///
+/// * what the client declared, which is the only source available for an
+///   encrypted room and the only one that can carry a username with a space
+///   in it;
+/// * what the server can parse out of plaintext, which catches an `@name`
+///   typed by hand into a client that does not build the list.
+///
+/// Both go through the same roster check, so neither is trusted: a declared
+/// address that is not a member resolves to nothing, exactly like an `@name`
+/// that matches nobody.
+fn resolve_mentions(
+    conn: &rusqlite::Connection,
+    room_id: &str,
+    content: &str,
+    is_encrypted: bool,
+    declared: Vec<String>,
+) -> ApiResult<Vec<String>> {
+    let mut handles = declared;
+    if !is_encrypted {
+        handles.extend(mentions::extract(content));
+    }
+    mentions::resolve(conn, room_id, &handles)
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,12 +245,22 @@ struct PaginationQuery {
     since: Option<String>,
     before: Option<String>,
     limit: Option<String>,
+    /// `?includeReplies=true` puts thread replies back into the channel view.
+    /// Off by default — that is what threads are for — and offered because a
+    /// client with no thread UI at all still wants to show every message
+    /// rather than silently hide half a conversation.
+    #[serde(rename = "includeReplies")]
+    include_replies: Option<String>,
 }
 
 /// `GET /api/rooms/{roomId}/messages` — initial load and backward paging.
 ///
 /// `since`/`before` are **timestamps** here; `/sync`'s `since` is a serial.
 /// Mixing them up is the most common client bug against this API.
+///
+/// Thread replies are **not** in this list. Each message that has any carries
+/// `replyCount` and `lastReplyAt` instead, so the channel shows one line per
+/// thread and says how much is under it.
 async fn list(
     State(state): State<AppState>,
     AuthUser(caller): AuthUser,
@@ -168,13 +273,65 @@ async fn list(
     let since = validate::optional_cursor(query.since.as_deref());
     let before = validate::optional_cursor(query.before.as_deref());
     let limit = validate::page_limit(query.limit.as_deref());
+    let include_replies = matches!(query.include_replies.as_deref(), Some("true" | "1" | "yes"));
 
     let room_id = room.as_str().to_owned();
     let address = caller.as_str().to_owned();
     let out = state
         .db
-        .call(move |conn| messages::get_messages(conn, &room_id, &address, since, before, limit))
+        .call(move |conn| {
+            messages::get_messages(
+                conn,
+                &room_id,
+                &address,
+                since,
+                before,
+                limit,
+                include_replies,
+            )
+        })
         .await?;
+    Ok(Json(out).into_response())
+}
+
+/// `GET /api/messages/{messageId}/thread` — one thread, root first.
+///
+/// The id may name the root or any reply in it; both answer with the same
+/// list, so a client holding only a reply (from `/sync`, say) can open the
+/// thread without first working out where it starts.
+///
+/// Membership is checked against the room the thread lives in, not against
+/// anything the caller supplied — a thread is not a way into a room.
+async fn thread(
+    State(state): State<AppState>,
+    AuthUser(caller): AuthUser,
+    Path(message_id): Path<String>,
+) -> ApiResult<Response> {
+    let id = validate::message_id(&message_id)?;
+
+    let (root, room_id) = {
+        let id = id.as_str().to_owned();
+        state
+            .db
+            // Deleted included: a tombstoned root still heads its thread.
+            .call(move |conn| messages::thread_root(conn, &id, true))
+            .await?
+            .ok_or_else(|| ApiError::not_found("Message not found"))?
+    };
+
+    let room = RoomId::new(&room_id)
+        .map_err(|_| ApiError::Internal(anyhow::anyhow!("stored room id is not valid")))?;
+    require_member(&state, &room, &caller).await?;
+
+    let address = caller.as_str().to_owned();
+    let out = state
+        .db
+        .call(move |conn| messages::get_thread(conn, &root, &address))
+        .await?
+        // `None` here means the root's sender is blocked by the viewer, which
+        // is a thread they have chosen not to see rather than one that is
+        // missing — but there is nothing to render either way.
+        .ok_or_else(|| ApiError::not_found("Message not found"))?;
     Ok(Json(out).into_response())
 }
 
@@ -242,12 +399,19 @@ async fn edit(
         check_epoch(&state, &room, key_version).await?;
     }
 
+    let declared = validate::mention_addresses(body.mentions)?;
     let updated = state
         .db
         .call({
             let id = id.as_str().to_owned();
             let room_id = existing.room_id.clone();
             move |conn| {
+                let mentions =
+                    resolve_mentions(conn, &room_id, &content, stays_encrypted, declared)?;
+                // Replaced rather than added to, inside the edit's own
+                // transaction: an edit that takes somebody's name out has to
+                // take the mention with it, or their inbox keeps pointing at
+                // a message that no longer says it.
                 messages::update_message(
                     conn,
                     &id,
@@ -260,6 +424,7 @@ async fn edit(
                         enc_ver,
                         key_version,
                     },
+                    &mentions,
                 )
             }
         })
@@ -329,7 +494,15 @@ async fn remove(
     Ok(super::message("Message deleted successfully"))
 }
 
-/// `DELETE /api/rooms/{roomId}/messages` — any member may purge the history.
+/// `DELETE /api/rooms/{roomId}/messages` — purge the history. **Admins only.**
+///
+/// Room admins and server admins; not, as it was, any member. Deleting a
+/// single message is open to everybody in the room on purpose — this is a
+/// forgetting-first product and a member should not have to ask its author.
+/// Erasing *everything* is a different act: it destroys other people's record
+/// of the conversation with one request, and there is no undo. The roadmap
+/// called this out as a gap (§3, "history protection"), and admin is the role
+/// the room already has for irreversible things.
 ///
 /// A single marker row survives so `/sync` clients learn to clear their local
 /// cache; without it, a client that was offline during the purge would keep
@@ -340,18 +513,13 @@ async fn purge(
     Path(room_id): Path<String>,
 ) -> ApiResult<Response> {
     let room = validate::room_id(&room_id)?;
-
-    {
-        let room_id = room.as_str().to_owned();
-        let address = caller.as_str().to_owned();
-        let member = state
-            .db
-            .call(move |conn| rooms::is_member(conn, &room_id, &address))
-            .await?;
-        if !member {
-            return Err(ApiError::forbidden("Not a member of this room"));
-        }
-    }
+    super::rooms::require_admin(
+        &state,
+        &room,
+        &caller,
+        "Only room admins can delete a room's entire history",
+    )
+    .await?;
 
     let marker_id = format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
     let room_id = room.as_str().to_owned();
@@ -537,6 +705,249 @@ mod tests {
         )
         .await
         .body
+    }
+
+    async fn post_reply(
+        router: &Router,
+        token: &str,
+        room: &str,
+        parent: &str,
+        text: &str,
+    ) -> serde_json::Value {
+        request(
+            router,
+            "POST",
+            &format!("/api/rooms/{room}/messages"),
+            Some(token),
+            Some(serde_json::json!({
+                "content": text,
+                "msgHash": hash('b'),
+                "parentMessageId": parent,
+            })),
+        )
+        .await
+        .body
+    }
+
+    #[tokio::test]
+    async fn a_thread_costs_the_channel_one_line() {
+        let state = state("threads-fold");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+        let room = make_room(&router, &token).await;
+
+        let root = post_message(&router, &token, &room, "shipping today?").await;
+        let root_id = root["id"].as_str().unwrap().to_owned();
+        assert!(root["parentMessageId"].is_null());
+        assert!(
+            root.get("replyCount").is_none(),
+            "a message with no thread carries no count to test"
+        );
+
+        for text in ["checking", "two tests left", "green"] {
+            let reply = post_reply(&router, &token, &room, &root_id, text).await;
+            assert_eq!(reply["parentMessageId"], root_id);
+        }
+        post_message(&router, &token, &room, "unrelated").await;
+
+        // The channel shows the root and the unrelated message — not the
+        // three replies. That is the whole point of a thread.
+        let listed = request(
+            &router,
+            "GET",
+            &format!("/api/rooms/{room}/messages"),
+            Some(&token),
+            None,
+        )
+        .await;
+        let listed = listed.json();
+        let listed = listed.as_array().unwrap();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        let root_row = listed.iter().find(|m| m["id"] == root_id).unwrap();
+        assert_eq!(root_row["replyCount"], 3);
+        assert!(root_row["lastReplyAt"].as_i64().unwrap() > 0);
+
+        // A client with no thread UI can still see everything.
+        let all = request(
+            &router,
+            "GET",
+            &format!("/api/rooms/{room}/messages?includeReplies=true"),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(all.json().as_array().unwrap().len(), 5);
+
+        // The thread itself is the root followed by its replies, in order.
+        let thread = request(
+            &router,
+            "GET",
+            &format!("/api/messages/{root_id}/thread"),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(thread.status, StatusCode::OK);
+        let thread = thread.json();
+        let thread = thread.as_array().unwrap();
+        assert_eq!(thread.len(), 4);
+        assert_eq!(thread[0]["id"], root_id);
+        assert_eq!(thread[1]["content"], "checking");
+        assert_eq!(thread[3]["content"], "green");
+    }
+
+    #[tokio::test]
+    async fn replying_to_a_reply_joins_its_thread_rather_than_nesting() {
+        let state = state("threads-flat");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+        let room = make_room(&router, &token).await;
+
+        let root_id = post_message(&router, &token, &room, "root").await["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let first = post_reply(&router, &token, &room, &root_id, "first").await;
+        let first_id = first["id"].as_str().unwrap().to_owned();
+
+        // Replying to the reply. A tree of unbounded depth is not a shape any
+        // renderer can bound, so the second level flattens into the first.
+        let second = post_reply(&router, &token, &room, &first_id, "second").await;
+        assert_eq!(
+            second["parentMessageId"], root_id,
+            "a thread is one flat list, always rooted at the message that started it"
+        );
+
+        // Which means asking for the thread of *any* member of it — a reply
+        // a client happened to receive from /sync, say — answers the same.
+        let from_reply = request(
+            &router,
+            "GET",
+            &format!("/api/messages/{first_id}/thread"),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(from_reply.json().as_array().unwrap().len(), 3);
+        assert_eq!(from_reply.json()[0]["id"], root_id);
+    }
+
+    #[tokio::test]
+    async fn a_reply_cannot_cross_into_another_room() {
+        let state = state("threads-cross");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+        let public = make_room(&router, &token).await;
+        let private = make_room(&router, &token).await;
+
+        let elsewhere = post_message(&router, &token, &private, "secret").await["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        // Filing a message in one room into a thread in another would put it
+        // in front of people who are not in the room it was posted to.
+        let response = request(
+            &router,
+            "POST",
+            &format!("/api/rooms/{public}/messages"),
+            Some(&token),
+            Some(serde_json::json!({
+                "content": "leaking",
+                "msgHash": hash('c'),
+                "parentMessageId": elsewhere,
+            })),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+
+        // And a parent that never existed is a 404, not a silent top-level post.
+        let response = request(
+            &router,
+            "POST",
+            &format!("/api/rooms/{public}/messages"),
+            Some(&token),
+            Some(serde_json::json!({
+                "content": "orphan",
+                "msgHash": hash('d'),
+                "parentMessageId": "msg_1749652746620_ffffffff",
+            })),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_root_keeps_its_thread_together() {
+        let state = state("threads-tombstone");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+        let room = make_room(&router, &token).await;
+
+        let root_id = post_message(&router, &token, &room, "root").await["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        post_reply(&router, &token, &room, &root_id, "still here").await;
+
+        request(
+            &router,
+            "DELETE",
+            &format!("/api/messages/{root_id}"),
+            Some(&token),
+            None,
+        )
+        .await;
+
+        // Destroying the first message of a thread must not orphan what was
+        // said under it; the tombstone stays at the head so the client can
+        // render "message deleted" above the replies rather than a list with
+        // no beginning.
+        let thread = request(
+            &router,
+            "GET",
+            &format!("/api/messages/{root_id}/thread"),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(thread.status, StatusCode::OK);
+        let thread = thread.json();
+        let thread = thread.as_array().unwrap();
+        assert_eq!(thread.len(), 2);
+        assert_eq!(thread[0]["isDeleted"], true);
+        assert_eq!(thread[0]["content"], "");
+        assert_eq!(thread[1]["content"], "still here");
+    }
+
+    #[tokio::test]
+    async fn a_thread_is_not_a_way_into_a_room() {
+        let state = state("threads-access");
+        let alice = wallet("alice");
+        let mallory = wallet("mallory");
+        let alice_token = register(&state, &alice, "alice");
+        let mallory_token = register(&state, &mallory, "mallory");
+        let router = build(state);
+        let room = make_room(&router, &alice_token).await;
+
+        let root_id = post_message(&router, &alice_token, &room, "internal").await["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let response = request(
+            &router,
+            "GET",
+            &format!("/api/messages/{root_id}/thread"),
+            Some(&mallory_token),
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

@@ -166,6 +166,7 @@ other string → passed through (`"loopback"`, a CIDR, …).
 | `FN_SERVER_PORT` | no | Default 9081; invalid/out-of-range falls back to 9081 |
 | `CLIENT_URL` | no | Extra CORS origin |
 | `VITE_CHAIN_ID` | no | **Selects the chain the whole deployment runs on** — `25` (Cronos mainnet, the default when unset) or `338` (Cronos testnet). Drives both `GET /api/blockchain/info` and `GET /api/networks`, which serves exactly this one network: the chain is not a client-side preference, so the wallet cannot be pointed at a chain the server does not anchor to. An unknown or unparseable value falls back to mainnet rather than leaving the wallet without an RPC. |
+| `VITE_FRUITNATION_ADMIN` | no | Comma-separated wallets that administer this server (§6.14). Configuration, not data: no endpoint grants or revokes the role. Unset means **nobody** is an admin and every `/api/admin/*` route 403s — the safe direction, since the opposite default would hand a fresh deployment's first visitor the ability to delete every room on it. The parsed list is logged at startup, which is the only way to catch a typo. |
 | `VITE_CHAIN_RPC`, `VITE_CHAIN_NAME`, `VITE_CHAIN_EXPLORER`, `VITE_FRUITNATION_HASH_CRO` | no | Echoed by `GET /api/blockchain/info`. Each defaults to the value carried by the chain `VITE_CHAIN_ID` selected, so a deployment only sets these to override one detail — its own RPC endpoint, say — without leaving the chain. |
 
 ---
@@ -1030,8 +1031,50 @@ emitted (the creator's socket subscription set is not refreshed — the client m
 | 400 | `Validation failed` envelope |
 | 500 | `{"message":"Failed to create room"}` |
 
-Note: rooms are **not** publicly discoverable. Membership only arrives via creation or an
-accepted invitation.
+Note: channels are **not** publicly discoverable. Membership only arrives via creation or an
+accepted invitation. Direct messages are the exception, and have their own endpoint below.
+
+Every `Room` carries `kind`: `"channel"`, `"dm"` or `"group_dm"`.
+
+#### 6.5.1a `POST /api/rooms/dm` — Auth: **yes**
+
+Open a direct message, or return the one that already exists.
+
+```json
+{ "walletAddress": "0x…" }
+{ "walletAddresses": ["0x…", "0x…"] }
+```
+
+Both forms are accepted and merged; the caller is always added. Responds with
+the **enriched** room (`RoomWithMembers`), not a bare one, because a DM has no
+name of its own and the client has to title it from the roster.
+
+**Idempotent by identity, not by convention.** The room is keyed on its member
+set — lowercased addresses, sorted, joined with `|`, behind a unique index — so
+this endpoint answers "the conversation between these people" rather than being
+a create call that happens to be safe to retry. "Alice messages Bob" and "Bob
+messages Alice" name the same room, in either order, in any casing, and two
+devices pressing it in the same millisecond land in one room because the index
+refuses the loser.
+
+Naming only yourself is allowed and gives the private notebook people keep
+links in — the same mechanism with a one-element set.
+
+Recipients must have signed in before (404 otherwise). A DM to an address
+nobody has ever used is a room with a member the roster cannot render, and the
+mistake is far more often a mistyped address than a genuine invitation to
+somebody who has not arrived. Channel invitations remain the way to reach them.
+
+Capped at 9 participants — every member of a DM is also an admin of it (see
+below), so the DM ceiling is the admin ceiling.
+
+**What a DM refuses.** `PATCH` (rename), `/invite`, `/kick`, `/leave`,
+`/admins` — all 400, because the verb does not apply rather than because the
+caller lacks permission. A DM has no name anybody chose, no roster to curate,
+and no hierarchy: **every member is an admin**, which is how a two-person
+conversation avoids having an owner who could lock the other out. `/hide` is
+the reversible answer offered instead of leaving; leaving would strand a member
+outside a room still keyed to their name, which they could then never re-open.
 
 #### 6.5.2 `GET /api/rooms` — Auth: **yes**
 
@@ -1556,6 +1599,8 @@ loser refetches `GET /api/rooms/:roomId` for the new `currentKeyVersion` and ret
 | `content` | **required**, 1–5000 chars (pre-trim), then trimmed. For encrypted messages this is the base64/hex ciphertext |
 | `msgHash` | **required**, `/^[a-f0-9]{64}$/` — SHA-256 of the `content` as sent (i.e. of the ciphertext for encrypted messages) |
 | `isEncrypted` | optional boolean, default `false` |
+| `parentMessageId` | optional — post into a thread. See §6.10.1a |
+| `mentions` | optional array of wallet addresses this message names. See §6.13.1 |
 | `iv` | optional, `/^[a-f0-9]{32}$/` or `null` |
 | `hmac` | optional, `/^[a-f0-9]{64}$/` or `null` |
 | `encVer` | optional int 1–2, stored as `encVer ?? 1` |
@@ -1607,6 +1652,34 @@ Blocking note: **blocked users can still post.** The blocker simply never receiv
 
 Side effect after responding: `notifyRoom(roomId, {"type":"new_message","roomId":…})`.
 
+#### 6.10.1a Threads
+
+A reply carries `parentMessageId`, and that field is **always the thread's
+root**, never the message directly replied to. Replying to a reply joins the
+same thread rather than nesting a second level, so a thread is one flat list
+and rendering it never walks a tree of unbounded depth. The server does that
+flattening on the way in.
+
+Two refusals: a parent that does not exist (or was deleted) is 404, and a
+parent in a **different room** is 400 — accepting one would file a message
+posted to room A into a thread in room B, where members of B would read it
+without being in A.
+
+`GET /api/messages/:messageId/thread` returns the thread, root first, replies
+in order. The id may name the root **or any reply in it**, so a client holding
+only a reply (from `/sync`, say) can open the thread without first working out
+where it starts. Membership is checked against the room the thread lives in — a
+thread is not a way into a room.
+
+A **deleted root keeps its thread**: the tombstone stays at the head of the
+list, so destroying the first message does not orphan the twenty replies under
+it. The client renders "message deleted" above them rather than a list with no
+beginning.
+
+Replies still travel through `/sync` — they have to, or an offline client would
+lose them — which is what lets a client keep its own reply counts exact. See
+the note on `replyCount` below.
+
 #### 6.10.2 `GET /api/rooms/:roomId/messages` — Auth: **yes, member-only**
 
 Full/backfill load. Query params (`querySchemas.pagination`, §3.3):
@@ -1616,9 +1689,25 @@ Full/backfill load. Query params (`querySchemas.pagination`, §3.3):
 | `since` | ms epoch string | none | `message_timestamp >= since`. A parsed `0` disables the filter |
 | `before` | ms epoch string | none | `message_timestamp < before` (backward pagination). A parsed `0` disables the filter |
 | `limit` | string | `50` | clamped to `[1, 100]`; garbage → `50` |
+| `includeReplies` | `true`/`1`/`yes` | off | Put thread replies back into the channel view |
+
+**Thread replies are excluded by default** — that is what threads are for: a
+twenty-message thread costs the channel one line, not twenty. Each message that
+has replies instead carries `replyCount` and `lastReplyAt`, so the line it does
+cost says how much is under it. Both fields are **absent** (not `0`) when there
+are no replies, and absent from `/sync` entirely: `/sync` delivers the reply
+rows themselves, so a client folding the stream keeps its own count exact,
+whereas a server-side count computed against an unfiltered query would
+contradict the block-filtered rows that client actually received.
+
+`includeReplies=true` exists for a client with no thread UI at all: showing a
+complete conversation is better than showing a silently truncated one. The web
+client does not use it — it hides replies from the channel and folds them under
+their parent from the `/sync` stream instead, which is why opening a thread
+there costs no request.
 
 Query: `WHERE room_id = ? AND is_deleted = false [AND …] [AND sender_address NOT IN (blocked)]
-ORDER BY message_timestamp DESC LIMIT ?`, LEFT JOIN `users`. Then, **in application code**,
+ORDER BY message_timestamp DESC, msg_serial DESC LIMIT ?`, LEFT JOIN `users`. Then, **in application code**,
 rows with `msgType` in `{emoticon_add, emoticon_remove, delete_all}` are dropped, and the array
 is `.reverse()`d → returned **chronologically ascending**.
 
@@ -1709,9 +1798,17 @@ msgSerial = nextSerial(roomId);  iv = null;  hmac = null
 
 Side effect: `notifyRoom(roomId, {"type":"new_message","roomId":…})`.
 
-#### 6.10.5 `DELETE /api/rooms/:roomId/messages` — Auth: **yes, any member**
+#### 6.10.5 `DELETE /api/rooms/:roomId/messages` — Auth: **yes, room admin or server admin**
 
-Nuke the room's entire history. Any member may do this.
+Nuke the room's entire history.
+
+**Admins only** — a change from the reference, which allowed any member.
+Deleting a *single* message is still open to everybody in the room (§6.10.4):
+this is a forgetting-first product and a member should not have to ask the
+author. Erasing *everything* is a different act — it destroys other people's
+record of the conversation with one request and there is no undo — so it
+belongs to the role the room already has for irreversible things. Server
+admins (§6.14) pass this check too, on any room.
 
 Side effects (`storage.deleteAllMessages`), not transactional:
 
@@ -1972,6 +2069,104 @@ Typical flow: after rendering a `/sync` batch, POST the highest `msgSerial` seen
 
 ---
 
+### 6.13 Mentions (1)
+
+#### 6.13.1 `GET /api/mentions?limit=<n>` — Auth: **yes**
+
+Everything that named the caller, newest first, across every room they are
+**still in**. `limit` defaults to 50 and is clamped to 200.
+
+```json
+[{ "roomId": "room_…", "roomName": "engineering", "roomKind": "channel",
+   "isUnread": true, "message": { …a full Message… } }]
+```
+
+There is no write endpoint and no "mark as read": a mention is read when its
+room is read, which `POST /api/rooms/:id/read` already does. `isUnread` is
+derived by comparing the mention's `msg_serial` against that pointer, so the
+two can never disagree and opening a room costs no second write.
+
+Four filters, each load-bearing: the room must still be one the caller is in
+(leaving takes its mentions with it, rather than leaving entries that 403 when
+opened); the message must not be deleted; the sender must not be blocked; and
+self-mentions are dropped, because naming yourself is not mail.
+
+**How a mention is recorded.** On send and on edit, the server unions two
+sources and keeps only what resolves to a **member of that room**:
+
+* the `mentions` array on the request body — wallet addresses the client
+  declares. This is the only source available in an encrypted room, and the
+  only one that can carry a username containing a space or an emoji (both of
+  which `validate::username` allows). Declaring the addresses leaks nothing the
+  room does not already publish — the server knows exactly who is in every
+  room — while what stays private, the message itself, is untouched.
+* `@token` parsing of **plaintext** content, as a fallback for a client that
+  does not build the list.
+
+Neither is trusted: a declared address that is not a member resolves to
+nothing, exactly like an `@name` that matches nobody. Capped at 32 per message,
+because the mention list is the one part of a message whose cost is paid by
+other people's inboxes.
+
+`GET /api/rooms` additionally carries `mentionCount` per room — unread messages
+there that name the caller. A different number from `unreadCount`, and the one
+people actually triage by.
+
+---
+
+### 6.14 Server administration (7)
+
+Every route here requires the caller's wallet to appear in
+`VITE_FRUITNATION_ADMIN` (§1.9) — **except** `/api/admin/session`, which is
+answerable for anybody. 403 otherwise, never 404: hiding the routes would only
+mean an operator who mistyped their own address sees "not found" and looks in
+the wrong place.
+
+| Method | Path | Effect |
+|---|---|---|
+| `GET` | `/api/admin/session` | `{"isServerAdmin":bool}` — **any** signed-in caller |
+| `GET` | `/api/admin/overview` | Totals, plus the admin list the server parsed |
+| `GET` | `/api/admin/users` | Every account: room/message counts, suspension state |
+| `POST` | `/api/admin/users/:addr/suspend` | Suspend. Body: `{"reason":"…"}` (optional) |
+| `DELETE` | `/api/admin/users/:addr/suspend` | Reinstate |
+| `DELETE` | `/api/admin/users/:addr` | Remove from every room **and** suspend |
+| `GET` | `/api/admin/rooms` | Every room — **metadata only** |
+| `DELETE` | `/api/admin/rooms/:id` | Delete any room |
+
+**Suspension is the closest thing this server has to session revocation.** A
+JWT is valid until it expires and carries no id to revoke, so the only place
+the decision can be re-made is when the token is presented — which the
+`AuthUser` extractor does on every authenticated request, against an in-memory
+set fronting `suspended_users`. A suspended caller's *existing* token stops
+working immediately, and signing in again is refused too. The set is normally
+empty, so the cost is a hash lookup rather than a query.
+
+**Removal stops short of deletion.** `DELETE /api/admin/users/:addr` drops
+memberships, admin roles, wrapped room keys, invitations and read pointers,
+clears the published encryption key, flags every affected room for re-keying
+(the departed member may still hold the current one), and suspends the account.
+It does **not** touch their messages: every message carries its sender's
+address, and removing the profile would turn a year of history into
+unattributed text.
+
+**An admin cannot read a conversation they are not in.** No endpoint here
+returns message content. Half the rooms on a server like this are end-to-end
+encrypted and could not be read even with a route for it; giving the other half
+a side door would make a room's privacy depend on which checkbox was ticked
+when it was made. An admin who needs to be in a room can be invited, which
+everybody already there can see.
+
+An admin also passes the **room-level** admin check on any room (rename, kick,
+promote, delete, purge). That is what makes a room whose last admin has left
+recoverable rather than permanent.
+
+Two things an admin cannot do to themselves or each other: suspend, and remove.
+The admin list is a config file, and that is where an admin is removed — a
+request that could lock the only administrator out of their own server is not a
+state this server should be able to reach.
+
+---
+
 ## 7. Authentication Flow (End to End)
 
 ### 7.1 Challenge → sign → login
@@ -2003,7 +2198,7 @@ Client                                        Server
   │                                             │  sign JWT (HS256, 30d)
   │◀────────────────────────────────────────────│
   │   { user, token, fruitnationWallet,         │
-  │     encryptionSalt }                        │
+  │     encryptionSalt, isServerAdmin }         │
 ```
 
 Signing detail: `ethers.verifyMessage(message, signature)` = EIP-191 `personal_sign` over the

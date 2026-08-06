@@ -443,6 +443,40 @@ pub fn unread(p: &UnreadProps) -> Html {
 }
 
 #[derive(Properties, PartialEq)]
+pub struct MentionBadgeProps {
+    pub count: u32,
+}
+
+/// The "@" chip that says some of the unread is addressed to you.
+///
+/// Deliberately separate from [`Unread`] rather than folded into it. They
+/// answer different questions — "is there anything new here" and "is any of it
+/// mine" — and it is the second one people triage by, so it has to survive
+/// being next to a count of forty. Rendering it as a different shape, not a
+/// differently-coloured number, is what makes that work at a glance.
+#[function_component(MentionBadge)]
+pub fn mention_badge(p: &MentionBadgeProps) -> Html {
+    if p.count == 0 {
+        return html! {};
+    }
+    let label = if p.count == 1 {
+        "1 message mentions you".to_owned()
+    } else {
+        format!("{} messages mention you", p.count)
+    };
+    html! {
+        <span class="fn-mention-badge" aria-label={label.clone()} title={label}>
+            { "@" }
+            if p.count > 1 {
+                <span class="fn-mention-badge__count">
+                    { crate::format::unread_badge(p.count) }
+                </span>
+            }
+        </span>
+    }
+}
+
+#[derive(Properties, PartialEq)]
 pub struct SpinnerProps {
     #[prop_or_default]
     pub large: bool,

@@ -721,6 +721,21 @@ fn render_modal(store: &Store, route: &Route, on_navigate: &Callback<Route>) -> 
                 }}
             />
         },
+        Some(Modal::NewDirectMessage) => html! {
+            <dialogs::NewDirectMessage
+                on_close={close.clone()}
+                on_navigate={on_navigate.clone()}
+            />
+        },
+        Some(Modal::Mentions) => html! {
+            <dialogs::Mentions
+                on_close={close.clone()}
+                on_navigate={on_navigate.clone()}
+            />
+        },
+        Some(Modal::AdminConsole) => html! {
+            <dialogs::AdminConsole on_close={close.clone()} />
+        },
         Some(Modal::Invite(id)) => html! {
             <dialogs::Invite room_id={id} on_close={close} />
         },

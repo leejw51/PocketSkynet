@@ -2,13 +2,22 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::models::{iso_ms, HiddenRoom, InvitationView, Room, RoomMemberWithUser, User};
+use super::models::{
+    iso_ms, HiddenRoom, InvitationView, Room, RoomMemberWithUser, User, ROOM_KIND_CHANNEL,
+    ROOM_KIND_DM, ROOM_KIND_GROUP_DM,
+};
 use super::now_ms;
 use crate::error::ApiResult;
 
 /// Hard ceiling on admins per room, inherited from the reference. One admin is
 /// the floor, enforced by the demote and leave paths.
 pub const MAX_ADMINS: i64 = 9;
+
+/// Every column [`Room::from_row`] reads, in one place so a query and the
+/// reader cannot drift — the `kind` column was added to both at once and the
+/// next one will be too.
+pub const ROOM_COLUMNS: &str =
+    "id, name, description, current_key_version, key_rotation_pending, kind, created_at";
 
 // ----------------------------------------------------------------- rooms ---
 
@@ -29,9 +38,9 @@ pub fn create_room(
 
     tx.execute(
         "INSERT INTO rooms (id, name, description, current_key_version,
-                            key_rotation_pending, created_at)
-         VALUES (?1, ?2, ?3, 1, 0, ?4)",
-        params![id, name, description, now],
+                            key_rotation_pending, kind, dm_key, created_at)
+         VALUES (?1, ?2, ?3, 1, 0, ?4, NULL, ?5)",
+        params![id, name, description, ROOM_KIND_CHANNEL, now],
     )?;
     tx.execute(
         "INSERT INTO room_admins (room_id, wallet_address, created_at) VALUES (?1, ?2, ?3)",
@@ -48,8 +57,7 @@ pub fn create_room(
     )?;
 
     let room = tx.query_row(
-        "SELECT id, name, description, current_key_version, key_rotation_pending, created_at
-         FROM rooms WHERE id = ?1",
+        &format!("SELECT {ROOM_COLUMNS} FROM rooms WHERE id = ?1"),
         params![id],
         Room::from_row,
     )?;
@@ -60,13 +68,139 @@ pub fn create_room(
 pub fn get_room(conn: &Connection, room_id: &str) -> ApiResult<Option<Room>> {
     let room = conn
         .query_row(
-            "SELECT id, name, description, current_key_version, key_rotation_pending, created_at
-             FROM rooms WHERE id = ?1",
+            &format!("SELECT {ROOM_COLUMNS} FROM rooms WHERE id = ?1"),
             params![room_id],
             Room::from_row,
         )
         .optional()?;
     Ok(room)
+}
+
+// ------------------------------------------------------- direct messages ---
+
+/// The identity of a DM: its member set, as lowercased addresses sorted and
+/// joined with `|`.
+///
+/// Sorting is the whole mechanism. "Alice messages Bob" and "Bob messages
+/// Alice" have to name the same conversation, and the only way to guarantee
+/// that without a lookup is to make the name independent of who asked — so the
+/// set is canonicalised before it is ever written or compared. Deduplicating
+/// first means naming yourself twice cannot manufacture a distinct key for the
+/// same set of people.
+///
+/// Addresses are already checksummed [`WalletAddress`] strings by the time
+/// they reach here; lowercasing anyway costs nothing and makes the key immune
+/// to a caller that ever hands over an unnormalised address.
+pub fn dm_key(members: &[String]) -> String {
+    let mut keys: Vec<String> = members.iter().map(|m| m.to_lowercase()).collect();
+    keys.sort();
+    keys.dedup();
+    keys.join("|")
+}
+
+/// Find the DM for exactly this member set, if it has been opened before.
+pub fn find_dm(conn: &Connection, key: &str) -> ApiResult<Option<Room>> {
+    let room = conn
+        .query_row(
+            &format!("SELECT {ROOM_COLUMNS} FROM rooms WHERE dm_key = ?1"),
+            params![key],
+            Room::from_row,
+        )
+        .optional()?;
+    Ok(room)
+}
+
+/// Open a DM between `members`, or return the one that already exists.
+///
+/// Every member is seated as both a member *and* an admin. That looks
+/// over-generous next to a channel, where admin is a role somebody grants, but
+/// a DM has no roster to manage and no hierarchy to express: the only verbs
+/// admin gates here are deleting the conversation and purging its history, and
+/// both of those are things either participant is entitled to do to a
+/// conversation that is half theirs. The alternative — a DM whose creator is
+/// its admin — would mean the person who said hello first owns the record.
+///
+/// Idempotence is enforced by the unique index on `dm_key`, not by the check
+/// at the top: two requests racing to open the same DM both find nothing, and
+/// the loser's INSERT is what refuses. It re-reads instead of failing, so the
+/// caller sees one room either way.
+pub fn create_dm(conn: &mut Connection, id: &str, members: &[String]) -> ApiResult<Room> {
+    let key = dm_key(members);
+    if let Some(existing) = find_dm(conn, &key)? {
+        return Ok(existing);
+    }
+
+    let kind = if key.split('|').count() <= 2 {
+        ROOM_KIND_DM
+    } else {
+        ROOM_KIND_GROUP_DM
+    };
+    // A DM's name is never shown — clients title it with the other members —
+    // but the column is NOT NULL and a raw fallback is better than an empty
+    // string in whatever surface forgets to derive one.
+    let name = if kind == ROOM_KIND_DM {
+        "Direct message"
+    } else {
+        "Group message"
+    };
+
+    let now = now_ms();
+    let tx = conn.transaction()?;
+
+    let inserted = tx.execute(
+        "INSERT INTO rooms (id, name, description, current_key_version,
+                            key_rotation_pending, kind, dm_key, created_at)
+         VALUES (?1, ?2, NULL, 1, 0, ?3, ?4, ?5)
+         -- The WHERE clause is not decoration: `idx_rooms_dm_key` is a partial
+         -- index, and SQLite only matches a conflict target to one when the
+         -- target repeats its predicate. Without it this is a parse error, not
+         -- a silently ineffective clause.
+         ON CONFLICT (dm_key) WHERE dm_key IS NOT NULL DO NOTHING",
+        params![id, name, kind, key, now],
+    )?;
+    if inserted == 0 {
+        // Lost the race. The winner's room is the answer.
+        tx.rollback()?;
+        return find_dm(conn, &key)?.ok_or_else(|| {
+            crate::error::ApiError::Internal(anyhow::anyhow!("direct message vanished after race"))
+        });
+    }
+
+    for member in dedup_sorted(members) {
+        tx.execute(
+            "INSERT INTO room_members (room_id, user_address, joined_at) VALUES (?1, ?2, ?3)",
+            params![id, member, now],
+        )?;
+        tx.execute(
+            "INSERT INTO room_admins (room_id, wallet_address, created_at) VALUES (?1, ?2, ?3)",
+            params![id, member, now],
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO room_serials (room_id, next_serial) VALUES (?1, ?2)",
+        params![id, now],
+    )?;
+
+    let room = tx.query_row(
+        &format!("SELECT {ROOM_COLUMNS} FROM rooms WHERE id = ?1"),
+        params![id],
+        Room::from_row,
+    )?;
+    tx.commit()?;
+    Ok(room)
+}
+
+/// The member list in canonical order, deduplicated — the *checksummed*
+/// addresses, unlike [`dm_key`], because these are what gets stored and shown.
+fn dedup_sorted(members: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<String> = members
+        .iter()
+        .filter(|m| seen.insert(m.to_lowercase()))
+        .cloned()
+        .collect();
+    out.sort();
+    out
 }
 
 pub fn update_room_name(conn: &Connection, room_id: &str, name: &str) -> ApiResult<Option<Room>> {
@@ -436,6 +570,92 @@ mod tests {
             let room = get_room(conn, ROOM).unwrap().unwrap();
             assert_eq!(room.current_key_version, 1);
             assert!(!room.key_rotation_pending);
+            assert_eq!(room.kind, ROOM_KIND_CHANNEL);
+            assert!(!room.is_direct());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_dm_key_names_the_member_set_and_not_the_caller() {
+        // The property the whole DM design rests on: whoever asks first, and
+        // in whatever order they name the participants, the key is the same.
+        assert_eq!(
+            dm_key(&[ALICE.into(), BOB.into()]),
+            dm_key(&[BOB.into(), ALICE.into()])
+        );
+        // Case cannot fork it either — a checksummed address and a lowercased
+        // one are the same person.
+        assert_eq!(
+            dm_key(&[ALICE.to_uppercase(), BOB.into()]),
+            dm_key(&[ALICE.into(), BOB.into()])
+        );
+        // Naming yourself twice is the same one-person set as naming yourself
+        // once, so it cannot be used to open a second private room.
+        assert_eq!(
+            dm_key(&[ALICE.into(), ALICE.into()]),
+            dm_key(&[ALICE.into()])
+        );
+        // Different sets stay different.
+        assert_ne!(dm_key(&[ALICE.into()]), dm_key(&[ALICE.into(), BOB.into()]));
+    }
+
+    #[test]
+    fn opening_the_same_dm_twice_returns_one_room() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            upsert_user(conn, ALICE, "alice", None, None).unwrap();
+            upsert_user(conn, BOB, "bob", None, None).unwrap();
+
+            let members = vec![ALICE.to_owned(), BOB.to_owned()];
+            let first = create_dm(conn, "room_dm_1", &members).unwrap();
+            // Reversed, which is exactly what happens when Bob replies by
+            // opening the conversation from his side.
+            let second = create_dm(conn, "room_dm_2", &[BOB.to_owned(), ALICE.to_owned()]).unwrap();
+
+            assert_eq!(first.id, second.id, "a DM is its member set, not its id");
+            assert_eq!(first.kind, ROOM_KIND_DM);
+            assert!(first.is_direct());
+
+            // Both sides are seated, and both can administer it: a DM has no
+            // owner, so neither participant can lock the other out of it.
+            for who in [ALICE, BOB] {
+                assert!(is_member(conn, &first.id, who).unwrap());
+                assert!(is_admin(conn, &first.id, who).unwrap());
+            }
+
+            // The loser's id was never used, so no orphan room was left.
+            assert!(get_room(conn, "room_dm_2").unwrap().is_none());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn three_people_open_a_group_dm() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            const CAROL: &str = "0xcccccccccccccccccccccccccccccccccccccccc";
+            for (address, name) in [(ALICE, "alice"), (BOB, "bob"), (CAROL, "carol")] {
+                upsert_user(conn, address, name, None, None).unwrap();
+            }
+
+            let room = create_dm(
+                conn,
+                "room_dm_group",
+                &[CAROL.to_owned(), ALICE.to_owned(), BOB.to_owned()],
+            )
+            .unwrap();
+            assert_eq!(room.kind, ROOM_KIND_GROUP_DM);
+            assert!(room.is_direct());
+            assert_eq!(list_members(conn, &room.id).unwrap().len(), 3);
+
+            // A group DM with a different set is a different conversation,
+            // not the same one with someone added.
+            let pair =
+                create_dm(conn, "room_dm_pair", &[ALICE.to_owned(), BOB.to_owned()]).unwrap();
+            assert_ne!(pair.id, room.id);
             Ok(())
         })
         .unwrap();

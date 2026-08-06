@@ -8,7 +8,7 @@
 use rusqlite::Connection;
 
 use super::models::{HiddenRoomWithRoom, RoomWithMembers};
-use super::{keys, messages, rooms};
+use super::{keys, mentions, messages, rooms};
 use crate::error::ApiResult;
 
 /// Build the enriched room view.
@@ -54,6 +54,10 @@ pub fn room_detail(
         has_encryption,
         unread_count,
         last_read_serial,
+        // Stamped by `visible_rooms`, which can answer for every room in one
+        // query rather than once per room. Nothing else reports it, for the
+        // same reason nothing else reports `unreadCount`.
+        mention_count: None,
     }))
 }
 
@@ -65,9 +69,16 @@ pub fn room_detail(
 /// would immediately override.
 pub fn visible_rooms(conn: &Connection, viewer: &str) -> ApiResult<Vec<RoomWithMembers>> {
     let ids = rooms::visible_room_ids(conn, viewer)?;
+    // One grouped query for every room's mention badge, not one per room:
+    // this endpoint is the client's most frequent request, and a per-room
+    // count would multiply its cost by the size of the room list.
+    let mentions: std::collections::HashMap<String, i64> =
+        mentions::unread_counts(conn, viewer)?.into_iter().collect();
+
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
-        if let Some(detail) = room_detail(conn, &id, viewer, true)? {
+        if let Some(mut detail) = room_detail(conn, &id, viewer, true)? {
+            detail.mention_count = Some(mentions.get(&id).copied().unwrap_or(0));
             out.push(detail);
         }
     }
@@ -121,6 +132,8 @@ mod tests {
                 hmac: None,
                 enc_ver: 1,
                 key_version: 1,
+                parent_message_id: None,
+                mentions: Vec::new(),
             },
         )
         .unwrap();
