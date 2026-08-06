@@ -384,15 +384,16 @@ async fn remove(
         })
         .await?;
 
-    state
-        .db
-        .call(move |conn| rooms::delete_room(conn, &room_id))
-        .await?;
+    // Not just the rows: destroying a room destroys what it was showing and
+    // what was attached to it, on disk as well (`crate::purge`). Anything the
+    // bytes are still needed for elsewhere — another room's copy, somebody's
+    // avatar — survives; nothing that was only this room's does.
+    let purged = crate::purge::destroy_room(&state, &room_id, Some(&caller)).await?;
 
     let _ = state.log.append_audit(
         "room_deleted",
         Some(&caller),
-        serde_json::json!({ "roomId": room.as_str() }),
+        serde_json::json!({ "roomId": room.as_str(), "purged": purged }),
     );
 
     // Every former member's subscription set has to shed the room, and their
@@ -413,7 +414,17 @@ async fn remove(
         }
     }
 
-    Ok(super::message("Room deleted successfully"))
+    // The counts ride along so a client can say what was erased rather than
+    // only that something was. Additive to the `{message}` shape every other
+    // command endpoint returns, so an older client ignores them.
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(serde_json::json!({
+            "message": "Room deleted successfully",
+            "purged": purged,
+        })),
+    )
+        .into_response())
 }
 
 /// `POST /api/rooms/{roomId}/leave`.

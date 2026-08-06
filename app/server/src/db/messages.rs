@@ -89,6 +89,10 @@ pub struct NewMessage {
     /// message that failed to insert, nor a message arrive in a room without
     /// the inbox entry that was supposed to accompany it.
     pub mentions: Vec<String>,
+    /// Hosted media (`data/images/`) this message shows, as `{sha256}.{ext}`
+    /// names. Same transaction, same reason — a reference that failed to land
+    /// is a file a room purge would leave behind (`db/media.rs`).
+    pub media: Vec<String>,
 }
 
 pub fn create_message(conn: &mut Connection, new: NewMessage) -> ApiResult<Message> {
@@ -123,6 +127,7 @@ pub fn create_message(conn: &mut Connection, new: NewMessage) -> ApiResult<Messa
     )?;
 
     super::mentions::record(&tx, &new.id, &new.room_id, serial, &new.mentions)?;
+    super::media::record(&tx, &new.id, &new.room_id, &new.media)?;
 
     let message = read_message(&tx, &new.id, true)?
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("message vanished after insert")))?;
@@ -549,6 +554,7 @@ pub fn update_message(
     room_id: &str,
     edit: MessageEdit,
     mentions: &[String],
+    media: &[String],
 ) -> ApiResult<Option<Message>> {
     let tx = conn.transaction()?;
     let now = now_ms();
@@ -581,6 +587,7 @@ pub fn update_message(
     let message = read_message(&tx, id, true)?;
     if let Some(m) = &message {
         super::mentions::replace(&tx, id, room_id, m.msg_serial, mentions)?;
+        super::media::replace(&tx, id, room_id, media)?;
         // An edit that turned encrypted also *unindexes* — the index must
         // never remember a plaintext the message no longer shows.
         crate::search::store::reindex_message(
@@ -620,6 +627,9 @@ pub fn soft_delete_message(conn: &mut Connection, id: &str, room_id: &str) -> Ap
         // content, and the content is gone. Leaving the row would keep a
         // deleted message in somebody's inbox forever.
         super::mentions::forget(&tx, id)?;
+        // Same argument for the pictures it was showing: a tombstone shows
+        // nothing, so it must stop being a reason to keep bytes alive.
+        super::media::forget(&tx, id)?;
     }
     tx.commit()?;
     Ok(changed > 0)
@@ -822,6 +832,7 @@ mod tests {
                 key_version: 1,
                 parent_message_id: None,
                 mentions: Vec::new(),
+                media: Vec::new(),
             },
         )
         .unwrap()
@@ -895,6 +906,7 @@ mod tests {
                             key_version: 1,
                             parent_message_id: None,
                             mentions: Vec::new(),
+                            media: Vec::new(),
                         },
                     )
                 })
@@ -1043,6 +1055,7 @@ mod tests {
                     key_version: 1,
                 },
                 &[],
+                &[],
             )
             .unwrap()
             .unwrap();
@@ -1078,6 +1091,7 @@ mod tests {
                     enc_ver: 2,
                     key_version: 3,
                 },
+                &[],
                 &[],
             )
             .unwrap()
@@ -1265,6 +1279,7 @@ mod tests {
                     key_version: 1,
                     parent_message_id: None,
                     mentions: Vec::new(),
+                    media: Vec::new(),
                 },
             )
             .unwrap();

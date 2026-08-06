@@ -727,6 +727,10 @@ pub fn chat(p: &ChatProps) -> Html {
                 } else {
                     crate::crypto::plaintext_body(&text)
                 };
+                // Re-declared from the edited text, not carried over: an edit
+                // that removes a picture has to stop claiming the room shows
+                // it, or the bytes would outlive every message naming them.
+                let body = body.showing(crate::media::hosted_names(&text));
                 match store.client.edit_message(&id, &body).await {
                     Ok(m) => store.dispatch(Action::Sync(room_id, vec![m])),
                     Err(e) => toast::error(
@@ -1386,6 +1390,7 @@ fn room_menu(
                 body: body.clone(),
                 confirm_label: verb.clone(),
                 action: action.clone(),
+                alternative: None,
             })));
             open.set(false);
         });
@@ -1434,11 +1439,20 @@ fn room_menu(
             // DM still keyed to their name, which they could then never
             // re-open. Hiding, below, is the reversible answer for both.
             if !direct {
+                // An admin's exit asks a second question — see
+                // `ConfirmAction::ExitAsAdmin`. The first dialog says so, so
+                // that "Leave" is never a button whose consequences arrive
+                // unannounced.
                 { confirm(t(lang, Key::leave_room), false,
                           t(lang, Key::leave_room_title).replace("{name}", &name),
-                          t(lang, Key::leave_room_body).to_owned(),
+                          t(lang, if is_admin { Key::leave_room_admin_body } else { Key::leave_room_body }).to_owned(),
                           t(lang, Key::leave_room).to_owned(),
-                          ConfirmAction::LeaveRoom(id.clone()), open.clone()) }
+                          if is_admin {
+                              ConfirmAction::ExitAsAdmin(id.clone())
+                          } else {
+                              ConfirmAction::LeaveRoom(id.clone())
+                          },
+                          open.clone()) }
             }
             { confirm(t(lang, Key::hide_room), false,
                       t(lang, Key::hide_room_title).replace("{name}", &name),

@@ -16,6 +16,7 @@ pub mod http3;
 pub mod hub;
 pub mod jsonl;
 pub mod payment;
+pub mod purge;
 pub mod ratelimit;
 pub mod routes;
 pub mod search;

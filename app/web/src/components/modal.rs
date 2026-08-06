@@ -289,6 +289,14 @@ pub struct ConfirmProps {
     /// (and to abort) when the dialog shows the thing itself.
     #[prop_or_default]
     pub quote: Option<String>,
+    /// A second, non-destructive way forward, e.g. "Just leave" beside
+    /// "Destroy room". Present only when both are real answers to the same
+    /// question; a dialog with two verbs and no clear default is a dialog
+    /// people dismiss.
+    #[prop_or_default]
+    pub alternative_label: Option<String>,
+    #[prop_or_default]
+    pub on_alternative: Option<Callback<()>>,
 }
 
 /// A destructive confirmation.
@@ -311,6 +319,21 @@ pub fn confirm_dialog(p: &ConfirmProps) -> Html {
         let on_cancel = p.on_cancel.clone();
         Callback::from(move |_: ()| on_cancel.emit(()))
     };
+    // Between Cancel and the destructive verb, and styled as neither: it is a
+    // real action, so not `--quiet` like a menu item, and it is not the one
+    // being warned about, so nothing red about it.
+    let alternative = match (&p.alternative_label, &p.on_alternative) {
+        (Some(label), Some(cb)) => {
+            let cb = cb.clone();
+            let onclick = Callback::from(move |_: MouseEvent| cb.emit(()));
+            html! {
+                <button type="button" class="topcoat-button" disabled={p.busy} {onclick}>
+                    { label }
+                </button>
+            }
+        }
+        _ => Html::default(),
+    };
 
     html! {
         <Modal
@@ -325,6 +348,7 @@ pub fn confirm_dialog(p: &ConfirmProps) -> Html {
                         <button type="button" class="topcoat-button" disabled={p.busy} onclick={cancel}>
                             { t(lang, Key::cancel) }
                         </button>
+                        { alternative }
                         <BusyButton
                             label={p.confirm_label.clone()}
                             // `--cta` carries the family geometry (radius,

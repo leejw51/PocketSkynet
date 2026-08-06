@@ -1146,13 +1146,38 @@ transaction.
 
 | Status | Body |
 |---|---|
-| 200 | `{"message":"Room deleted successfully"}` |
+| 200 | `{"message":"Room deleted successfully","purged":{"attachments":2,"media":1,"uploads":0,"failed":0}}` |
 | 403 | `{"message":"Only room admins can delete the room"}` |
 | 404 | `{"message":"Room not found"}` |
 | 500 | `{"message":"Failed to delete room"}` |
 
 No WebSocket event is emitted — other members' clients discover the deletion on their next
 `GET /api/rooms`, and their `/sync` calls start returning 403.
+
+**Destroying a room destroys its bytes** (this server; the reference deleted rows only).
+Deleting rows leaves the files on disk, and a file under `data/files/` or `data/images/` is
+named by the SHA-256 of its content and served to anyone holding the URL — so a room deleted
+only in the database is still readable by exactly the people a deletion is meant to cut off.
+`crate::purge` therefore runs gather → delete → unlink:
+
+1. Collect, while the rows still name them: the room's attachment `stored_name`s, the media it
+   shows (§6.10.1b), and the `temp_name` of every in-flight upload session aimed at it.
+2. Delete the room (one transaction, FK cascade, search index) and those upload sessions.
+3. Unlink each collected path **that nothing surviving still references**. For an attachment
+   that means no other `files` row names those bytes; for media it means no `message_media`
+   row, no plaintext message, no `profile_image`, and no knowledge note does. Storage is
+   content-addressed and therefore shared, so a picture also posted in another room, or in use
+   as somebody's avatar, is left exactly where it is.
+
+`purged` counts what was unlinked. `failed` counts paths that could not be removed (a
+read-only disk, say); it is reported rather than raised, because the room is already gone by
+then and a 500 would claim otherwise. A path already missing counts as removed.
+
+**Residue, stated rather than hidden.** A picture named only by an *encrypted* message in
+another room, sent before `message_media` existed, is invisible to step 3 and will be
+unlinked — a broken thumbnail in that other room. The ranking is deliberate: destroying a room
+is a request to be forgotten, and the alternative is answering it with "no, because ciphertext
+somewhere might mention those bytes".
 
 #### 6.5.6 `POST /api/rooms/:roomId/leave` — Auth: **yes**
 
@@ -1601,6 +1626,7 @@ loser refetches `GET /api/rooms/:roomId` for the new `currentKeyVersion` and ret
 | `isEncrypted` | optional boolean, default `false` |
 | `parentMessageId` | optional — post into a thread. See §6.10.1a |
 | `mentions` | optional array of wallet addresses this message names. See §6.13.1 |
+| `media` | optional array of hosted filenames this message shows, ≤32. See §6.10.1b |
 | `iv` | optional, `/^[a-f0-9]{32}$/` or `null` |
 | `hmac` | optional, `/^[a-f0-9]{64}$/` or `null` |
 | `encVer` | optional int 1–2, stored as `encVer ?? 1` |
@@ -1679,6 +1705,29 @@ beginning.
 Replies still travel through `/sync` — they have to, or an offline client would
 lose them — which is what lets a client keep its own reply counts exact. See
 the note on `replyCount` below.
+
+#### 6.10.1b Declared media
+
+`media` is the list of server-hosted files a message shows — `{sha256}.{ext}`
+names under `data/images/`, the tail of the `/api/images/…` URL that `POST
+/api/images` returned. It is stored per message and per room (`message_media`),
+replaced on edit, and dropped when a message is deleted.
+
+It exists so that destroying a room can destroy the pictures the room showed
+(§6.5.5). Hosted media has no owning row of its own — the name *is* the content
+hash, and the only reference anywhere is a URL inside a message — so for a
+plaintext room the server can find them by reading the messages, and for an
+encrypted room it holds ciphertext and never can. Declaring the filename is
+what closes that gap, and it is the same bargain `mentions` makes: the name
+says "this room shows these bytes", which the URL already said to anyone
+holding it, while what stays private — the message — is untouched.
+
+Both sources are unioned, exactly as for mentions: what the client declares,
+plus what the server can parse out of plaintext for itself. Every entry must be
+a servable filename (64-hex stem, an extension from the media allow-list); a
+malformed one is a 400 on the `media` field rather than a silent drop, because
+a dropped declaration is a file that outlives the room that showed it. Capped
+at 32 per message.
 
 #### 6.10.2 `GET /api/rooms/:roomId/messages` — Auth: **yes, member-only**
 

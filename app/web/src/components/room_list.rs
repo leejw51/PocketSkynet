@@ -860,6 +860,7 @@ mod swipe {
             body: t(lang, Key::hide_room_body).into(),
             confirm_label: t(lang, Key::hide_room).into(),
             action: ConfirmAction::HideRoom(r.id().clone()),
+            alternative: None,
         }
     }
 
@@ -1265,7 +1266,7 @@ fn room_row(p: &RoomRowProps) -> Html {
                         <Unread count={unread} />
                     </div>
                 </div>
-                { drawer(lang, &store, r, &title, is_open, actions) }
+                { drawer(lang, &store, r, &title, is_admin, is_open, actions) }
             </div>
         </div>
     }
@@ -1287,6 +1288,7 @@ fn drawer(
     store: &Store,
     r: &RoomWithMembers,
     title: &str,
+    is_admin: bool,
     is_open: bool,
     actions: NodeRef,
 ) -> Html {
@@ -1327,11 +1329,20 @@ fn drawer(
             // offering it. Hiding, above, is the DM's answer and is
             // reversible.
             if !r.is_direct() {
+                // An admin gets the second question the menu asks — the
+                // gesture is a shortcut to the verb, not a different verb.
+                // Destroying is still never *reached* by swiping: it is only
+                // ever offered by a dialog already answered once.
                 { action(t(lang, Key::leave).to_owned(), icons::power(18), true, Confirm {
                     title: t(lang, Key::leave_room_title).replace("{name}", title),
-                    body: t(lang, Key::leave_room_body).into(),
+                    body: t(lang, if is_admin { Key::leave_room_admin_body } else { Key::leave_room_body }).into(),
                     confirm_label: t(lang, Key::leave_room).into(),
-                    action: ConfirmAction::LeaveRoom(r.id().clone()),
+                    action: if is_admin {
+                        ConfirmAction::ExitAsAdmin(r.id().clone())
+                    } else {
+                        ConfirmAction::LeaveRoom(r.id().clone())
+                    },
+                    alternative: None,
                 }) }
             }
         </div>

@@ -384,12 +384,14 @@ pub fn plaintext_body(content: &str) -> MessageBody {
         hmac: None,
         enc_ver: 1,
         key_version: 1,
-        // Threading and mentions are the caller's business — the composer
-        // knows which thread it is in and who the autocomplete resolved, and
-        // neither is derivable from the ciphertext this module produces. See
-        // `MessageBody::in_thread` / `naming`.
+        // Threading, mentions and hosted media are the caller's business — the
+        // composer knows which thread it is in, who the autocomplete resolved
+        // and what the plaintext was showing, and none of it is derivable from
+        // the ciphertext this module produces. See `MessageBody::in_thread` /
+        // `naming` / `showing`.
         parent_message_id: None,
         mentions: Vec::new(),
+        media: Vec::new(),
     }
 }
 
@@ -418,6 +420,7 @@ pub fn encrypted_body(
         key_version,
         parent_message_id: None,
         mentions: Vec::new(),
+        media: Vec::new(),
     })
 }
 

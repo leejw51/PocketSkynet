@@ -262,6 +262,32 @@ CREATE TABLE IF NOT EXISTS message_mentions (
 CREATE INDEX IF NOT EXISTS idx_mentions_user
     ON message_mentions (mentioned_address, msg_serial DESC);
 
+-- Which hosted images and videos a message points at, so destroying a room can
+-- destroy the bytes with it (`db/media.rs`).
+--
+-- Media under `data/images/` has no owning row of its own — it is named by the
+-- SHA-256 of its content and referenced by a URL somebody pasted into a
+-- message. Without this table the only way to answer "what is this room
+-- showing" is to read the messages, which works for a plaintext room and is
+-- impossible for an encrypted one. So the reference is recorded the way a
+-- mention is: extracted from plaintext when there is plaintext, declared by
+-- the client when there is not. It names a file, never a caption or a URL, so
+-- an encrypted room's declaration says only "this room shows these bytes" —
+-- which the bytes' own URL already said to anyone holding it.
+CREATE TABLE IF NOT EXISTS message_media (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id  TEXT    NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+    room_id     TEXT    NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
+    image_name  TEXT    NOT NULL,     -- {sha256}.{ext} under data/images/
+    created_at  INTEGER NOT NULL,
+    UNIQUE (message_id, image_name)
+) STRICT;
+
+-- The two reads: everything one room shows (the purge), and whether anything
+-- anywhere still shows one file (the keep-or-unlink decision).
+CREATE INDEX IF NOT EXISTS idx_message_media_room ON message_media (room_id);
+CREATE INDEX IF NOT EXISTS idx_message_media_name ON message_media (image_name);
+
 CREATE TABLE IF NOT EXISTS room_reads (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id          TEXT    NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,

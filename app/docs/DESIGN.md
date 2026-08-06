@@ -1365,6 +1365,17 @@ Footer order is always `[secondary] [primary]`, primary last, ≥96px wide.
 object and the consequence: title as a question, body as the irreversible fact, buttons
 labelled with the verb ("Delete room", not "OK").
 
+**The admin exit is the one two-stage confirmation.** An admin who confirms *Leave* is asked
+again: *Destroy {room} as well?* — footer `[Cancel] [Just leave] [Destroy room]`. It is asked
+at that moment because that is the moment it is answerable: an admin is the only person who
+can destroy a room, nobody returns to a menu later to tidy up a room they have already left,
+and for the **last** admin there is no later at all — the server refuses that leave, so their
+dialog drops *Just leave* and says to promote somebody first. The first dialog's body warns
+that a second question is coming, so *Leave* never has consequences that arrive unannounced.
+The second dialog states the whole cost, disk included: messages, keys, attachments and
+pictures, gone for every member (API.md §6.5.5). Destroying is never reachable from the swipe
+drawer directly — only from a dialog already answered once.
+
 ### Empty, loading, error
 
 - **Empty** `.fn-empty`: 84px `.fn-empty__art` (fruit emoji on an orange wash, gentle 5.5s

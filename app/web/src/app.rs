@@ -956,14 +956,26 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
     let busy = use_state(|| false);
     let error = use_state(|| Option::<String>::None);
 
-    let on_confirm = {
+    // One runner, two buttons: the destructive verb and — when the dialog has
+    // one — its milder alternative. They differ only in which action they
+    // carry, so they must not differ in how it is run, reported or recovered
+    // from.
+    let run = {
         let store = store.clone();
         let busy = busy.clone();
         let error = error.clone();
-        let action = p.confirm.action.clone();
         let on_navigate = p.on_navigate.clone();
-        Callback::from(move |_: ()| {
+        Rc::new(move |action: ConfirmAction| {
             if *busy {
+                return;
+            }
+            // Asking the second question is not work: it opens the follow-up
+            // dialog in place of this one and nothing is sent, so there is no
+            // request to be busy with and no error to recover from.
+            if let ConfirmAction::ExitAsAdmin(id) = &action {
+                store.dispatch(Action::OpenModal(Modal::Confirm(admin_exit_confirm(
+                    &store, id,
+                ))));
                 return;
             }
             busy.set(true);
@@ -987,6 +999,9 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
                     _ => None,
                 };
                 let result: Result<(), String> = match &action {
+                    // Handled before the spawn — listed so adding a case here
+                    // later cannot silently fall through to "nothing happened".
+                    ConfirmAction::ExitAsAdmin(_) => Ok(()),
                     ConfirmAction::LeaveRoom(id) => {
                         client.leave_room(id).await.map_err(|e| e.user_message())
                     }
@@ -1055,10 +1070,15 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
                                         &store,
                                         t(lang, Key::room_left_toast).replace("{name}", &name),
                                     ),
-                                    _ => toast::neutral(
-                                        &store,
+                                    // Destroying reaches further than the room
+                                    // list, so the toast says how far: the
+                                    // pictures and attachments are off the
+                                    // server's disk, not merely out of sight.
+                                    _ => store.dispatch(Action::Toast(
+                                        crate::state::ToastKind::Neutral,
                                         t(lang, Key::room_deleted_toast).replace("{name}", &name),
-                                    ),
+                                        Some(t(lang, Key::room_destroyed_toast_body).into()),
+                                    )),
                                 }
                                 // Only removals count towards the swipe streak,
                                 // and only once the server has agreed.
@@ -1090,11 +1110,25 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
         })
     };
 
+    let on_confirm = {
+        let run = run.clone();
+        let action = p.confirm.action.clone();
+        Callback::from(move |_: ()| run(action.clone()))
+    };
+    let alternative = p.confirm.alternative.clone();
+    let on_alternative = alternative.as_ref().map(|alt| {
+        let run = run.clone();
+        let action = alt.action.clone();
+        Callback::from(move |_: ()| run(action.clone()))
+    });
+
     html! {
         <crate::components::modal::ConfirmDialog
             title={p.confirm.title.clone()}
             body={p.confirm.body.clone()}
             confirm_label={p.confirm.confirm_label.clone()}
+            alternative_label={alternative.map(|a| a.label)}
+            {on_alternative}
             busy={*busy}
             error={(*error).clone()}
             {on_confirm}
@@ -1103,6 +1137,58 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
                 Callback::from(move |_: ()| store.dispatch(Action::CloseModal))
             }}
         />
+    }
+}
+
+/// The second question an admin's exit asks.
+///
+/// Built here rather than at the menu because it depends on what the store
+/// knows *now*: an admin with a colleague may walk away and leave the room
+/// standing, and the last admin may not — the server refuses that leave, so
+/// offering it would be a button that only ever produces an error. The sole
+/// admin's dialog says why, and names the way out (promote somebody) rather
+/// than leaving them to discover it.
+fn admin_exit_confirm(store: &Store, id: &RoomId) -> crate::state::Confirm {
+    let room = store.room(id);
+    let name = room.map(|r| r.room.name.clone()).unwrap_or_default();
+    // Absent from the store is treated as "sole admin": the cautious reading,
+    // since it offers the option that cannot silently fail.
+    let sole_admin = room.is_none_or(|r| r.admins.len() <= 1);
+    admin_exit_dialog(store.language, &name, sole_admin, id)
+}
+
+/// The dialog itself, as a function of what was decided above.
+///
+/// Split from the store lookup so the two branches are testable without a
+/// mounted app: which verb is primary, and whether "just leave" is offered at
+/// all, is the whole behaviour worth pinning.
+fn admin_exit_dialog(
+    lang: crate::i18n::Lang,
+    name: &str,
+    sole_admin: bool,
+    id: &RoomId,
+) -> crate::state::Confirm {
+    let confirm = crate::state::Confirm::new(
+        t(lang, Key::destroy_room_title).replace("{name}", name),
+        t(
+            lang,
+            if sole_admin {
+                Key::destroy_room_sole_admin_body
+            } else {
+                Key::destroy_room_body
+            },
+        )
+        .to_owned(),
+        t(lang, Key::destroy_room).to_owned(),
+        ConfirmAction::DeleteRoom(id.clone()),
+    );
+    if sole_admin {
+        confirm
+    } else {
+        confirm.or(
+            t(lang, Key::just_leave).to_owned(),
+            ConfirmAction::LeaveRoom(id.clone()),
+        )
     }
 }
 
@@ -1134,5 +1220,68 @@ pub fn clear_boot_screen() {
         .and_then(|d| d.get_element_by_id("app-loading"))
     {
         el.remove();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::Lang;
+    use crate::state::ConfirmAlternative;
+
+    fn room() -> RoomId {
+        RoomId::new("room_1785295655035_a801a50e-9dc1-4af5-9954-597bc2831364").unwrap()
+    }
+
+    #[test]
+    fn an_admin_with_a_colleague_is_offered_both_ways_out() {
+        let c = admin_exit_dialog(Lang::En, "engineering", false, &room());
+
+        // The destructive one is the primary — this dialog exists to ask it —
+        // and leaving stays reachable without going back to the menu.
+        assert_eq!(c.action, ConfirmAction::DeleteRoom(room()));
+        assert!(c.title.contains("engineering"), "{}", c.title);
+        assert_eq!(
+            c.alternative,
+            Some(ConfirmAlternative {
+                label: "Just leave".into(),
+                action: ConfirmAction::LeaveRoom(room()),
+            })
+        );
+    }
+
+    #[test]
+    fn the_last_admin_is_not_offered_a_leave_the_server_would_refuse() {
+        let c = admin_exit_dialog(Lang::En, "engineering", true, &room());
+
+        assert_eq!(c.action, ConfirmAction::DeleteRoom(room()));
+        assert_eq!(c.alternative, None, "the server refuses that leave");
+        // And says what to do instead, rather than leaving them to find it.
+        assert!(c.body.contains("admin"), "{}", c.body);
+    }
+
+    #[test]
+    fn both_bodies_say_the_files_go_too() {
+        // The dialog is the only place a user is told that destroying reaches
+        // the disk. If that sentence goes missing, the consent goes with it.
+        for sole in [true, false] {
+            let body = admin_exit_dialog(Lang::En, "engineering", sole, &room()).body;
+            assert!(body.contains("attachments"), "{body}");
+            assert!(body.contains("pictures"), "{body}");
+            assert!(body.contains("disk"), "{body}");
+        }
+    }
+
+    #[test]
+    fn the_question_is_asked_in_the_readers_language() {
+        // Not a translation check — the completeness of the table is tested in
+        // `i18n` — but the dialog must actually go through it rather than
+        // hard-coding the English copy for the one string it composes.
+        let c = admin_exit_dialog(Lang::Ko, "engineering", true, &room());
+        assert!(c.title.contains("engineering"), "{}", c.title);
+        assert_ne!(
+            c.confirm_label,
+            admin_exit_dialog(Lang::En, "engineering", true, &room()).confirm_label
+        );
     }
 }

@@ -144,11 +144,49 @@ pub struct Confirm {
     pub body: String,
     pub confirm_label: String,
     pub action: ConfirmAction,
+    /// A second, milder way forward, shown between Cancel and the destructive
+    /// verb. Exists for one question — an admin leaving is asked whether to
+    /// destroy the room, and "just leave" has to stay reachable from that
+    /// dialog rather than sending them back to the menu to find it.
+    pub alternative: Option<ConfirmAlternative>,
+}
+
+impl Confirm {
+    /// The ordinary shape: one destructive verb, and Cancel.
+    pub fn new(title: String, body: String, confirm_label: String, action: ConfirmAction) -> Self {
+        Self {
+            title,
+            body,
+            confirm_label,
+            action,
+            alternative: None,
+        }
+    }
+
+    /// …with a second way out beside it.
+    pub fn or(mut self, label: String, action: ConfirmAction) -> Self {
+        self.alternative = Some(ConfirmAlternative { label, action });
+        self
+    }
+}
+
+/// The non-destructive branch of a two-way confirmation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfirmAlternative {
+    pub label: String,
+    pub action: ConfirmAction,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfirmAction {
     LeaveRoom(RoomId),
+    /// An admin leaving, stage one. Runs no request: it replaces itself with a
+    /// second confirmation offering to destroy the room instead of walking out
+    /// of it. An admin is the only person who *can* destroy a room, and the
+    /// moment they are leaving is the moment to ask — nobody comes back to a
+    /// menu later to tidy up a room they have already left, and for the last
+    /// admin there is no "later" at all: the server refuses the leave.
+    ExitAsAdmin(RoomId),
     DeleteRoom(RoomId),
     HideRoom(RoomId),
     DeleteAllMessages(RoomId),

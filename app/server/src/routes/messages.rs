@@ -61,6 +61,17 @@ pub struct MessageBody {
     /// Advisory, not trusted: every address is checked against the room's
     /// roster before it becomes a mention.
     pub mentions: Option<Vec<String>>,
+    /// The hosted files this message shows — `{sha256}.{ext}` names under
+    /// `data/images/`, as returned by `POST /api/images`.
+    ///
+    /// Declared for the same reason mentions are, and only for encrypted
+    /// rooms in practice: a picture in a plaintext message is a link the
+    /// server can read for itself, and one in an encrypted message is not.
+    /// Recording it is what lets destroying a room destroy the pictures it
+    /// showed rather than orphaning them on disk (`db/media.rs`).
+    ///
+    /// Advisory and additive: a name here only ever ties bytes to *this* room.
+    pub media: Option<Vec<String>>,
 }
 
 pub(super) async fn require_member(
@@ -152,6 +163,7 @@ async fn send(
         .map(validate::message_id)
         .transpose()?;
     let declared = validate::mention_addresses(body.mentions)?;
+    let declared_media = validate::media_names(body.media)?;
 
     let id = format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
     let room_id = room.as_str().to_owned();
@@ -164,6 +176,7 @@ async fn send(
                 None => None,
             };
             let mentions = resolve_mentions(conn, &room_id, &content, is_encrypted, declared)?;
+            let media = resolve_media(&content, is_encrypted, declared_media);
 
             messages::create_message(
                 conn,
@@ -180,6 +193,7 @@ async fn send(
                     key_version,
                     parent_message_id,
                     mentions,
+                    media,
                 },
             )
         })
@@ -238,6 +252,26 @@ fn resolve_mentions(
         handles.extend(mentions::extract(content));
     }
     mentions::resolve(conn, room_id, &handles)
+}
+
+/// Which hosted files a message shows, from the same two sources as its
+/// mentions: what the client declared, plus what the server can read out of
+/// plaintext for itself.
+///
+/// No roster check to make here — a media name is a claim about bytes, not
+/// about a person — so the union is the answer. `validate::media_names` has
+/// already refused anything that is not a servable filename, which is what
+/// keeps a declaration from naming a path.
+fn resolve_media(content: &str, is_encrypted: bool, declared: Vec<String>) -> Vec<String> {
+    let mut names = declared;
+    if !is_encrypted {
+        for name in crate::db::media::extract(content) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
 }
 
 #[derive(Debug, Deserialize)]
@@ -400,6 +434,7 @@ async fn edit(
     }
 
     let declared = validate::mention_addresses(body.mentions)?;
+    let declared_media = validate::media_names(body.media)?;
     let updated = state
         .db
         .call({
@@ -408,10 +443,12 @@ async fn edit(
             move |conn| {
                 let mentions =
                     resolve_mentions(conn, &room_id, &content, stays_encrypted, declared)?;
+                let media = resolve_media(&content, stays_encrypted, declared_media);
                 // Replaced rather than added to, inside the edit's own
                 // transaction: an edit that takes somebody's name out has to
                 // take the mention with it, or their inbox keeps pointing at
-                // a message that no longer says it.
+                // a message that no longer says it. The same holds for a
+                // picture an edit removed — it must stop keeping bytes alive.
                 messages::update_message(
                     conn,
                     &id,
@@ -425,6 +462,7 @@ async fn edit(
                         key_version,
                     },
                     &mentions,
+                    &media,
                 )
             }
         })

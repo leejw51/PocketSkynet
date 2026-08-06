@@ -134,6 +134,7 @@ mod tests {
                 key_version: 1,
                 parent_message_id: None,
                 mentions: Vec::new(),
+                media: Vec::new(),
             },
         )
         .unwrap();

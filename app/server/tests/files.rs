@@ -584,3 +584,66 @@ async fn deleting_a_room_takes_its_attachments_with_it() {
         .await
         .expect_status(404);
 }
+
+/// How many files are sitting in `data/files/`.
+///
+/// The stored name is deliberately not on the wire, so the disk is checked by
+/// counting it — which is also the honest question: "is anything left".
+fn stored_count(server: &TestServer) -> usize {
+    match std::fs::read_dir(server.data_dir.join("files")) {
+        Ok(entries) => entries.filter_map(Result::ok).count(),
+        // No directory at all is the same answer as an empty one.
+        Err(_) => 0,
+    }
+}
+
+#[tokio::test]
+async fn destroying_a_room_erases_its_attachment_from_the_disk() {
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    let room = create_room(&alice.api, "doomed").await;
+
+    upload(&server, Some(&alice), &room, "doomed.pdf", "", BYTES).await;
+    assert_eq!(stored_count(&server), 1, "the upload landed");
+
+    // The row going is the old contract; the bytes going is the point. An
+    // attachment that outlives its room is still served to anyone holding the
+    // URL, which makes "delete the room" a promise the disk did not keep.
+    alice
+        .api
+        .delete(&format!("/api/rooms/{room}"))
+        .await
+        .expect_status(200);
+
+    assert_eq!(stored_count(&server), 0, "nothing may be left behind");
+}
+
+#[tokio::test]
+async fn a_destroyed_room_cannot_take_another_rooms_copy_with_it() {
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    let doomed = create_room(&alice.api, "doomed").await;
+    let keeper = create_room(&alice.api, "keeper").await;
+
+    // Identical bytes in both rooms: content-addressed storage means one file
+    // on disk and two rows, which is exactly the case a purge could get wrong.
+    upload(&server, Some(&alice), &doomed, "shared.pdf", "", BYTES).await;
+    let kept = upload(&server, Some(&alice), &keeper, "shared.pdf", "", BYTES).await;
+    let kept_url = kept.json()["url"].as_str().unwrap().to_owned();
+    assert_eq!(
+        stored_count(&server),
+        1,
+        "the dedupe is what makes this hard"
+    );
+
+    alice
+        .api
+        .delete(&format!("/api/rooms/{doomed}"))
+        .await
+        .expect_status(200);
+
+    assert_eq!(stored_count(&server), 1, "the surviving row still names it");
+    let got = get_raw(&server, Some(&alice), &kept_url).await;
+    assert_eq!(got.status, 200, "the other room must still download");
+    assert_eq!(got.bytes, BYTES);
+}
