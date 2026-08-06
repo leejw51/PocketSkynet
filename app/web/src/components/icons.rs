@@ -67,6 +67,14 @@ icons! {
     smile => html! { <><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01"/><path d="M15 9.5h.01"/></> };
     send => html! { <><path d="M4 12 20 4l-8 16-2.2-6.2L4 12Z"/></> };
     lock => html! { <><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></> };
+    // A shield with a tick: "this file is what it says it is". Distinct from
+    // `check` alone, which already means "done" on buttons all over the app —
+    // a verification is a claim about integrity, not about completion.
+    shield => html! { <><path d="M12 3.5 5 6.2v5.4c0 4 2.8 7.6 7 8.9 4.2-1.3 7-4.9 7-8.9V6.2L12 3.5Z"/><path d="m9 12 2.2 2.2L15.5 10"/></> };
+    // A filled triangle in a ring: the one glyph nobody has to be taught. Used
+    // on a video thumbnail, where it is the difference between a still that
+    // looks broken and a still that looks clickable.
+    play => html! { <><circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5-6-3.5Z" fill="currentColor"/></> };
     crown => html! { <><path d="M4 8l3.5 4L12 5l4.5 7L20 8l-1.5 10h-13L4 8Z"/></> };
     envelope => html! { <><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/></> };
     people => html! { <><circle cx="9" cy="8" r="3.4"/><path d="M3 19a6 6 0 0 1 12 0"/><path d="M16 5.4a3.4 3.4 0 0 1 0 6.6"/><path d="M18 19a6 6 0 0 0-2-4.3"/></> };

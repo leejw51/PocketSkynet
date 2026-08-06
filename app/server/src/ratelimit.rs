@@ -41,8 +41,33 @@ const SWEEP_THRESHOLD: usize = 10_000;
 /// Which budget a request draws from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scope {
-    /// Every `/api` route except `/api/health`.
+    /// Every `/api` route except `/api/health` and the upload chunk endpoints.
     General,
+    /// Serving stored media (`/api/files/{id}/raw`, `/api/images/{name}`).
+    ///
+    /// Its own budget for the mirror image of the upload reason: a `<video>`
+    /// element *streams* by issuing many small `Range` requests, and Safari in
+    /// particular probes an mp4 with dozens to hundreds of tiny ranges before
+    /// it plays a frame. Under the general 100/min budget one film exhausted
+    /// the caller's entire allowance — and because the budget is per IP, it
+    /// then 429'd everything else from that device, including the login
+    /// challenge after a refresh. A meter that counts requests is simply the
+    /// wrong instrument for range streaming; the real costs (bytes on disk,
+    /// membership) are checked per request regardless.
+    Media,
+    /// The resumable upload routes (`/api/uploads/…`).
+    ///
+    /// Its own budget because a chunked upload is *supposed* to make hundreds
+    /// of requests: a 4 GB file is 512 chunks at the suggested size, and under
+    /// the general 100/min budget it would 429 partway through and stall — which
+    /// is exactly what happened to the first 888 MB film put through it.
+    ///
+    /// Counting requests is the wrong meter here anyway. What an upload costs
+    /// is bytes and disk, and both are already bounded: 4 GB per file, eight
+    /// open sessions per wallet, one chunk of server memory at a time. This
+    /// number only has to stop a client spinning, so it is generous enough that
+    /// a full-speed upload never notices it.
+    Upload,
     /// `POST /api/auth/challenge`.
     Challenge,
     /// `POST /api/auth/login`.
@@ -53,6 +78,14 @@ impl Scope {
     pub fn max_per_minute(self) -> u32 {
         match self {
             Self::General => 100,
+            // A two-hour film seeked aggressively is a few hundred ranges;
+            // this only exists to stop a spinning client, not to meter
+            // playback.
+            Self::Media => 3_000,
+            // 4 GB at 8 MB chunks is 512 requests; a fast LAN can push those in
+            // well under a minute, so the budget has to clear that with room
+            // for the status probes a resume makes.
+            Self::Upload => 1_200,
             Self::Challenge => 10,
             Self::Login => 5,
         }
@@ -63,6 +96,10 @@ impl Scope {
     pub fn message(self) -> &'static str {
         match self {
             Self::General => "Too many requests, please try again later",
+            Self::Media => "Too many media requests, please slow down",
+            // Names the offset endpoint rather than the file, because the fix
+            // is to slow the chunk loop and resume, not to restart the upload.
+            Self::Upload => "Too many upload requests, please slow down and resume",
             Self::Challenge => "Too many challenge requests, please try again later",
             Self::Login => "Too many login attempts, please try again later",
         }
@@ -242,6 +279,16 @@ async fn enforce(scope: Scope, state: AppState, req: Request, next: Next) -> Res
 /// 100/min, applied to every `/api` route except `/api/health`.
 pub async fn general(State(state): State<AppState>, req: Request, next: Next) -> Response {
     enforce(Scope::General, state, req, next).await
+}
+
+/// The media budget, applied *instead of* [`general`] — see [`Scope::Media`].
+pub async fn media(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    enforce(Scope::Media, state, req, next).await
+}
+
+/// The upload budget, applied *instead of* [`general`] — see [`Scope::Upload`].
+pub async fn upload(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    enforce(Scope::Upload, state, req, next).await
 }
 
 /// 10/min, on top of the general budget.

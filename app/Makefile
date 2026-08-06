@@ -260,6 +260,10 @@ test-integration: ## End-to-end tests against a server they start themselves
 	@echo "==> integration tests"
 	$(CARGO) test --workspace --test '*'
 
+test-browser: ## Large-file transfer checks against a *running* server (see tests/browser/README.md)
+	@echo "==> browser transfer tests (run 'make restart' first)"
+	cd tests/browser && node upload.js && node resume.js
+
 test-wasm: tools ## Type-check the client for wasm32
 	$(CARGO) check --manifest-path web/Cargo.toml --target wasm32-unknown-unknown
 

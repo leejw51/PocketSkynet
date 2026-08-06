@@ -368,3 +368,51 @@ CREATE TABLE IF NOT EXISTS operator_files (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_operator_load ON operator_files (load DESC);
+
+-- Resumable upload sessions (`routes/uploads.rs`).
+--
+-- A 4 GB attachment cannot be one request. Not because of a limit that could
+-- be raised, but because both ends would have to hold it: the browser cannot
+-- read that much into a wasm heap whose whole address space is 4 GB, and the
+-- server would buffer the same bytes per concurrent upload. So an upload is a
+-- session — begin, append chunks at explicit offsets, finish — and this table
+-- is what makes it survive the gaps between those requests.
+--
+-- Rows are *not* the upload. The bytes accumulate in `data/uploads/{temp_name}`
+-- and this row records how far that file has got, which is what lets a client
+-- that lost its connection ask "where was I" and resume rather than restart.
+--
+-- `received` is the authority on the offset, never the client. An append names
+-- the offset it believes it is writing at and is refused unless it matches, so
+-- a duplicated or reordered chunk cannot interleave itself into the file.
+--
+-- `sha256` is the digest the *client* declared up front, and finishing rehashes
+-- what actually landed and compares. Storing the expectation rather than a
+-- running state is deliberate: a hasher cannot be resumed across requests, and
+-- one pass over the finished file checks the assembly as well as the transfer.
+-- It is nullable because the legacy single-shot upload path declares nothing.
+--
+-- Nothing here cascades. A session is deleted when it finishes, when it is
+-- abandoned, or when the sweep in `routes/uploads.rs` reaps it, and each of
+-- those deletes the temp file first — an orphaned row is invisible, an orphaned
+-- temp file is disk nobody can account for.
+CREATE TABLE IF NOT EXISTS upload_sessions (
+    id            TEXT    PRIMARY KEY,
+    owner         TEXT    NOT NULL,     -- wallet that began it; only it may append
+    kind          TEXT    NOT NULL,     -- 'file' | 'image' | 'site'
+    room_id       TEXT,                 -- kind='file' only; NULL otherwise
+    filename      TEXT    NOT NULL,
+    caption       TEXT    NOT NULL DEFAULT '',
+    mime          TEXT    NOT NULL DEFAULT '',
+    declared_size INTEGER NOT NULL,     -- what the client said; the ceiling for appends
+    received      INTEGER NOT NULL DEFAULT 0,
+    sha256        TEXT,                 -- client-declared, verified at finish
+    temp_name     TEXT    NOT NULL,     -- under data/uploads/
+    extra         TEXT    NOT NULL DEFAULT '',  -- kind-specific (e.g. sites' txHash)
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+) STRICT;
+
+-- The sweep reads by age; the resume path reads by owner.
+CREATE INDEX IF NOT EXISTS idx_uploads_updated ON upload_sessions (updated_at);
+CREATE INDEX IF NOT EXISTS idx_uploads_owner ON upload_sessions (owner, updated_at DESC);

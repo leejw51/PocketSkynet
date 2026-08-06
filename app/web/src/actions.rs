@@ -988,10 +988,15 @@ pub fn sign_out(store: &Store) {
     store.dispatch(Action::SetConn(ConnStatus::Offline));
 }
 
-/// The server's cap, mirrored so a 25 MB pick fails on the device instead of
-/// after the whole body has crossed the network. Must match
-/// `routes/files.rs::MAX_FILE_BYTES`.
-pub const MAX_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
+/// The server's cap, mirrored so a pick that was never going to work fails on
+/// the device instead of after the whole body has crossed the network. Must
+/// match `routes/uploads.rs::MAX_UPLOAD_BYTES`.
+///
+/// An `f64` rather than a `usize`, and that is not a style choice: `usize` on
+/// wasm32 is 32 bits, so 4 GB is not representable in one and the constant
+/// would silently be zero. Every size on this path is the `f64` that
+/// `Blob::size` hands back for the same reason.
+pub const MAX_ATTACHMENT_BYTES: f64 = crate::api::uploads::MAX_UPLOAD_BYTES;
 
 /// Attach a file to a room.
 ///
@@ -999,31 +1004,207 @@ pub const MAX_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
 /// how an attachment gets its `#hashtags`, and it is why there is no separate
 /// tagging dialog. An empty caption is fine: the filename is indexed too, so an
 /// untagged attachment is still findable.
-pub async fn attach_file(
-    store: Store,
-    room_id: RoomId,
-    filename: String,
-    bytes: Vec<u8>,
-    caption: String,
-) {
+/// Save an attachment to disk, by handing the browser a URL it can fetch
+/// itself.
+///
+/// The old path fetched the bytes with the caller's token, wrapped them in a
+/// blob URL and clicked an anchor at it — which needs the whole file in memory
+/// and cannot work at this size. Instead the server mints a short-lived
+/// capability, and the browser downloads it the way it downloads anything:
+/// straight to disk, resumable, with its own progress.
+///
+/// The trade is that the app never sees the bytes, so it cannot verify the
+/// checksum for you. It shows you the checksum instead — and
+/// [`verify_downloaded_file`] will check a file you pick back.
+pub async fn save_attachment(store: Store, file_id: String, filename: String) {
     let lang = store.language;
-    if bytes.is_empty() {
+
+    // Where the browser allows it, the app does the fetching: that is the only
+    // way it can show progress, check the checksum, and resume — all three of
+    // which are invisible when the browser owns the transfer.
+    if crate::api::downloads::support() == crate::api::downloads::Support::Streaming {
+        let transfer_id = crate::state::next_local_id();
+        let mut started = false;
+        let progress_store = store.clone();
+        let name = filename.clone();
+
+        let result = store
+            .client
+            .download_to_disk(&file_id, move |p| {
+                // Registered on the first report rather than before the call,
+                // because the save dialog sits in front of it: a bar that
+                // appears while someone is still choosing a folder is a bar
+                // that lies about what is happening.
+                if !started {
+                    started = true;
+                    progress_store.dispatch(Action::TransferStarted(crate::state::Transfer {
+                        id: transfer_id,
+                        name: name.clone(),
+                        direction: crate::state::TransferDirection::Download,
+                        stage: crate::state::TransferStage::Moving,
+                        done: p.done,
+                        total: p.total,
+                    }));
+                }
+                progress_store.dispatch(Action::TransferProgress {
+                    id: transfer_id,
+                    done: p.done,
+                    stage: crate::state::TransferStage::Moving,
+                });
+            })
+            .await;
+        store.dispatch(Action::TransferEnded(transfer_id));
+
+        match result {
+            Ok((crate::api::downloads::Outcome::Verified, _)) => {
+                toast::success(
+                    &store,
+                    t(lang, Key::attach_downloaded_ok).replace("{name}", &filename),
+                );
+            }
+            // The bytes are on disk and they are wrong. Say so loudly: a
+            // silent corrupt file is worse than a failed download, because it
+            // will be discovered by whatever tries to open it, much later.
+            Ok((crate::api::downloads::Outcome::Corrupt, _)) => {
+                toast::error(&store, t(lang, Key::attach_verify_failed), None);
+            }
+            // Cancelling the save dialog is not a failure worth shouting
+            // about; anything else is.
+            Err(e) => {
+                let msg = e.user_message();
+                if !msg.contains("cancelled") {
+                    toast::error(&store, msg, None);
+                }
+            }
+        }
+        return;
+    }
+
+    // Everywhere else: hand the URL to the browser. It streams to disk and
+    // resumes, and its own download UI is where the progress shows.
+    let link = match store.client.download_link(&file_id).await {
+        Ok(link) => link,
+        Err(e) => {
+            toast::error(&store, e.user_message(), None);
+            return;
+        }
+    };
+
+    // Absolute: the capability URL comes back relative, and the app may be
+    // served from a different origin than the API in a desktop shell.
+    let url = store.client.url(&link.url);
+    crate::components::common::save_as(&url, &filename);
+
+    toast::success(
+        &store,
+        t(lang, Key::attach_download_started).replace("{name}", &filename),
+    );
+}
+
+/// Check a file the user picked against the digest the server published.
+///
+/// This is the other half of "the browser saved it, so the app cannot see it".
+/// The file is re-read in slices — never held — and hashed with the same
+/// function the server used, so this is a genuine end-to-end check of what is
+/// actually on disk, not a report of what the transfer believed.
+pub async fn verify_downloaded_file(store: Store, expected_sha256: String, picked: web_sys::File) {
+    let lang = store.language;
+    let blob: web_sys::Blob = picked.clone().into();
+    let size = picked.size();
+
+    let transfer_id = crate::state::next_local_id();
+    store.dispatch(Action::TransferStarted(crate::state::Transfer {
+        id: transfer_id,
+        name: picked.name(),
+        direction: crate::state::TransferDirection::Download,
+        stage: crate::state::TransferStage::Checksum,
+        done: 0.0,
+        total: size,
+    }));
+
+    let progress_store = store.clone();
+    let mut on_progress = move |p: crate::api::uploads::Progress| {
+        progress_store.dispatch(Action::TransferProgress {
+            id: transfer_id,
+            done: p.done,
+            stage: crate::state::TransferStage::Checksum,
+        });
+    };
+    let actual = crate::api::uploads::checksum(&blob, size, &mut on_progress).await;
+    store.dispatch(Action::TransferEnded(transfer_id));
+
+    match actual {
+        Ok(digest) if digest.eq_ignore_ascii_case(&expected_sha256) => {
+            toast::success(&store, t(lang, Key::attach_verify_ok));
+        }
+        Ok(_) => toast::error(&store, t(lang, Key::attach_verify_failed), None),
+        Err(e) => toast::error(&store, e.user_message(), None),
+    }
+}
+
+/// Takes the `web_sys::File` **handle**, not its bytes, and that is the whole
+/// change: a handle is a reference to something on disk, so nothing here ever
+/// holds the file. `upload_in_chunks` reads it a slice at a time.
+pub async fn attach_file(store: Store, room_id: RoomId, picked: web_sys::File, caption: String) {
+    let lang = store.language;
+    let filename = picked.name();
+    let size = picked.size();
+
+    if size <= 0.0 {
         toast::error(&store, t(lang, Key::attach_read_failed), None);
         return;
     }
-    if bytes.len() > MAX_ATTACHMENT_BYTES {
+    if size > MAX_ATTACHMENT_BYTES {
         // Checked before the request: the server would refuse it anyway, but
         // only after the upload had finished, which is the worst moment to be
-        // told a 40 MB file was never going to work.
+        // told a file was never going to work.
         toast::error(&store, t(lang, Key::attach_too_large), None);
         return;
     }
 
-    let file = match store
+    let transfer_id = crate::state::next_local_id();
+    store.dispatch(Action::TransferStarted(crate::state::Transfer {
+        id: transfer_id,
+        name: filename.clone(),
+        direction: crate::state::TransferDirection::Upload,
+        stage: crate::state::TransferStage::Checksum,
+        done: 0.0,
+        total: size,
+    }));
+
+    let progress_store = store.clone();
+    let result = store
         .client
-        .upload_file(room_id.as_str(), &filename, &caption, bytes)
-        .await
-    {
+        .upload_in_chunks(
+            &picked,
+            crate::api::uploads::Target::File {
+                room_id: room_id.as_str().to_owned(),
+                caption: caption.clone(),
+            },
+            move |p| {
+                progress_store.dispatch(Action::TransferProgress {
+                    id: transfer_id,
+                    done: p.done,
+                    stage: match p.phase {
+                        crate::api::uploads::Phase::Checksum => {
+                            crate::state::TransferStage::Checksum
+                        }
+                        crate::api::uploads::Phase::Upload => crate::state::TransferStage::Moving,
+                    },
+                });
+            },
+        )
+        .await;
+
+    // The bar comes down on every path, including the failures. A progress row
+    // that outlives its transfer is worse than none: it says something is still
+    // happening when nothing is.
+    store.dispatch(Action::TransferEnded(transfer_id));
+
+    let file = match result.and_then(|v| {
+        serde_json::from_value::<crate::api::types::FileMeta>(v)
+            .map_err(|e| crate::api::ApiError::Decode(e.to_string()))
+    }) {
         Ok(file) => file,
         Err(e) => {
             toast::error(&store, e.user_message(), None);

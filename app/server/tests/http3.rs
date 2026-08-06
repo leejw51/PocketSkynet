@@ -163,6 +163,111 @@ impl H3Client {
         }
     }
 
+    /// A request whose body is raw bytes — an upload chunk. The JSON helper
+    /// above cannot express this, and expressing it matters: the browser bug
+    /// this exists to catch involved 8 MB binary PATCH bodies over one QUIC
+    /// connection, which no JSON request ever produces.
+    async fn send_bytes(
+        &mut self,
+        method: http::Method,
+        path: &str,
+        token: Option<&str>,
+        payload: Bytes,
+    ) -> H3Response {
+        let mut builder = http::Request::builder()
+            .method(method)
+            .uri(format!("https://{}{path}", self.authority))
+            .header(http::header::CONTENT_TYPE, "application/octet-stream");
+        if let Some(token) = token {
+            builder = builder.header(http::header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let request = builder.body(()).expect("build the request");
+        let mut stream = self
+            .send
+            .send_request(request)
+            .await
+            .expect("send the request headers");
+        stream.send_data(payload).await.expect("send the body");
+        stream.finish().await.expect("finish the request stream");
+
+        let response = stream
+            .recv_response()
+            .await
+            .expect("receive the response headers");
+        let mut body = Vec::new();
+        while let Some(mut chunk) = stream.recv_data().await.expect("receive the body") {
+            while chunk.has_remaining() {
+                let piece = chunk.chunk().to_vec();
+                chunk.advance(piece.len());
+                body.extend_from_slice(&piece);
+            }
+        }
+        H3Response {
+            status: response.status(),
+            headers: response.headers().clone(),
+            body,
+        }
+    }
+
+    /// Send a body the server is expected to refuse mid-stream.
+    ///
+    /// [`send_bytes`] panics if the transfer half fails, which is correct for
+    /// a body the server accepts — and exactly wrong here: a server that
+    /// refuses a body tells the peer to stop sending, so the send half
+    /// *failing* is part of the behaviour under test. Errors from the send
+    /// side are swallowed; the response still has to arrive.
+    async fn send_bytes_refused(
+        &mut self,
+        method: http::Method,
+        path: &str,
+        token: Option<&str>,
+        payload: Bytes,
+    ) -> H3Response {
+        let mut builder = http::Request::builder()
+            .method(method)
+            .uri(format!("https://{}{path}", self.authority))
+            .header(http::header::CONTENT_TYPE, "application/octet-stream");
+        if let Some(token) = token {
+            builder = builder.header(http::header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let request = builder.body(()).expect("build the request");
+        let mut stream = self
+            .send
+            .send_request(request)
+            .await
+            .expect("send the request headers");
+        // Push in slices so the server's mid-stream STOP_SENDING has frames
+        // to interrupt; a refusal can land anywhere in here and that is fine.
+        for piece in payload.chunks(1024 * 1024) {
+            if stream
+                .send_data(Bytes::copy_from_slice(piece))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+        let _ = stream.finish().await;
+
+        let response = stream
+            .recv_response()
+            .await
+            .expect("a refusal is still a response");
+        let mut body = Vec::new();
+        while let Ok(Some(mut chunk)) = stream.recv_data().await {
+            while chunk.has_remaining() {
+                let piece = chunk.chunk().to_vec();
+                chunk.advance(piece.len());
+                body.extend_from_slice(&piece);
+            }
+        }
+        H3Response {
+            status: response.status(),
+            headers: response.headers().clone(),
+            body,
+        }
+    }
+
     async fn get(&mut self, path: &str, token: Option<&str>) -> H3Response {
         self.request(http::Method::GET, path, token, None).await
     }
@@ -643,6 +748,109 @@ async fn concurrent_requests_share_one_quic_connection() {
         let resp = client.get("/api/health", None).await;
         assert_eq!(resp.status, 200);
     }
+
+    client.close().await;
+}
+
+#[tokio::test]
+async fn a_chunked_upload_with_large_bodies_rides_one_quic_connection() {
+    // The browser shape of a video upload: one QUIC connection, a JSON begin,
+    // then sequential multi-megabyte binary PATCHes, then finish — and the
+    // connection must still be usable afterwards. A transport that survives
+    // JSON but dies under 8 MB-class bodies looks exactly like "uploading a
+    // video breaks HTTPS", which is why this exists.
+    let server = TestServer::start_http3().await;
+    let user = common::new_user(&server, "quicuploader").await;
+    let room = common::create_room(&user.api, "films").await;
+
+    let mut client = H3Client::connect(&server).await;
+    let token = user.api.token().to_string();
+
+    // The browser's exact shape: SUGGESTED_CHUNK_BYTES is 8 MB and that is
+    // what Safari sends per PATCH. This test originally used 2 MB chunks and
+    // passed while real devices failed — a transport bug that only bites
+    // above a flow-control window is invisible to a test that stays under it.
+    let chunk = 8 * 1024 * 1024;
+    let data: Vec<u8> = (0..(chunk * 3 + 12_345)).map(|i| (i % 251) as u8).collect();
+    let digest = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&data))
+    };
+
+    let begun = client
+        .post(
+            "/api/uploads",
+            Some(&token),
+            json!({
+                "kind": "file",
+                "roomId": room,
+                "filename": "quic.bin",
+                "size": data.len(),
+                "sha256": digest,
+            }),
+        )
+        .await;
+    assert_eq!(begun.status, 201, "begin over QUIC: {:?}", begun.json());
+    let id = begun.json()["id"]
+        .as_str()
+        .expect("a session id")
+        .to_string();
+
+    for (i, piece) in data.chunks(chunk).enumerate() {
+        let at = i * chunk;
+        let r = client
+            .send_bytes(
+                http::Method::PATCH,
+                &format!("/api/uploads/{id}?offset={at}"),
+                Some(&token),
+                Bytes::copy_from_slice(piece),
+            )
+            .await;
+        assert_eq!(r.status, 200, "chunk at {at} over QUIC: {:?}", r.json());
+    }
+
+    let done = client
+        .post(
+            &format!("/api/uploads/{id}/finish"),
+            Some(&token),
+            json!({}),
+        )
+        .await;
+    assert_eq!(done.status, 201, "finish over QUIC: {:?}", done.json());
+
+    // The connection is alive, not merely the requests answered: a fresh
+    // request on the same session must still work.
+    let health = client.get("/api/health", None).await;
+    assert_eq!(health.status, 200, "the connection died under the upload");
+
+    client.close().await;
+}
+
+#[tokio::test]
+async fn a_refused_body_does_not_wedge_the_connection() {
+    // The failure this reproduces was observed on real iPhones and iPads:
+    // send one large body the server does not accept, and afterwards *no*
+    // request on that connection completes until the page is refreshed. The
+    // mechanism is flow control — a stream abandoned unread keeps its credit,
+    // and a browser reuses one QUIC connection for everything. The server
+    // must actively refuse (STOP_SENDING) rather than answer and walk away.
+    let server = TestServer::start_http3().await;
+    let user = common::new_user(&server, "wedger").await;
+    let token = user.api.token().to_string();
+
+    let mut client = H3Client::connect(&server).await;
+
+    // Larger than http3.rs::MAX_BODY, so the server refuses mid-stream.
+    let oversized = Bytes::from(vec![7u8; 34 * 1024 * 1024]);
+    let refused = client
+        .send_bytes_refused(http::Method::POST, "/api/uploads", Some(&token), oversized)
+        .await;
+    assert_eq!(refused.status, 413, "the oversized body must be refused");
+
+    // The connection, not just the request, must survive the refusal —
+    // this is the assertion that fails if the refused stream's credit leaks.
+    let after = client.get("/api/health", None).await;
+    assert_eq!(after.status, 200, "the refusal wedged the connection");
 
     client.close().await;
 }

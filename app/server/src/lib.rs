@@ -478,6 +478,12 @@ pub struct Bound {
     http3: Option<(http3::Http3Listener, axum::Router)>,
     router: axum::Router,
     log: Arc<JsonlLog>,
+    /// Kept so `serve` can run background work that needs the database — the
+    /// abandoned-upload sweep. The router owns the other clone; this one exists
+    /// because a background task is not a request and has no extractor to get
+    /// it from. Cheap to hold: every field of `AppState` is an `Arc` or a
+    /// handle.
+    state: AppState,
     /// Keeps the Bonjour advertisement registered for the server's lifetime.
     ///
     /// Never read, and that is the whole point: it is an RAII guard. Dropping
@@ -523,6 +529,26 @@ impl Bound {
         let signalled = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
             let _ = rx.changed().await;
         };
+
+        // Reclaim the disk held by uploads nobody came back for. Hourly, and
+        // conservative — a session has to have been silent for a day, and
+        // merely asking after one resets that — so this is a slow leak-stopper
+        // rather than anything a live upload can trip over. It runs once at
+        // startup too: the sessions most likely to be abandoned are the ones
+        // that were in flight when the process last went down.
+        {
+            let state = self.state.clone();
+            let mut stop = rx.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+                loop {
+                    tokio::select! {
+                        _ = tick.tick() => routes::uploads::sweep_abandoned(state.clone()).await,
+                        _ = stop.changed() => break,
+                    }
+                }
+            });
+        }
 
         // HTTP/3 runs beside the TCP listener, not instead of it: they serve
         // the same router on different transports, so a client can use either
@@ -794,6 +820,7 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
 
     let state = AppState::build(cfg, secret)?;
     let log = state.log.clone();
+    let background_state = state.clone();
     let base_router = routes::build(state);
 
     let (bound_addr, transport, scheme) = match tls_config {
@@ -892,6 +919,7 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
     let mdns = advertise_mdns(bound_addr, scheme);
 
     Ok(Bound {
+        state: background_state,
         addr: bound_addr,
         scheme,
         // Reported only when a listener actually came up, so the banner never

@@ -147,16 +147,36 @@ async fn publish(
 
     // Parse first, pay later.
     let files = if body.starts_with(b"PK\x03\x04") {
-        unpack_zip(&body)?
+        unpack_zip(std::io::Cursor::new(&body[..]))?
     } else {
         // A single document — pasted text or an uploaded .html file. Whatever
         // it is, the browser will render it; the sandbox CSP is the guard.
         vec![("index.html".to_owned(), body.to_vec())]
     };
 
+    commit_site(&state, &caller, title, tx_hash, files).await
+}
+
+/// Pay for, store and index an already-unpacked site.
+///
+/// The half of publishing that does not care how the bytes arrived, so the
+/// single-shot route and the chunked-session route cannot drift on the parts
+/// that involve money and disk.
+///
+/// Order is deliberate and unchanged: the archive is parsed before the payment
+/// is verified, so a corrupt upload is refused without taking anyone's money,
+/// and the payment is verified before anything is written, so the disk is only
+/// spent on a paid site.
+async fn commit_site(
+    state: &AppState,
+    caller: &pocketskynet_core::WalletAddress,
+    title: String,
+    tx_hash: &str,
+    files: Vec<(String, Vec<u8>)>,
+) -> ApiResult<Response> {
     let price = payment::price_wei(&payment::publish_price_cro());
     let amount_wei =
-        payment::verify_and_record(&state, &caller, tx_hash, price, Purpose::Site).await?;
+        payment::verify_and_record(state, caller, tx_hash, price, Purpose::Site).await?;
 
     // Bytes onto disk, then the row — same order as attachments: an orphan
     // directory is invisible, a row serving 404s is a broken product.
@@ -215,11 +235,85 @@ async fn publish(
 
     let _ = state.log.append_audit(
         "site_published",
-        Some(&caller),
+        Some(caller),
         json!({ "siteId": site.id, "title": site.title, "txHash": site.tx_hash,
                 "sizeBytes": site.size_bytes, "fileCount": site.file_count }),
     );
     Ok((StatusCode::CREATED, Json(site)).into_response())
+}
+
+/// Commit a finished upload session as a published site.
+///
+/// The archive is unpacked from the temp file in place — the reason
+/// [`unpack_zip`] is generic — so publishing a large zip costs the 64 MB of
+/// unpacked output rather than the size of the archive plus its contents.
+///
+/// The `txHash` rides in the session's `extra` field. It is checked here rather
+/// than at `begin` on purpose: verifying a payment against an upload that may
+/// never finish would take money for nothing, and the whole point of the
+/// session protocol is that starting one is cheap and abandoning one is normal.
+pub(crate) async fn finalize_upload(
+    state: &AppState,
+    caller: &pocketskynet_core::WalletAddress,
+    session: &crate::db::uploads::Session,
+    temp_path: &std::path::Path,
+    _digest: &str,
+) -> ApiResult<Response> {
+    // A site's title arrives as the caption; fall back to the filename so a
+    // client that only set one of the two still publishes.
+    let raw_title = Some(session.caption.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(session.filename.trim());
+    let title = site_title(Some(raw_title))?;
+    let tx_hash = session.extra.trim();
+    if tx_hash.is_empty() {
+        return Err(crate::validate::required("txHash", "Transaction hash"));
+    }
+
+    let hosted = state.db.call(|conn| sites::count(conn)).await?;
+    if hosted >= MAX_SITES {
+        return Err(ApiError::bad_request(
+            "This server is hosting its maximum number of sites",
+        ));
+    }
+
+    // `zip` is a blocking, seeking reader and this can be a 4 GB archive, so it
+    // runs on the blocking pool rather than stalling a runtime worker for the
+    // duration.
+    let path = temp_path.to_owned();
+    let files = tokio::task::spawn_blocking(move || -> ApiResult<Vec<(String, Vec<u8>)>> {
+        let mut head = [0u8; 4];
+        let mut file =
+            std::fs::File::open(&path).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+        use std::io::{Read, Seek};
+        let n = file
+            .read(&mut head)
+            .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+        file.rewind()
+            .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+
+        if n == 4 && &head == b"PK\x03\x04" {
+            unpack_zip(file)
+        } else {
+            // A single document, same as the raw path. Bounded by the unpacked
+            // ceiling: a 4 GB "html file" is not a page.
+            let mut bytes = Vec::new();
+            (&mut file)
+                .take(MAX_UNPACKED_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+            if bytes.len() as u64 > MAX_UNPACKED_BYTES {
+                return Err(ApiError::bad_request(
+                    "The unpacked site is too large (max 64 MB)",
+                ));
+            }
+            Ok(vec![("index.html".to_owned(), bytes)])
+        }
+    })
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))??;
+
+    commit_site(state, caller, title, tx_hash, files).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,8 +500,13 @@ fn content_type_for(path: &str) -> HeaderValue {
 /// Unpack a site zip into `(relative_path, bytes)` pairs, enforcing every
 /// bound, and normalising the one shape people actually upload: an archive
 /// whose content sits inside a single top-level folder.
-fn unpack_zip(body: &[u8]) -> ApiResult<Vec<(String, Vec<u8>)>> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(body))
+/// Generic over the reader so a 4 GB archive can be unpacked straight from the
+/// file it was uploaded into, rather than from a copy of it in memory. `zip`
+/// needs `Seek` to read the central directory, which a `File` gives and a
+/// stream would not — the archive is read in place, and only the *unpacked*
+/// bytes are held, which `MAX_UNPACKED_BYTES` already bounds at 64 MB.
+fn unpack_zip<R: std::io::Read + std::io::Seek>(reader: R) -> ApiResult<Vec<(String, Vec<u8>)>> {
+    let mut archive = zip::ZipArchive::new(reader)
         .map_err(|_| ApiError::bad_request("The upload is not a readable zip archive"))?;
 
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
@@ -631,7 +730,7 @@ mod tests {
             ("__MACOSX/index.html", b"resource fork noise"),
             ("mysite/.DS_Store", b"junk"),
         ]);
-        let files = unpack_zip(&z).unwrap();
+        let files = unpack_zip(std::io::Cursor::new(&z)).unwrap();
         let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, vec!["index.html", "css/app.css"]);
     }
@@ -639,7 +738,7 @@ mod tests {
     #[test]
     fn a_zip_without_an_index_is_refused() {
         let z = zip_of(&[("about.html", b"<h1>about</h1>" as &[u8])]);
-        let err = unpack_zip(&z).unwrap_err();
+        let err = unpack_zip(std::io::Cursor::new(&z)).unwrap_err();
         assert!(err.to_string().contains("no index.html"));
     }
 
@@ -669,7 +768,7 @@ mod tests {
         }
         assert!(replaced >= 2, "local header and central directory");
 
-        let result = unpack_zip(&raw);
+        let result = unpack_zip(std::io::Cursor::new(&raw));
         assert!(
             result.is_err(),
             "a traversal entry must fail the upload, got {:?}",

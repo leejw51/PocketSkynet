@@ -23,6 +23,7 @@ pub mod search;
 pub mod shout;
 pub mod sites;
 pub mod sync;
+pub mod uploads;
 pub mod users;
 
 use std::path::Path;
@@ -141,6 +142,22 @@ fn api_router(state: &AppState) -> Router<AppState> {
     // load-balancer probe can never be throttled into reporting an outage.
     let unlimited = misc::health_router();
 
+    // Uploads draw on their own budget rather than the general one. A chunked
+    // upload makes a request per chunk by design, so metering it at 100/min
+    // throttles a large file into failing — the meter that matters for an
+    // upload is bytes, and that is bounded elsewhere.
+    let uploads = uploads::router().layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::ratelimit::upload,
+    ));
+
+    // Media serving likewise — a playing <video> is a stream of Range
+    // requests, and metering those against the general budget made one film
+    // exhaust its viewer's entire allowance and 429 everything after it.
+    let media = files::media_router().merge(images::media_router()).layer(
+        axum::middleware::from_fn_with_state(state.clone(), crate::ratelimit::media),
+    );
+
     let limited = Router::new()
         .merge(misc::router())
         .merge(auth::router(state))
@@ -162,6 +179,8 @@ fn api_router(state: &AppState) -> Router<AppState> {
         ));
 
     unlimited
+        .merge(uploads)
+        .merge(media)
         .merge(limited)
         .fallback(unknown_route)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))

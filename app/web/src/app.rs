@@ -14,7 +14,7 @@ use crate::actions;
 use crate::api::Client;
 use crate::components::{
     bank, boot, burst, chat, dialogs, invitations, knowledge, lightbox, login, members, operator,
-    publish, room_list, settings, shell, shout, spotlight, toast,
+    publish, room_list, settings, shell, shout, spotlight, toast, transfers,
 };
 use crate::format;
 use crate::i18n::{t, Key};
@@ -611,6 +611,12 @@ fn root() -> Html {
             />
             { render_modal(&store, &route, &on_navigate) }
             <toast::Toasts />
+            // Transfer progress (transfers.rs). A singleton like the layers
+            // below, and load-bearing rather than tidy: a 4 GB upload outlives
+            // the screen that started it, so a bar living in the composer
+            // would vanish the moment someone opened Settings and the transfer
+            // would look like it had stopped.
+            <transfers::TransferRail />
             // The particle layer (burst.rs): mounted once, fired from
             // anywhere — the send button's pop, a deleted message's poof.
             <burst::BurstLayer />

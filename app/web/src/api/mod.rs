@@ -19,7 +19,9 @@ pub mod error;
 pub mod types;
 
 mod auth;
-mod files;
+/// Public for [`downloads::Support`], which the save action branches on.
+pub mod downloads;
+pub mod files;
 mod invitations;
 mod keys;
 pub mod messages;
@@ -34,6 +36,9 @@ pub mod search;
 pub mod shout;
 /// Public for the [`sites::Site`] type the Publish page renders.
 pub mod sites;
+/// Public for [`uploads::Progress`] and [`uploads::Target`], which the actions
+/// layer and the progress UI both name.
+pub mod uploads;
 mod users;
 
 use std::rc::Rc;

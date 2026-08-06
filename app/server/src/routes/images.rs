@@ -43,22 +43,43 @@ use crate::AppState;
 /// enough that the endpoint is useless as free blob storage.
 pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
-/// Video gets a larger ceiling because a ten-second 720p clip is simply
-/// bigger than any still — the same 25 MB attachments get, and for the same
-/// reason: the whole body is held in memory on both paths.
+/// The ceiling for the **single-shot** `POST /api/images`, which still holds
+/// its whole body in memory.
+///
+/// Stays at 25 MB for the same reason `files.rs::MAX_FILE_BYTES` does: raising
+/// it buys a bigger memory spike per request and nothing else. Anything larger
+/// goes through `routes/uploads.rs`, which never holds more than one chunk.
 pub const MAX_VIDEO_BYTES: usize = 25 * 1024 * 1024;
+
+/// What a video may reach when it arrives in chunks.
+///
+/// The full upload ceiling. A film is a film whether it is shared as a room
+/// attachment or as media, and a cap that let one route carry it and not the
+/// other would just be a maze — the memory argument that justified 25 MB does
+/// not apply to a path that streams.
+///
+/// Images keep [`MAX_IMAGE_BYTES`] on both paths: a still that large is a
+/// mistake rather than a preference, and the cap catches it before the disk
+/// does.
+pub const MAX_VIDEO_SESSION_BYTES: usize = crate::routes::uploads::MAX_UPLOAD_BYTES as usize;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/images", post(upload))
         .route("/images/import", post(import))
-        .route("/images/{name}", get(serve))
         // Overrides the 100 KB API-wide default: this is the one endpoint
         // whose whole point is a body bigger than that. Innermost layer
         // wins, so the general limit still applies everywhere else. The
         // per-kind caps below are what actually bound a stored file; this
         // only has to be the larger of the two.
         .layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES))
+}
+
+/// The serving route, split out for the media rate-limit budget — same
+/// reasoning as `files::media_router`: an AI-generated video hosted here is
+/// played by a `<video>` element, and playback is many requests by design.
+pub fn media_router() -> Router<AppState> {
+    Router::new().route("/images/{name}", get(serve))
 }
 
 /// The media types the AI providers actually emit. A server that stores
@@ -167,6 +188,66 @@ async fn store(state: &AppState, ext: &str, body: &[u8]) -> ApiResult<String> {
     }
 
     Ok(format!("/api/images/{name}"))
+}
+
+/// Commit a finished upload session as an image or video.
+///
+/// The counterpart to [`store`] for bytes that arrived in chunks. It cannot
+/// call `store`: that takes `&[u8]`, which is the thing a 4 GB upload does not
+/// have. So the shared parts are re-expressed against a path — the media type
+/// comes from the session's declared `mime` rather than a `Content-Type`
+/// header, the digest was computed by the uploads route while it verified the
+/// assembly, and the bytes move by `rename` instead of being written again.
+///
+/// The per-type ceilings still apply and are still the real limit: chunking
+/// makes a 4 GB *transfer* possible, it does not make a 4 GB profile picture
+/// sensible.
+pub(crate) async fn finalize_upload(
+    state: &AppState,
+    session: &crate::db::uploads::Session,
+    temp_path: &std::path::Path,
+    digest: &str,
+) -> ApiResult<Response> {
+    let Some(ext) = extension_for(&session.mime) else {
+        return Err(ApiError::bad_request(
+            "mime must be image/png, image/jpeg, image/webp, image/gif, \
+             video/mp4, or video/webm",
+        ));
+    };
+    // The *session* ceiling, not the single-shot one: these bytes arrived in
+    // chunks and were never held whole by anything.
+    let cap = match ext {
+        "mp4" | "webm" => MAX_VIDEO_SESSION_BYTES,
+        _ => MAX_IMAGE_BYTES,
+    };
+    if session.declared_size as usize > cap {
+        return Err(ApiError::bad_request(format!(
+            "File is larger than the {} MB limit for this media type",
+            cap / (1024 * 1024)
+        )));
+    }
+
+    let name = format!("{digest}.{ext}");
+    let dir = state.cfg.images_dir();
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let path = dir.join(&name);
+
+    // Content-addressed, so an existing file is the same file.
+    if path.exists() {
+        let _ = tokio::fs::remove_file(temp_path).await;
+    } else {
+        tokio::fs::rename(temp_path, &path)
+            .await
+            .map_err(|e| ApiError::Internal(e.into()))?;
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "url": format!("/api/images/{name}") })),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize)]

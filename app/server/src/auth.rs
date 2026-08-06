@@ -28,11 +28,66 @@ pub struct Claims {
     pub exp: i64,
 }
 
+/// A capability to fetch **one** resource, carried in a query parameter
+/// instead of a header.
+///
+/// This exists for exactly one reason: a browser downloading a 4 GB file has
+/// to be the thing that writes it to disk, and a navigation cannot carry an
+/// `Authorization` header. Fetching the bytes into the page first and handing
+/// over a blob — what the client did while the cap was 25 MB — needs the whole
+/// file in memory twice, which is not available at this size and is not a
+/// budget that grows.
+///
+/// Three properties keep that from being a hole:
+///
+/// * **`scope` names a single resource.** A token minted for one attachment
+///   opens that attachment and nothing else, so a leaked URL is not an
+///   account.
+/// * **Authorisation is still checked at request time.** The claim carries the
+///   wallet it was issued to and the handler re-runs the same membership check
+///   an `Authorization` header would have gone through, so leaving a room
+///   invalidates every outstanding token for that room's files immediately.
+/// * **It expires quickly** — see [`DOWNLOAD_TTL_SECONDS`].
+///
+/// Signed with a **different key** from [`Claims`] — see
+/// [`JwtKeys::download_secret`]. That is not belt-and-braces, it is the load-
+/// bearing part: `Claims` deserialises from JSON that carries extra members,
+/// so a download token sharing the session secret would verify as a *session*
+/// token, and this credential is one that ends up in browser history, in the
+/// download manager, and in any log that records a URL. Domain-separating the
+/// key makes that substitution impossible rather than merely unlikely.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadClaims {
+    #[serde(rename = "walletAddress")]
+    pub wallet_address: String,
+    /// The one resource this token opens, as an opaque route-defined string.
+    pub scope: String,
+    pub iat: i64,
+    pub exp: i64,
+}
+
+/// How long a download capability lives.
+///
+/// One hour, which is longer than it takes to *start* a download and long
+/// enough to survive one. The window has to cover the whole transfer, not just
+/// the first request: a browser that loses the network mid-file resumes with a
+/// `Range` request against the same URL, and a token that died in the meantime
+/// turns a resumable 4 GB download into a restart. Set against that, the token
+/// opens one file, to one wallet, and only while that wallet can still see it.
+pub const DOWNLOAD_TTL_SECONDS: i64 = 3600;
+
 /// Signing and verification material.
 pub struct JwtKeys {
     encoding: EncodingKey,
     decoding: DecodingKey,
     validation: Validation,
+    /// Signing and verification for [`DownloadClaims`], under a key derived
+    /// from the session secret. A token minted with one key cannot verify
+    /// under the other, so the two credentials cannot be swapped.
+    download_encoding: EncodingKey,
+    download_decoding: DecodingKey,
+    /// Validation for [`DownloadClaims`]: additionally requires `scope`.
+    download_validation: Validation,
     ttl_seconds: i64,
 }
 
@@ -56,12 +111,80 @@ impl JwtKeys {
         // no token we mint — but spelling it out documents what is checked.
         validation.required_spec_claims = std::collections::HashSet::from(["exp".to_owned()]);
 
+        // The same pinning, plus `scope`. Requiring a claim the session token
+        // does not carry is what makes the two token kinds non-interchangeable
+        // despite sharing a secret and an algorithm.
+        let mut download_validation = validation.clone();
+        download_validation.required_spec_claims =
+            std::collections::HashSet::from(["exp".to_owned(), "scope".to_owned()]);
+
+        let dl = Self::download_secret(secret);
+
         Self {
             encoding: EncodingKey::from_secret(secret),
             decoding: DecodingKey::from_secret(secret),
             validation,
+            download_encoding: EncodingKey::from_secret(&dl),
+            download_decoding: DecodingKey::from_secret(&dl),
+            download_validation,
             ttl_seconds: ttl_hours.max(1) * 3600,
         }
+    }
+
+    /// The download-token key, derived from the session secret.
+    ///
+    /// One secret is configured and two are needed, so the second is derived
+    /// rather than asked for: an operator cannot forget to set it, rotating
+    /// the session secret rotates this too, and no deployment can accidentally
+    /// run with the two keys equal. The label is what makes it a *different*
+    /// key and not merely a hash of the same one — anything else hashing the
+    /// secret for another purpose must use a different label.
+    fn download_secret(secret: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"pocketskynet/download-token/v1\0");
+        hasher.update(secret);
+        hasher.finalize().into()
+    }
+
+    /// Mint a capability to download one resource.
+    ///
+    /// `scope` is the route's own name for the thing — an attachment id, an
+    /// image's stored name — and is compared verbatim on the way back in.
+    pub fn issue_download(&self, wallet: &WalletAddress, scope: &str) -> ApiResult<String> {
+        let now = now_secs();
+        let claims = DownloadClaims {
+            wallet_address: wallet.as_str().to_owned(),
+            scope: scope.to_owned(),
+            iat: now,
+            exp: now + DOWNLOAD_TTL_SECONDS,
+        };
+        jsonwebtoken::encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &self.download_encoding,
+        )
+        .map_err(|e| ApiError::Internal(anyhow::Error::new(e).context("signing download token")))
+    }
+
+    /// Verify a download capability **and** that it was minted for `scope`.
+    ///
+    /// The scope comparison is here rather than left to the caller on purpose:
+    /// a handler that verified the signature and forgot to check what the
+    /// token was *for* would accept any valid token for any file, which is the
+    /// one mistake this whole mechanism exists to make impossible.
+    pub fn verify_download(&self, token: &str, scope: &str) -> ApiResult<WalletAddress> {
+        let data = jsonwebtoken::decode::<DownloadClaims>(
+            token,
+            &self.download_decoding,
+            &self.download_validation,
+        )
+        .map_err(|_| ApiError::unauthorized("Invalid or expired download link"))?;
+        if data.claims.scope != scope {
+            return Err(ApiError::unauthorized("Invalid or expired download link"));
+        }
+        WalletAddress::new(&data.claims.wallet_address)
+            .map_err(|_| ApiError::unauthorized("Invalid or expired download link"))
     }
 
     /// Mint a token for an already-authenticated wallet.
@@ -243,6 +366,96 @@ mod tests {
             HeaderValue::from_str(value).unwrap(),
         );
         map
+    }
+
+    #[test]
+    fn a_download_token_opens_the_scope_it_was_minted_for() {
+        let keys = keys();
+        let token = keys.issue_download(&wallet(), "file_1_abc").unwrap();
+        assert_eq!(
+            keys.verify_download(&token, "file_1_abc").unwrap(),
+            wallet()
+        );
+    }
+
+    #[test]
+    fn a_download_token_does_not_open_a_different_file() {
+        // The point of the scope claim. A valid signature is not authority
+        // over everything the signer has ever signed for.
+        let keys = keys();
+        let token = keys.issue_download(&wallet(), "file_1_abc").unwrap();
+        assert!(keys.verify_download(&token, "file_2_def").is_err());
+        // Nor is a prefix or a suffix of the scope enough.
+        assert!(keys.verify_download(&token, "file_1_ab").is_err());
+        assert!(keys.verify_download(&token, "file_1_abcd").is_err());
+    }
+
+    #[test]
+    fn the_two_token_kinds_are_not_interchangeable() {
+        let keys = keys();
+
+        // A session token is not a download capability. Caught by the key.
+        let session = keys.issue(&wallet()).unwrap();
+        assert!(keys.verify_download(&session, "file_1_abc").is_err());
+
+        // And — the direction that matters — a download token is **not a
+        // login**. `Claims` deserialises happily from a payload carrying an
+        // extra `scope` member, so nothing in serde or in the validation stops
+        // this; only the derived key does. A download URL is handed to the
+        // browser and lands in history, in the download manager, and in every
+        // log that records a URL, so if this assertion ever flips, one of
+        // those is a credential.
+        let download = keys.issue_download(&wallet(), "file_1_abc").unwrap();
+        assert!(
+            keys.verify(&download).is_err(),
+            "a download link must never verify as a session token"
+        );
+    }
+
+    #[test]
+    fn the_download_key_is_not_the_session_key() {
+        // The property the test above depends on, asserted directly so a
+        // future refactor that collapses the two keys fails here first and
+        // says why.
+        let secret = b"test-secret-that-is-at-least-32-bytes-long";
+        assert_ne!(&JwtKeys::download_secret(secret)[..], &secret[..]);
+        // Deriving from a different session secret gives a different key, so
+        // rotating the one rotates the other.
+        assert_ne!(
+            JwtKeys::download_secret(secret),
+            JwtKeys::download_secret(b"a-completely-different-secret-value-32b")
+        );
+    }
+
+    #[test]
+    fn an_expired_download_token_is_refused() {
+        let keys = keys();
+        // Comfortably past `Validation`'s default 60-second leeway, which the
+        // session tokens rely on too — an `exp` of exactly `now - 60` is still
+        // inside it and would make this test assert nothing.
+        let past = now_secs() - 3600;
+        let claims = DownloadClaims {
+            wallet_address: wallet().as_str().to_owned(),
+            scope: "file_1_abc".to_owned(),
+            iat: past - 60,
+            exp: past,
+        };
+        let token = jsonwebtoken::encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(&JwtKeys::download_secret(
+                b"test-secret-that-is-at-least-32-bytes-long",
+            )),
+        )
+        .unwrap();
+        assert!(keys.verify_download(&token, "file_1_abc").is_err());
+    }
+
+    #[test]
+    fn a_download_token_signed_with_another_secret_is_refused() {
+        let other = JwtKeys::new(b"a-completely-different-secret-value-32b", 24);
+        let token = other.issue_download(&wallet(), "file_1_abc").unwrap();
+        assert!(keys().verify_download(&token, "file_1_abc").is_err());
     }
 
     #[test]

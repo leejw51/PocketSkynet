@@ -4,17 +4,31 @@
 //! server's decision that an attachment is as private as its room:
 //!
 //! * **Upload sends raw bytes**, not JSON, with the metadata in the query
-//!   string — the same shape `upload_image` uses, because base64 in a JSON body
-//!   costs a third of the payload for nothing.
-//! * **Download cannot be an `href`.** `/api/files/{id}/raw` demands a bearer
-//!   token, so the bytes are fetched here and handed to the page as an
-//!   object URL. That is the price of attachments not being a public
-//!   capability-URL space like `/api/images`.
+//!   string — though the app itself now uploads through `api/uploads.rs`,
+//!   which chunks; the raw route here is the legacy single-shot path.
+//! * **Download is a capability URL.** `/api/files/{id}/raw` demands a bearer
+//!   token, an `<img src>` cannot send one, and a 4 GB body cannot pass
+//!   through the page — so [`Client::download_link`] mints a short-lived
+//!   single-file token and everything (previews, players, saves) points at
+//!   the URL carrying it. The server streams and honours `Range`.
 
 use gloo_net::http::Method;
 
 use super::{ApiError, ApiResult, Client};
 use crate::api::types::FileMeta;
+
+/// What `POST /api/files/{id}/download-token` answers.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadLink {
+    /// Relative, and carrying the capability. Prefix with the client's base.
+    pub url: String,
+    /// Lowercase hex sha-256 of the file, so what landed on disk can be
+    /// checked against what the server holds.
+    pub sha256: String,
+    pub size_bytes: f64,
+    pub filename: String,
+}
 
 impl Client {
     /// Upload `bytes` to a room. `caption` may be empty; its `#hashtags` are
@@ -72,12 +86,35 @@ impl Client {
             .await
     }
 
-    /// Fetch an attachment's bytes with the caller's token.
+    /// Ask for a short-lived URL a browser can download directly, plus the
+    /// digest to check what it saved.
     ///
-    /// Returns the raw bytes rather than a URL because only the caller knows
-    /// what it wants them for — a preview needs a typed object URL, a save
-    /// needs an anchor click, and building both here would mean leaking one
-    /// object URL per call with nobody to revoke it.
+    /// This is how a large attachment is saved. [`download_file`] below pulls
+    /// the bytes through the page, which needs the whole file in memory and
+    /// stops being possible somewhere well under a gigabyte; the browser
+    /// writing the response straight to disk has no such ceiling and gets
+    /// resume, pause and its own progress for free.
+    pub async fn download_link(&self, id: &str) -> ApiResult<DownloadLink> {
+        // GET, not POST, and with no body. A POST carrying `{}` is what this
+        // was, and it fails outright from iOS Safari over HTTP/3 — which is
+        // how a video lost its thumbnail, its playback and its download button
+        // all at once, with only "Can't reach the server" to show for it.
+        self.send(
+            Method::GET,
+            &format!("/api/files/{}/download-token", encode(id)),
+        )
+        .await
+    }
+
+    /// Fetch an attachment's whole body into memory with the caller's token.
+    ///
+    /// **Nothing in the app calls this any more.** Previews and saves moved to
+    /// capability URLs (`download_link`) when the size ceiling moved to 4 GB,
+    /// because this path buffers the entire file in the wasm heap. It stays
+    /// for the same reason the rest of the unused protocol surface does (see
+    /// `api/mod.rs`), and because a future small-file consumer — hashing a
+    /// kilobyte attachment inline, say — is legitimate. Do not point anything
+    /// large at it.
     pub async fn download_file(&self, id: &str) -> ApiResult<Vec<u8>> {
         let path = format!("/api/files/{}/raw", encode(id));
         let resp = self

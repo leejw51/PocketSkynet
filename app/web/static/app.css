@@ -6144,6 +6144,11 @@ span.fn-conn { cursor: default; }
   .fn-panes[data-view="rooms"] .fn-pane--detail { display: none; }
 
   .fn-bottomnav { display: grid; }
+  /* The rail (§24) sits above the nav rather than on it. Declared here, next
+     to the rule that puts the nav on screen, so the two cannot drift: a nav
+     that appears without this would be covered again. `--fn-safe-bottom` is
+     already inside the nav's own padding, so this is the nav box alone. */
+  :root { --fn-nav-h: 58px; }
   .fn-back { display: inline-grid; }
 
   /* Where the bottom nav exists, the top bar stops being a menu.
@@ -6390,6 +6395,8 @@ span.fn-conn { cursor: default; }
    eating an eighth of it. */
 @media (orientation: landscape) and (max-height: 500px) and (min-width: 800px) {
   .fn-bottomnav { display: none; }
+  /* No nav here, so the rail only clears the safe area. */
+  :root { --fn-nav-h: 0px; }
   .fn-back { display: none; }
 }
 
@@ -8678,6 +8685,14 @@ span.fn-conn { cursor: default; }
 @media (hover: hover) {
   .fn-trust__get:hover { box-shadow: 0 0 14px var(--fn-glow); }
 }
+/* The refresh step is a <button>, so strip the UA chrome the <a> never had
+   and keep the pair visually identical; block display stacks it under the
+   iOS instructions as step 2. */
+.fn-trust__reload {
+  display: flex;
+  font: inherit;
+  cursor: pointer;
+}
 
 /* === Profile-image picker (Settings → Profile image) ====================== */
 /* The gallery is a grid of square portraits; the selected one wears the
@@ -9712,4 +9727,273 @@ span.fn-conn { cursor: default; }
   /* §17 already flattens the durations. This is the *hover* growth, which is
      a resting transform-adjacent effect and has to be removed outright. */
   .fn-media__zoom:hover img { filter: none; }
+}
+
+/* ------------------------------------------------------------------ §24 --
+   TRANSFERS — a large upload, while it happens (components/transfers.rs)
+
+   A card, bottom-left, that must clear three things: the composer, the bottom
+   navigation on phones, and the home indicator. It used to clear none of them —
+   a phone showed it sitting on top of the nav — so the offset is now composed
+   rather than guessed: the safe area, plus the nav where there is one, plus a
+   gutter.
+
+   Fixed rather than in flow: the rail is mounted in the shell and must not
+   reflow whatever screen is under it.
+
+   Two stages, two treatments. The checksum pass is a local read and gets the
+   quiet one; the transfer itself gets the accent, because that is the one with
+   a network on the other end. Without the distinction a bar that fills, resets
+   and fills again reads as a bug.
+
+   §17's reduced-motion rule flattens the transition and kills the shimmer,
+   which is correct: the number is the information and it stays exact.       */
+.fn-transfers {
+  position: fixed;
+  /* Composed, not guessed — see above. `--fn-nav-h` is 0 on desktop. */
+  inset-block-end: calc(
+    var(--fn-s4) + var(--fn-safe-bottom, 0px) + var(--fn-nav-h, 0px)
+  );
+  inset-inline-start: var(--fn-s4);
+  z-index: 60;
+  display: grid;
+  gap: var(--fn-s2);
+  inline-size: min(360px, calc(100vw - var(--fn-s4) * 2));
+  /* The container ignores the pointer so it never blocks the app behind it;
+     the cancel button re-enables it for itself. */
+  pointer-events: none;
+}
+
+.fn-transfer {
+  position: relative;
+  overflow: hidden;
+  background: var(--fn-surface);
+  border: 1px solid var(--fn-border);
+  border-radius: var(--fn-radius-lg, 14px);
+  padding: var(--fn-s3);
+  display: grid;
+  gap: 10px;
+  /* Two shadows: a tight one that seats the card, and a wide soft one that
+     lifts it off whatever it is covering. One shadow does one of those. */
+  box-shadow:
+    0 1px 2px color-mix(in srgb, #000 30%, transparent),
+    0 12px 32px -8px color-mix(in srgb, #000 55%, transparent);
+  animation: fn-list-in var(--fn-dur-soft) var(--fn-spring-soft) both;
+}
+
+/* A hairline of the accent down the leading edge — enough to read as "this is
+   the system doing something" without a second colour anywhere else. */
+.fn-transfer::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  inline-size: 2px;
+  background: var(--fn-primary);
+}
+.fn-transfer[data-stalled="true"]::before {
+  background: var(--fn-warn, hsl(38 92% 55%));
+}
+
+.fn-transfer__head {
+  display: flex;
+  align-items: center;
+  gap: var(--fn-s2);
+}
+
+/* The filename gives up its width first: everything beside it is a
+   fixed-width fact, and a long name must not push those off the card. */
+.fn-transfer__name {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fn-fs-sm);
+  font-weight: 600;
+  color: var(--fn-text);
+}
+
+/* The way out. Anything that can hang needs one, and this one is safe: the
+   session survives on the server, so re-attaching the same file resumes it. */
+.fn-transfer__cancel {
+  flex: 0 0 auto;
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  inline-size: 26px;
+  block-size: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--fn-text-dim);
+  cursor: pointer;
+  transition: background var(--fn-dur) var(--fn-ease), color var(--fn-dur) var(--fn-ease);
+}
+.fn-transfer__cancel:hover {
+  background: color-mix(in srgb, var(--fn-text) 12%, transparent);
+  color: var(--fn-text);
+}
+.fn-transfer__cancel:focus-visible {
+  outline: 2px solid var(--fn-primary);
+  outline-offset: 2px;
+}
+
+.fn-transfer__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fn-s2);
+}
+
+/* Always visible, next to the number. A bare "100%" is what made a hung
+   checksum pass look like a finished upload. */
+.fn-transfer__stage {
+  font-size: var(--fn-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fn-text-dim);
+}
+.fn-transfer[data-stalled="true"] .fn-transfer__stage {
+  color: var(--fn-warn, hsl(38 92% 55%));
+}
+
+/* Tabular figures, or the percentage shifts the layout every chunk as the
+   digits change width. */
+.fn-transfer__pct {
+  font-size: var(--fn-fs-md, 1rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-primary);
+}
+.fn-transfer[data-stalled="true"] .fn-transfer__pct {
+  color: var(--fn-warn, hsl(38 92% 55%));
+}
+
+.fn-transfer__track {
+  position: relative;
+  block-size: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fn-text) 10%, transparent);
+  overflow: hidden;
+}
+
+.fn-transfer__fill {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  /* A gradient rather than a flat fill, so the leading edge is brighter than
+     the tail and the bar reads as moving even when it is barely moving. */
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--fn-primary) 55%, transparent),
+    var(--fn-primary)
+  );
+  /* Width, not a transform: the fill carries a glow on its leading edge and
+     scaling would stretch that into a smear across the whole bar. */
+  transition: inline-size var(--fn-dur) linear;
+}
+
+/* The local pass. Dimmer and flat — nothing is crossing a network yet. */
+.fn-transfer__fill[data-stage="checksum"] {
+  background: color-mix(in srgb, var(--fn-text) 45%, transparent);
+}
+
+/* A moving sheen, so a slow chunk still looks alive. Only while the transfer
+   is actually moving: on a stalled row this would be a lie. */
+.fn-transfer__fill[data-stage="moving"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, #fff 35%, transparent),
+    transparent
+  );
+  animation: fn-transfer-sheen 1.6s var(--fn-ease-cosine) infinite;
+}
+.fn-transfer[data-stalled="true"] .fn-transfer__fill {
+  background: var(--fn-warn, hsl(38 92% 55%));
+}
+.fn-transfer[data-stalled="true"] .fn-transfer__fill::after { display: none; }
+
+@keyframes fn-transfer-sheen {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+
+.fn-transfer__size {
+  font-size: var(--fn-fs-xs);
+  color: var(--fn-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The instruction, not just the diagnosis: a stalled row says what to do. */
+.fn-transfer__hint {
+  color: var(--fn-warn, hsl(38 92% 55%));
+  margin-inline-start: 0.4em;
+}
+
+/* On a phone the card spans the width, because a 360px card beside 40px of
+   dead space reads as a misplaced popup rather than a status line. */
+@media (max-width: 560px) {
+  .fn-transfers {
+    inset-inline: var(--fn-s3);
+    inline-size: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fn-transfer { animation: none; }
+  .fn-transfer__fill { transition: none; }
+  .fn-transfer__fill::after { display: none; }
+  .fn-transfer__cancel { transition: none; }
+}
+
+/* A video in the stream is a thumbnail until it is asked for
+   (message.rs::AttachmentEmbed). The poster is a `<video preload="metadata">`
+   rather than a generated image: the browser already decodes a frame to
+   satisfy `metadata`, so this costs the header of the file and no more — a few
+   hundred kilobytes of a film that may be gigabytes.
+
+   The badge is what makes it read as clickable. A still with no affordance
+   looks like an image that failed to load, which is the exact impression a
+   film should not give. */
+.fn-attach__play {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.fn-attach__play-badge {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  inline-size: 48px;
+  block-size: 48px;
+  border-radius: 50%;
+  color: #fff;
+  /* Its own scrim: a bright frame behind a white glyph would swallow it. */
+  background: color-mix(in srgb, #000 55%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+  transition: transform var(--fn-dur) var(--fn-ease), background var(--fn-dur) var(--fn-ease);
+}
+.fn-attach__play:hover .fn-attach__play-badge {
+  transform: translate(-50%, -50%) scale(var(--fn-tap-hover));
+  background: color-mix(in srgb, var(--fn-primary) 70%, #000);
+}
+.fn-attach__play:active .fn-attach__play-badge {
+  transform: translate(-50%, -50%) scale(var(--fn-tap-press));
+}
+@media (prefers-reduced-motion: reduce) {
+  .fn-attach__play-badge { transition: none; }
 }

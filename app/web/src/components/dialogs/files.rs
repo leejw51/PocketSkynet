@@ -22,13 +22,17 @@ use crate::api::FileMeta;
 use crate::i18n::{t, Key};
 use crate::state::{use_store, Load};
 
-use super::super::common::{object_url, save_as, Empty};
+use super::super::common::Empty;
 use super::super::icons;
 use super::super::modal::Modal as Dialog;
 use super::super::toast;
 
-/// How many previews one drawer will fetch. Each one costs its whole file, so
-/// this is a bandwidth ceiling, not a rendering one.
+/// How many thumbnails one drawer will ask for.
+///
+/// It used to be a memory budget — each preview cost its whole file — and is
+/// now a round-trip budget: a thumbnail is a capability URL, and minting one is
+/// a request. Forty rows would be forty requests to draw forty 42px squares.
+/// The rest keep their type plate, which is a perfectly good identifier.
 const MAX_PREVIEWS: usize = 12;
 
 #[derive(Properties, PartialEq)]
@@ -45,7 +49,12 @@ pub fn files(p: &FilesProps) -> Html {
     let load = use_state(Load::default);
     let filter = use_state(|| Option::<String>::None);
     let error = use_state(|| Option::<String>::None);
-    // id → object URL for the thumbnails fetched so far.
+    // id → capability URL for the thumbnails asked for so far.
+    //
+    // A URL, not an object URL, and that is what makes a thumbnail cheap: with
+    // `preload="metadata"` the browser fetches the header and enough to decode
+    // one frame, then stops. Drawing a poster for a 900 MB film costs a few
+    // hundred kilobytes rather than 900 MB.
     let thumbs = use_state(HashMap::<String, String>::new);
 
     // Load the listing, and reload when the tag filter changes.
@@ -102,10 +111,17 @@ pub fn files(p: &FilesProps) -> Html {
                     wasm_bindgen_futures::spawn_local(async move {
                         let mut next = (*thumbs).clone();
                         for f in wanted {
-                            if let Ok(bytes) = store.client.download_file(&f.id).await {
-                                if let Some(url) = object_url(&bytes, f.preview_mime()) {
-                                    next.insert(f.id.clone(), url);
-                                }
+                            // A capability URL, not the bytes. The drawer used
+                            // to download every preview in full to draw a 42px
+                            // square, which was merely wasteful at 25 MB and is
+                            // impossible now — and an `<img>` pointed at a URL
+                            // lets the browser fetch only what it needs and
+                            // cache it.
+                            if let Ok(link) = store.client.download_link(&f.id).await {
+                                next.insert(
+                                    f.id.clone(),
+                                    store.client.url(&format!("{}&inline=1", link.url)),
+                                );
                             }
                         }
                         thumbs.set(next);
@@ -116,18 +132,8 @@ pub fn files(p: &FilesProps) -> Html {
         );
     }
 
-    // Revoke every object URL on unmount. Without this each open/close cycle
-    // pins another copy of every thumbnail for the life of the document.
-    {
-        let thumbs = thumbs.clone();
-        use_effect_with((), move |_| {
-            move || {
-                for url in thumbs.values() {
-                    let _ = web_sys::Url::revoke_object_url(url);
-                }
-            }
-        });
-    }
+    // Nothing to revoke on unmount any more: these are URLs the browser
+    // manages, not object URLs pinning bytes in this document.
 
     // The tag rail is derived from what is on screen rather than fetched: the
     // listing already carries every file's tags, so a second round trip to
@@ -145,26 +151,33 @@ pub fn files(p: &FilesProps) -> Html {
         seen
     };
 
+    // Hash a picked file against what the server says this attachment is.
+    // Needs a round trip for the digest rather than caching it on `FileMeta`:
+    // the digest is the *stored* content hash, and the listing deliberately
+    // does not carry the storage layout.
+    let verify = {
+        let store = store.clone();
+        Callback::from(move |(f, picked): (FileMeta, web_sys::File)| {
+            let store = store.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match store.client.download_link(&f.id).await {
+                    Ok(link) => {
+                        crate::actions::verify_downloaded_file(store, link.sha256, picked).await
+                    }
+                    Err(e) => toast::error(&store, e.user_message(), None),
+                }
+            });
+        })
+    };
+
     let save = {
         let store = store.clone();
         Callback::from(move |f: FileMeta| {
             let store = store.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match store.client.download_file(&f.id).await {
-                    // A save is a fresh blob URL revoked immediately after the
-                    // click: the anchor has already read it by then, and holding
-                    // it would pin the bytes for nothing.
-                    Ok(bytes) => match object_url(&bytes, "application/octet-stream") {
-                        Some(url) => {
-                            save_as(&url, &f.filename);
-                            let _ = web_sys::Url::revoke_object_url(&url);
-                        }
-                        None => {
-                            toast::error(&store, t(store.language, Key::attach_read_failed), None)
-                        }
-                    },
-                    Err(e) => toast::error(&store, e.user_message(), None),
-                }
+                // The browser fetches and writes it, so this works at any size
+                // — see `actions::save_attachment`.
+                crate::actions::save_attachment(store, f.id.clone(), f.filename.clone()).await;
             });
         })
     };
@@ -268,6 +281,7 @@ pub fn files(p: &FilesProps) -> Html {
                                     thumb={thumbs.get(&f.id).cloned()}
                                     can_delete={can_delete(&store, f)}
                                     on_save={save.clone()}
+                                    on_verify={verify.clone()}
                                     on_delete={remove.clone()}
                                 />
                             }) }
@@ -286,6 +300,8 @@ struct FileRowProps {
     thumb: Option<String>,
     can_delete: bool,
     on_save: Callback<FileMeta>,
+    /// A file to check against this attachment's published digest.
+    on_verify: Callback<(FileMeta, web_sys::File)>,
     on_delete: Callback<FileMeta>,
 }
 
@@ -350,6 +366,43 @@ fn file_row(p: &FileRowProps) -> Html {
                         Callback::from(move |_: MouseEvent| cb.emit(f.clone()))
                     }}
                 >{ icons::download(16) }</button>
+                // Verify a copy already on disk. The app cannot check the
+                // download itself — the browser writes those bytes and never
+                // hands them back — so this re-reads a file the user picks and
+                // hashes it in slices against the digest the server published.
+                // Genuinely end to end: it checks what is on the disk now, not
+                // what a transfer believed at the time.
+                <label
+                    class="topcoat-icon-button--quiet fn-file__verify"
+                    aria-label={t(lang, Key::attach_verify)}
+                    title={t(lang, Key::attach_verify)}
+                >
+                    { icons::shield(16) }
+                    <input
+                        type="file"
+                        class="fn-file__verify-input"
+                        onchange={{
+                            let cb = p.on_verify.clone();
+                            let f = f.clone();
+                            Callback::from(move |e: Event| {
+                                use wasm_bindgen::JsCast;
+                                let Some(input) = e
+                                    .target()
+                                    .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                else {
+                                    return;
+                                };
+                                let picked = input.files().and_then(|l| l.get(0));
+                                // Cleared now, so picking the same file twice
+                                // in a row still fires `change` the second time.
+                                input.set_value("");
+                                if let Some(picked) = picked {
+                                    cb.emit((f.clone(), picked));
+                                }
+                            })
+                        }}
+                    />
+                </label>
                 if p.can_delete {
                     <button
                         type="button"

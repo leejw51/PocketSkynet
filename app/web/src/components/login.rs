@@ -980,9 +980,20 @@ pub fn login(p: &LoginProps) -> Html {
                                 <p class="fn-trust__why">{ t(lang, Key::trust_server_why) }</p>
                                 <a class="fn-trust__get" href="/ca.crt" download="pocketskynet-ca.crt">
                                     { icons::download(16) }
-                                    { t(lang, Key::trust_server) }
+                                    { t(lang, Key::trust_server_get) }
                                 </a>
                                 <p class="fn-trust__steps">{ t(lang, Key::trust_server_ios) }</p>
+                                <button
+                                    type="button"
+                                    class="fn-trust__get fn-trust__reload"
+                                    onclick={Callback::from(|_: MouseEvent| {
+                                        if let Some(w) = web_sys::window() {
+                                            let _ = w.location().reload();
+                                        }
+                                    })}
+                                >
+                                    { t(lang, Key::trust_server_refresh) }
+                                </button>
                             </details>
                         }
 

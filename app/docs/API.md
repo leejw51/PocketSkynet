@@ -2456,6 +2456,101 @@ pointer advanced past an `edit` costs nothing.
 
 ---
 
+---
+
+## 13a. Resumable uploads (PocketSkynet extension)
+
+`POST /api/rooms/{roomId}/files` still exists and still takes a whole body, and
+is still capped at **25 MB**, because it still buffers. Anything larger is a
+*session*: begin, append, finish. The ceiling is **4 GB** for every kind.
+
+```text
+POST   /api/uploads               → 201 { id, offset, size, chunkSize }
+PATCH  /api/uploads/{id}?offset=N → 200 { offset, size }   (raw bytes, ≤ 16 MB)
+GET    /api/uploads/{id}          → 200 { id, offset, size, chunkSize }
+POST   /api/uploads/{id}/finish   → 201 <the created resource>
+DELETE /api/uploads/{id}          → 204
+```
+
+`begin` takes `{ kind, size, filename?, caption?, mime?, sha256?, roomId?,
+extra? }`. `kind` is `file` (needs `roomId`), `image` (uses `mime`), or `site`
+(`caption` is the title, `extra` the `txHash`). `size` **must be a JSON integer**
+— a float is a 422.
+
+### The offset belongs to the server
+
+An append states the offset it believes it is writing at and is refused with
+**409** unless the server agrees; the error carries the real offset so a client
+can seek rather than re-probe. The check and the write are one conditional
+statement, so two racing chunks cannot both win.
+
+This is what makes the ordinary flaky-network case safe. A chunk whose write
+landed but whose *response* was lost gets retried by every sane client; a
+protocol that trusted the client's offset would write those bytes twice and
+produce a file of exactly the right length and the wrong contents.
+
+Consequently `GET /api/uploads/{id}` is not a nicety — it is how a client that
+lost its connection finds out where to carry on. Polling it also counts as
+attendance: a session is swept after 24 hours of silence, and asking after one
+resets that clock. Eight open sessions per wallet.
+
+### Integrity
+
+`sha256` at `begin` is optional. If given, `finish` re-hashes the **whole
+assembled file** and refuses with 400 on a mismatch, destroying the bytes rather
+than storing something known to be wrong under a name derived from its own
+contents.
+
+Deliberately not per-chunk: a per-chunk digest proves each piece crossed the
+wire, which is the easy half, and proves nothing about whether they were
+assembled in the right order. One pass over the finished file covers transfer,
+ordering, assembly and storage together — and produces the content hash the
+store is addressed by, which is needed regardless.
+
+### Downloading what you uploaded
+
+`GET /api/files/{id}/raw` streams from disk and honours `Range`, so a large
+download resumes. An unsatisfiable range is **416** with `Content-Range:
+bytes */{len}` — never a silent 200, which is how a resumed download appends the
+start of a file to its own middle. Every response carries the digest twice:
+`Repr-Digest: sha-256=:<base64>:` (RFC 9530) and `X-Content-SHA256: <hex>`.
+
+Appending `&inline=1` (or `?inline=1` with a bearer header) serves a real media
+`Content-Type` with `Content-Disposition: inline`, so a `<video>` or `<img>` can
+render an attachment directly. The type comes from the stored extension via a
+closed allow-list of formats that decode to pixels or audio — `text/html` is not
+in the table and cannot be put there by an uploader — and `nosniff` still
+applies. Without the parameter every response stays `application/octet-stream`
++ `attachment`, exactly as before.
+
+**Rate limits:** the upload session routes and the media-serving routes
+(`/api/files/{id}/raw`, the token mint, `/api/images/{name}`) each draw on
+their own generous budgets (1200/min and 3000/min) instead of the general
+100/min — a chunked upload is a request per chunk and a playing `<video>` is a
+stream of `Range` requests *by design*, and metering either against the
+general budget let one film exhaust its viewer's allowance and 429 everything
+that device did next, including login.
+
+A browser saving a 4 GB file has to fetch it itself, and a navigation cannot set
+`Authorization`. So:
+
+```text
+GET /api/files/{id}/download-token → 200 { url, sha256, sizeBytes, filename, expiresIn }
+```
+
+`GET`, deliberately — minting reads state and changes none, and a bodiless GET
+also survives client stacks that mishandle request bodies (POST is still
+accepted for older clients). `url` carries a `?dl=` capability. It opens
+**one file**, expires in an hour,
+and the membership check still runs on every request — so losing access to the
+room invalidates every outstanding token for it immediately. It is signed with a
+key *derived from* the session secret, which is load-bearing rather than
+decorative: the session claim set deserialises happily from a payload carrying
+an extra member, so a shared key would make a download URL a **login**, and that
+URL lands in browser history and in every log that records one.
+
+---
+
 ## 14. Endpoint Index
 
 | # | Method | Path | Auth | Authorization |
@@ -2464,6 +2559,11 @@ pointer advanced past an `edit` costs nothing.
 | 2 | GET | `/api/blockchain/info` | — | — |
 | 2a | GET | `/api/networks` | — | — (PocketSkynet extension) |
 | 2b | POST | `/api/images` | ✓ | any user (5 MB image / 25 MB video cap, PocketSkynet extension) |
+| 2e | POST | `/api/uploads` | ✓ | begin a resumable upload, 4 GB cap (PocketSkynet extension, §13a) |
+| 2f | PATCH | `/api/uploads/{id}` | ✓ | owner only; append at `?offset=`, 409 on mismatch |
+| 2g | GET | `/api/uploads/{id}` | ✓ | owner only; where to resume from |
+| 2h | POST | `/api/uploads/{id}/finish` | ✓ | owner only; verifies sha-256, commits |
+| 2i | DELETE | `/api/uploads/{id}` | ✓ | owner only; abandon and reclaim the disk |
 | 2c | GET | `/api/images/{name}` | — | capability URL (PocketSkynet extension) |
 | 2d | POST | `/api/images/import` | ✓ | any user (allow-listed provider hosts, PocketSkynet extension) |
 | 3 | POST | `/api/auth/challenge` | — | — (10/min) |

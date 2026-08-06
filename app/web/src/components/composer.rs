@@ -43,11 +43,15 @@ pub struct ComposerProps {
     /// Opens the AI assistant dialog for this room.
     #[prop_or_default]
     pub on_open_assistant: Callback<()>,
-    /// A file was picked: its name, bytes, and whatever was in the field at the
-    /// time, which becomes the caption. The composer reads the bytes so the
-    /// parent never has to touch `web_sys::File`.
+    /// A file was picked: the browser's handle to it, and whatever was in the
+    /// field at the time, which becomes the caption.
+    ///
+    /// The **handle**, deliberately — this used to hand up a `Vec<u8>` so that
+    /// nothing outside the composer touched `web_sys::File`. That encapsulation
+    /// cost the whole file in memory, twice, which a 4 GB cap cannot afford; the
+    /// upload layer now reads it in slices and never holds more than one.
     #[prop_or_default]
-    pub on_attach: Callback<(String, Vec<u8>, String)>,
+    pub on_attach: Callback<(web_sys::File, String)>,
     /// Opens the Files drawer for this room.
     #[prop_or_default]
     pub on_open_files: Callback<()>,
@@ -145,13 +149,8 @@ pub fn composer(p: &ComposerProps) -> Html {
         Callback::from(move |_: MouseEvent| send.emit(()))
     };
 
-    // Read the picked file here rather than handing a `web_sys::File` upward:
-    // the bytes are what every caller wants, and keeping the DOM type in this
-    // one place means the rest of the app never grows a `web-sys` dependency
-    // on the file APIs.
-    //
-    // `Blob::array_buffer` rather than `FileReader`: same result, no event
-    // plumbing, one fewer enabled web-sys feature.
+    // The pick happens here; the bytes are read by the upload layer, a slice at
+    // a time. See `on_attach` for why the handle travels rather than a buffer.
     let onpick = {
         let on_attach = p.on_attach.clone();
         let file_input = file_input.clone();
@@ -163,7 +162,6 @@ pub fn composer(p: &ComposerProps) -> Html {
             let Some(file) = input.files().and_then(|list| list.get(0)) else {
                 return;
             };
-            let name = file.name();
             // Clear the input *now*, so picking the same file twice in a row
             // still fires `change` the second time.
             input.set_value("");
@@ -176,16 +174,14 @@ pub fn composer(p: &ComposerProps) -> Html {
             let caption = text.trim().to_owned();
             text.set(String::new());
 
-            let on_attach = on_attach.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let blob: web_sys::Blob = file.into();
-                let Ok(buffer) = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await
-                else {
-                    return;
-                };
-                let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-                on_attach.emit((name, bytes, caption));
-            });
+            // The handle goes up, not the bytes. `array_buffer()` on the whole
+            // file used to happen here, which put the entire attachment in the
+            // wasm heap — and then `Uint8Array::from` put a second copy beside
+            // it. At 25 MB that was merely wasteful; the cap is 4 GB now, which
+            // is the *entire* wasm32 address space, so reading the file here
+            // would be the one line that makes a large upload impossible.
+            // `crate::api::uploads` reads it a slice at a time instead.
+            on_attach.emit((file, caption));
         })
     };
 
