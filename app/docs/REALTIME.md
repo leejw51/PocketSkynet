@@ -503,6 +503,7 @@ multiplexed form is the default.
 | `member_removed` | `{"roomId":"room_…"}` |
 | `invitation_received` | `{"roomId":"room_…"}` |
 | `typing` | `{"roomId":"room_…","from":"0xabc…"}` (no `id:` — ephemeral, never replayed) |
+| `presence` | `{"wallet":"0xabc…","status":"away"}` (no `id:` — see below) |
 | `resync_required` | `{"reason":"cursor_too_old","fromSeq":N,"toSeq":M}` |
 | `session_expired` | `{"reason":"token_expired"}` (final frame; stream then closes) |
 
@@ -512,6 +513,14 @@ event stream, and the REST `/sync` remains the sole authority for what the user 
 
 `typing` frames deliberately omit `id:`, so a `Last-Event-ID` resume never replays stale typing
 indicators and the cursor never regresses.
+
+`presence` omits `id:` for a related but distinct reason. Replaying a gap would walk a client
+through a sequence of superseded statuses and leave it on whichever happened to be last, which is
+not the current one — and the last one is exactly what a naive replay produces. `GET /api/presence`
+(API.md §6.15) is the authority, and every client calls it when a stream comes up, which is also
+what lets the event stay this cheap: it is the one event that carries its own answer rather than
+being a wake-up, because the status *is* the fact and a round trip per tab switch across a whole
+team would cost more than it could protect.
 
 ### 8.5 Heartbeats and reconnect
 
@@ -561,6 +570,7 @@ pub enum ServerEvent {
     MemberRemoved { room_id: RoomId },
     InvitationReceived { room_id: RoomId },
     Typing { room_id: RoomId, from: WalletAddress },
+    Presence { wallet: WalletAddress, status: PresenceStatus },
     ResyncRequired { reason: ResyncReason, from_seq: u64, to_seq: u64 },
     SessionExpired { reason: &'static str },
     Pong,
@@ -568,14 +578,22 @@ pub enum ServerEvent {
 
 impl ServerEvent {
     pub fn name(&self) -> &'static str;      // -> SSE `event:` name / WS `type`
-    pub fn is_replayable(&self) -> bool;     // Typing/Pong => false
+    pub fn is_replayable(&self) -> bool;     // Typing/Presence/Shout/Pong => false
 }
+
+/// Ordered `Offline < Away < Online`, which is load-bearing: a wallet may hold
+/// eight connections, and its status is the *maximum* over them, so a phone
+/// idling in a pocket cannot drag down the laptop somebody is typing on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresenceStatus { Offline, Away, Online }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Ping,
     Typing { room_id: RoomId },
+    Presence { status: PresenceStatus },   // online/away only; offline is derived
 }
 ```
 
@@ -602,8 +620,19 @@ pub enum Target {
     Room(RoomId),
     User(WalletAddress),
     RoomExcept { room: RoomId, except: WalletAddress },
+    Rooms(Vec<RoomId>),                 // any of these; presence only
+    All,                                // the paid broadcast tier
 }
 ```
+
+`Rooms` exists for presence and nothing else: one person going online is one fact that concerns
+everyone they share *any* room with. The alternatives are both worse. N separate `Room` events
+would write N log records and hand a client in three shared rooms the same fact three times; a
+per-connection "who are my peers" set would have to be kept in step with membership on *other*
+people's joins, and a stale authorisation set is the bug this design refuses everywhere else. Here
+each recipient tests the list against its own current subscriptions, so the check cannot go
+stale — and the hub deduplicates recipients across the rooms, so the logged fan-out is a number
+that means something.
 
 `origin` closes the §5 residual leak: a connection drops any envelope whose `origin` is in its
 block set, so a blocked user's activity produces no wake-up at all — not merely an empty sync.

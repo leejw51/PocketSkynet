@@ -27,7 +27,8 @@ use crate::state::{use_store, Action, Confirm, ConfirmAction, Load, Modal, PostB
 use crate::store::{starts_new_day, starts_new_group};
 
 use super::common::{
-    Back, Badge, Banner, BusyButton, ConnPill, Empty, Ident, IdentSize, Lock, Popover, Spinner,
+    Back, Badge, Banner, BusyButton, ConnPill, Empty, Ident, IdentSize, Lock, Popover,
+    PresenceLabel, Spinner,
 };
 use super::composer::{Composer, Picker};
 use super::icons;
@@ -567,6 +568,15 @@ pub fn chat(p: &ChatProps) -> Html {
     // See `RoomWithMembers::title_for` — the answer differs per viewer, so it
     // can only be worked out here.
     let title = room.title_for(&me);
+    // In a one-to-one DM the header stands for a person, so it carries their
+    // status; a channel header stands for a room, which is not somewhere
+    // anybody is. This is the single most useful place for it — it is what
+    // tells you whether the message you are about to type will be read now or
+    // tomorrow morning.
+    let peer_presence = match room.others(&me).as_slice() {
+        [one] if room.is_direct() => store.presence_of(&one.wallet_address),
+        _ => pocketskynet_core::PresenceStatus::Offline,
+    };
     // Carries *why* an encrypted post cannot succeed, not merely that it
     // cannot: the composer's placeholder is the only explanation the user gets,
     // and the remedies differ.
@@ -972,6 +982,7 @@ pub fn chat(p: &ChatProps) -> Html {
                 <Ident
                     seed={p.room_id.to_string()}
                     size={IdentSize::Sm}
+                    presence={peer_presence}
                     zoom={crate::components::common::Zoom {
                         title: title.clone(),
                         subtitle: None,
@@ -980,6 +991,7 @@ pub fn chat(p: &ChatProps) -> Html {
                 />
                 <div class="fn-chat__title fn-grow">
                     <span>{ &title }</span>
+                    <PresenceLabel status={peer_presence} />
                     if room.has_encryption {
                         <Lock pending={rotation_pending} />
                     }

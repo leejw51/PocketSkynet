@@ -6,12 +6,12 @@
 //! attributes and the accessible names are written once instead of at each of
 //! the two hundred call sites that would otherwise get one of them wrong.
 
-use pocketskynet_core::WalletAddress;
+use pocketskynet_core::{PresenceStatus, WalletAddress};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 use yew::prelude::*;
 
-use crate::i18n::{t, Key};
+use crate::i18n::{t, Key, Lang};
 use crate::identity;
 use crate::realtime::ConnStatus;
 
@@ -77,10 +77,14 @@ pub struct IdentProps {
     /// treatment in the product that carries meaning.
     #[prop_or_default]
     pub is_self: bool,
-    /// The presence dot. Only pass `true` with *real* presence data; the React
-    /// client shows it unconditionally, which is a lie.
-    #[prop_or_default]
-    pub online: bool,
+    /// The presence dot: filled for online, a ring for away, nothing at all for
+    /// offline (`store.presence_of`).
+    ///
+    /// Defaults to `Offline`, which draws nothing — so a caller that has no
+    /// presence to hand shows none, rather than the unconditional green dot the
+    /// React client paints on every avatar whether or not anybody is there.
+    #[prop_or(PresenceStatus::Offline)]
+    pub presence: PresenceStatus,
     /// A single letter drawn in the corner, used for room chips.
     #[prop_or_default]
     pub corner: Option<String>,
@@ -126,8 +130,11 @@ pub fn ident_tile(p: &IdentProps) -> Html {
     if p.is_self {
         class.push("fn-ident--self");
     }
-    if p.online {
-        class.push("fn-ident--online");
+    match p.presence {
+        PresenceStatus::Online => class.push("fn-ident--online"),
+        PresenceStatus::Away => class.push("fn-ident--away"),
+        // Nothing. See `IdentProps::presence`.
+        PresenceStatus::Offline => {}
     }
     if p.zoom.is_some() {
         class.push("fn-ident--zoom");
@@ -422,6 +429,48 @@ pub fn badge(p: &BadgeProps) -> Html {
         format!("fn-badge fn-badge--{}", p.variant)
     };
     html! { <span {class}>{ for p.children.iter() }</span> }
+}
+
+/// The word for a presence status, in the reader's language.
+pub fn presence_word(lang: Lang, status: PresenceStatus) -> &'static str {
+    match status {
+        PresenceStatus::Online => t(lang, Key::presence_online),
+        PresenceStatus::Away => t(lang, Key::presence_away),
+        PresenceStatus::Offline => t(lang, Key::presence_offline),
+    }
+}
+
+#[derive(Properties, PartialEq)]
+pub struct PresenceLabelProps {
+    pub status: PresenceStatus,
+    /// Draw it only for a screen reader. The dot on the avatar is the sighted
+    /// reader's version, and in a dense list — a row of rooms, a message
+    /// gutter — a second textual copy of it is clutter. In the members list,
+    /// where the row is already three lines, the word is shown.
+    #[prop_or_default]
+    pub quiet: bool,
+}
+
+/// The word beside the dot.
+///
+/// Offline renders nothing in either mode: it is the state most people are in
+/// most of the time, and labelling every absent colleague turns a roster into a
+/// wall of "Offline". Its absence is legible on its own — no dot, no word.
+#[function_component(PresenceLabel)]
+pub fn presence_label(p: &PresenceLabelProps) -> Html {
+    let lang = crate::state::use_store().language;
+    if p.status == PresenceStatus::Offline {
+        return html! {};
+    }
+    let word = presence_word(lang, p.status);
+    if p.quiet {
+        return html! { <span class="fn-sr-only">{ word }</span> };
+    }
+    let class = match p.status {
+        PresenceStatus::Online => "fn-presence fn-presence--online",
+        _ => "fn-presence",
+    };
+    html! { <span {class}>{ word }</span> }
 }
 
 #[derive(Properties, PartialEq)]

@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use pocketskynet_core::chain::Network;
-use pocketskynet_core::{MessageId, RoomId, WalletAddress};
+use pocketskynet_core::{MessageId, PresenceStatus, RoomId, WalletAddress};
 use yew::prelude::*;
 
 use crate::api::{BlockchainInfo, BlockedUser, Client, Invitation, Message, RoomWithMembers};
@@ -202,6 +202,13 @@ pub struct AppState {
     pub conn: ConnStatus,
     pub online: bool,
     pub typing: TypingTracker,
+    /// Who is at their desk, keyed by address (API.md §6.15).
+    ///
+    /// Only non-offline people are held: the snapshot omits everybody else and
+    /// an `offline` event removes its entry, so a missing address means offline
+    /// and so does an address this client has never heard of. One rule for both
+    /// cases, and a map proportional to who is actually here.
+    pub presence: HashMap<WalletAddress, PresenceStatus>,
     pub mode: ConnectionMode,
     pub theme: Theme,
     /// The art direction (`ps-skin`) — palette, geometry and imagery.
@@ -344,6 +351,7 @@ impl AppState {
             conn: ConnStatus::Offline,
             online: true,
             typing: TypingTracker::default(),
+            presence: HashMap::new(),
             mode: ConnectionMode::WebSocket,
             theme: Theme::System,
             skin: Skin::load(),
@@ -382,6 +390,20 @@ impl AppState {
 
     pub fn me(&self) -> Option<&WalletAddress> {
         self.auth.address()
+    }
+
+    /// Whether somebody is at their desk.
+    ///
+    /// Absent means offline, which is the same answer this client gives for
+    /// somebody it has never heard about — and that is deliberate. There is no
+    /// "unknown" state to render, because a dot that meant "we are not sure"
+    /// would be a third colour nobody could read and would appear for the whole
+    /// first second of every session.
+    pub fn presence_of(&self, who: &WalletAddress) -> PresenceStatus {
+        self.presence
+            .get(who)
+            .copied()
+            .unwrap_or(PresenceStatus::Offline)
     }
 
     /// The chain this deployment runs on, as reported by the server.
@@ -601,6 +623,13 @@ pub enum Action {
     SweepTyping(i64),
     /// Drop every typing indicator for a room we are navigating away from.
     ClearTyping(RoomId),
+    /// One person moved. `Offline` removes rather than stores.
+    Presence(WalletAddress, PresenceStatus),
+    /// The authoritative snapshot from `GET /api/presence`, which **replaces**
+    /// the map rather than merging into it — merging would leave anybody who
+    /// went offline during a disconnection lit up forever, and a reconnect is
+    /// exactly when that happened.
+    PresenceSnapshot(Vec<(WalletAddress, PresenceStatus)>),
     SetMode(ConnectionMode),
     SetTheme(Theme),
     SetSkin(Skin),
@@ -643,6 +672,7 @@ impl Reducible for AppState {
             conn: self.conn,
             online: self.online,
             typing: self.typing.clone(),
+            presence: self.presence.clone(),
             mode: self.mode,
             theme: self.theme,
             skin: self.skin,
@@ -671,6 +701,10 @@ impl Reducible for AppState {
                     s.pending.clear();
                     s.invitations.clear();
                     s.blocks = BlockSet::default();
+                    // Presence is scoped to who *this* wallet shares rooms
+                    // with, so carrying it across an identity switch would
+                    // light up people the new account cannot see.
+                    s.presence.clear();
                     // The role belongs to the wallet, not to the browser.
                     // Carrying it across a sign-in would offer the console to
                     // whoever signed in next.
@@ -899,6 +933,19 @@ impl Reducible for AppState {
                 s.typing.sweep(now);
             }
             Action::ClearTyping(room) => s.typing.clear_room(&room),
+            Action::Presence(who, status) => {
+                if status == PresenceStatus::Offline {
+                    s.presence.remove(&who);
+                } else {
+                    s.presence.insert(who, status);
+                }
+            }
+            Action::PresenceSnapshot(entries) => {
+                s.presence = entries
+                    .into_iter()
+                    .filter(|(_, status)| *status != PresenceStatus::Offline)
+                    .collect();
+            }
             Action::SetMode(m) => {
                 m.save();
                 s.mode = m;
@@ -1438,6 +1485,65 @@ mod tests {
         // wrong, just not the one the user could act on first.
         let s = s.reduce(Action::SetBundle(id.clone(), bundle_with(&[1, 2])));
         assert_eq!(s.post_block(&id), Some(PostBlock::RotationPending));
+    }
+
+    /// Absence is the offline signal, in both directions. A map that stored
+    /// `Offline` explicitly would grow with every colleague who ever logged in
+    /// and would still have to answer "not in the map" the same way.
+    #[test]
+    fn going_offline_removes_the_entry_rather_than_storing_one() {
+        let s = state()
+            .reduce(Action::Presence(addr(1), PresenceStatus::Online))
+            .reduce(Action::Presence(addr(2), PresenceStatus::Away));
+
+        assert_eq!(s.presence_of(&addr(1)), PresenceStatus::Online);
+        assert_eq!(s.presence_of(&addr(2)), PresenceStatus::Away);
+        // Never heard of: offline, exactly like somebody who just left.
+        assert_eq!(s.presence_of(&addr(3)), PresenceStatus::Offline);
+
+        let s = s.reduce(Action::Presence(addr(1), PresenceStatus::Offline));
+        assert_eq!(s.presence_of(&addr(1)), PresenceStatus::Offline);
+        assert!(!s.presence.contains_key(&addr(1)));
+        assert_eq!(s.presence.len(), 1, "only the away colleague is still held");
+    }
+
+    /// The bug a merge would have: somebody who went offline while this client
+    /// was disconnected raises no event it can hear, so only a wholesale
+    /// replacement can put the dot out. A reconnect is precisely when that
+    /// happened, and a reconnect is when the snapshot arrives.
+    #[test]
+    fn a_snapshot_replaces_the_map_instead_of_merging_into_it() {
+        let s = state()
+            .reduce(Action::Presence(addr(1), PresenceStatus::Online))
+            .reduce(Action::Presence(addr(2), PresenceStatus::Online));
+
+        let s = s.reduce(Action::PresenceSnapshot(vec![(
+            addr(2),
+            PresenceStatus::Away,
+        )]));
+
+        assert_eq!(
+            s.presence_of(&addr(1)),
+            PresenceStatus::Offline,
+            "somebody the snapshot omits has gone, however recently they were lit"
+        );
+        assert_eq!(s.presence_of(&addr(2)), PresenceStatus::Away);
+    }
+
+    /// Presence is scoped to the rooms *this* wallet is in, so it cannot ride
+    /// through a sign-in and light up people the next account cannot see.
+    #[test]
+    fn switching_identity_clears_presence() {
+        let s = state().reduce(Action::Presence(addr(1), PresenceStatus::Online));
+        assert_eq!(s.presence.len(), 1);
+
+        let s = s.reduce(Action::SetAuth(Auth::Locked(PersistedSession {
+            token: "t1".into(),
+            wallet_address: addr(9),
+            username: "someone else".into(),
+            profile_image: None,
+        })));
+        assert!(s.presence.is_empty());
     }
 
     #[test]

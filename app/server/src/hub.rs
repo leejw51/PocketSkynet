@@ -21,12 +21,12 @@
 //! which leaked "the person you blocked is active in this room" through timing.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use pocketskynet_core::{ResyncReason, RoomId, ServerEvent, Target, WalletAddress};
+use pocketskynet_core::{PresenceStatus, ResyncReason, RoomId, ServerEvent, Target, WalletAddress};
 use smallvec::SmallVec;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -49,6 +49,34 @@ pub const MAX_PER_WALLET: usize = 8;
 /// How many events a resuming SSE stream will replay before giving up and
 /// asking for a full resync.
 pub const MAX_REPLAY: usize = 1000;
+
+/// How long a connection may go without a sign of life before its holder is
+/// counted as away.
+///
+/// Five minutes, and it has to be well clear of the WebSocket ping cadence to
+/// mean anything: the server pings every 30 s and any inbound frame — the
+/// client's own 25 s keepalive included — counts as activity, so a socket that
+/// is merely *open* never trips this. What trips it is a browser that has
+/// throttled its timers because the tab went to the background, which is
+/// exactly the person who is not there.
+pub const AWAY_AFTER_MS: i64 = 5 * 60 * 1000;
+
+/// How long a `PUT /api/presence` beacon counts for.
+///
+/// The SSE and polling tiers have no upstream channel, so their only way to
+/// say "still here" is that request, which the client repeats every 60 s. Two
+/// and a half times the cadence is the margin: a background tab's timers are
+/// throttled rather than stopped, and a window tight enough to be caught out by
+/// that throttling would flap somebody between here and gone while they read.
+pub const BEACON_TTL_MS: i64 = 150 * 1000;
+
+/// How often the sweeper re-derives everyone's status.
+///
+/// The only transition it exists to catch is online → away, which has a
+/// five-minute threshold, so a slower tick would be indistinguishable to a
+/// reader and a faster one would be pure work. Connect, disconnect and an
+/// explicit declaration all announce immediately and do not wait for this.
+pub const PRESENCE_SWEEP: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub type ConnId = u64;
 
@@ -112,6 +140,11 @@ impl ConnView {
             Target::Room { room_id } => self.rooms.contains(room_id),
             Target::User { wallet } => wallet == me,
             Target::RoomExcept { room_id, except } => self.rooms.contains(room_id) && except != me,
+            // One shared room is enough, and it is tested against *this*
+            // connection's current subscriptions — so somebody who joined a
+            // second ago is authorised for the very next presence event, and
+            // somebody kicked a second ago is not.
+            Target::Rooms { room_ids } => room_ids.iter().any(|r| self.rooms.contains(r)),
             // Everyone — but the block check above already ran, so a shout
             // from someone this user blocked still produces no wake-up.
             Target::All => true,
@@ -140,6 +173,13 @@ pub struct ConnHandle {
     pub token_exp: Option<i64>,
     /// Last accepted typing relay, for the 1/s per-connection throttle.
     pub last_typing_at: AtomicI64,
+    /// Last sign of life on this connection: the handshake itself, then every
+    /// inbound frame. Drives the idle half of presence.
+    last_active_at: AtomicI64,
+    /// The client said its tab is in the background. Per-connection rather
+    /// than per-wallet, because that is what it describes: the laptop tab you
+    /// switched away from says nothing about the phone in your hand.
+    declared_away: AtomicBool,
     pub cancel: CancellationToken,
 }
 
@@ -158,12 +198,57 @@ impl ConnHandle {
             view: Arc::new(ArcSwap::from_pointee(view)),
             token_exp,
             last_typing_at: AtomicI64::new(0),
+            // Opening a connection is itself the freshest possible sign of
+            // life, so a new connection starts online rather than serving out
+            // an idle window it never sat through.
+            last_active_at: AtomicI64::new(crate::db::now_ms()),
+            declared_away: AtomicBool::new(false),
             cancel: CancellationToken::new(),
         }
     }
 
     pub fn view(&self) -> Arc<ConnView> {
         self.view.load_full()
+    }
+
+    /// Note a sign of life. Cheap enough to call on every inbound frame.
+    ///
+    /// A frame also clears a previous `away` declaration: a client that is
+    /// talking to us is a client whose tab came back, and the alternative —
+    /// requiring an explicit `online` to undo an `away` — leaves anyone whose
+    /// "I'm back" frame was lost stuck as away until they reconnect.
+    pub fn mark_active(&self, now: i64) {
+        self.last_active_at.store(now, Ordering::Relaxed);
+        self.declared_away.store(false, Ordering::Relaxed);
+    }
+
+    /// Record what the client says about itself.
+    ///
+    /// `Online` is treated as activity, not merely as a flag, because that is
+    /// what it means: the tab is in the foreground again.
+    pub fn declare(&self, status: PresenceStatus, now: i64) {
+        match status {
+            PresenceStatus::Away => self.declared_away.store(true, Ordering::Relaxed),
+            // Offline is refused upstream (`PresenceStatus::is_declarable`);
+            // treating it as presence here would be the wrong half of the
+            // check to rely on, so it lands with online rather than silently
+            // meaning something.
+            PresenceStatus::Online | PresenceStatus::Offline => self.mark_active(now),
+        }
+    }
+
+    /// This one connection's contribution to its holder's status.
+    ///
+    /// Never `Offline`: the connection exists, which is precisely what offline
+    /// is the absence of.
+    pub fn presence(&self, now: i64) -> PresenceStatus {
+        if self.declared_away.load(Ordering::Relaxed) {
+            return PresenceStatus::Away;
+        }
+        if now - self.last_active_at.load(Ordering::Relaxed) >= AWAY_AFTER_MS {
+            return PresenceStatus::Away;
+        }
+        PresenceStatus::Online
     }
 
     /// Consume the typing budget. Returns `false` when the caller is inside
@@ -190,6 +275,28 @@ pub struct Hub {
     by_user: DashMap<WalletAddress, SmallVec<[ConnId; 4]>>,
     /// The index the reference server lacked.
     by_room: DashMap<RoomId, HashSet<ConnId>>,
+    /// The last status announced for each wallet, so a re-derivation that
+    /// changes nothing publishes nothing.
+    ///
+    /// Only non-offline entries are held: offline is the absence of a
+    /// connection, so it is also the absence of a row, and the map stays
+    /// proportional to who is actually here rather than to who has ever
+    /// logged in. It is *not* durable, deliberately — a presence record that
+    /// survives the process is a log of when people were at their desks, and
+    /// nothing in this feature needs one.
+    presence: DashMap<WalletAddress, PresenceStatus>,
+    /// The most recent `PUT /api/presence` from a wallet holding **no**
+    /// connection, with its arrival time.
+    ///
+    /// A stand-in for the connection a polling client does not have, and
+    /// nothing more: an entry exists only while its owner has no real one.
+    /// That invariant is the whole design — a beacon can only be *expired*
+    /// (there is no socket whose closing could retract it), so one allowed to
+    /// coexist with a connection would outlive it by up to
+    /// [`BEACON_TTL_MS`] and keep somebody lit for two and a half minutes
+    /// after they shut their laptop. [`Hub::register`] retires it on the way
+    /// in and [`Hub::beacon`] declines to write one on the way past.
+    beacons: DashMap<WalletAddress, (PresenceStatus, i64)>,
     total: AtomicUsize,
     next_id: AtomicU64,
     log: Arc<JsonlLog>,
@@ -213,6 +320,8 @@ impl Hub {
             conns: DashMap::new(),
             by_user: DashMap::new(),
             by_room: DashMap::new(),
+            presence: DashMap::new(),
+            beacons: DashMap::new(),
             total: AtomicUsize::new(0),
             next_id: AtomicU64::new(1),
             log,
@@ -274,6 +383,12 @@ impl Hub {
 
         let handle = Arc::new(conn);
         let id = handle.id;
+
+        // A real connection retires the stand-in. Clients on the WebSocket tier
+        // beacon once during start-up, before they know which transport they
+        // will get, and an entry left behind by that would keep them present
+        // for [`BEACON_TTL_MS`] after the socket it was superseded by closed.
+        self.beacons.remove(&handle.wallet);
 
         for room in &handle.view().rooms {
             self.by_room.entry(room.clone()).or_default().insert(id);
@@ -381,6 +496,18 @@ impl Hub {
                 .get(room_id)
                 .map(|set| set.iter().copied().collect())
                 .unwrap_or_default(),
+            // Deduplicated across the rooms, or somebody who shares three
+            // rooms with the subject would be counted three times and the
+            // logged fan-out would be a number that means nothing.
+            Target::Rooms { room_ids } => {
+                let mut seen = HashSet::new();
+                for room_id in room_ids {
+                    if let Some(set) = self.by_room.get(room_id) {
+                        seen.extend(set.iter().copied());
+                    }
+                }
+                seen.into_iter().collect()
+            }
             Target::User { wallet } => self
                 .by_user
                 .get(wallet)
@@ -396,6 +523,208 @@ impl Hub {
             .filter_map(|id| self.conns.get(id))
             .filter(|handle| handle.view().accepts(&probe, &handle.wallet))
             .count()
+    }
+
+    // ------------------------------------------------------------ presence ---
+
+    /// What this wallet's devices currently add up to.
+    ///
+    /// The maximum across them, so the most present device wins — see
+    /// [`PresenceStatus`]. A live connection is one device; a fresh beacon from
+    /// a client with no upstream channel is another. Offline is what is left
+    /// when a wallet has neither, which is why it is not a value any client can
+    /// claim for itself.
+    pub fn derive_presence(&self, wallet: &WalletAddress, now: i64) -> PresenceStatus {
+        let ids: Vec<ConnId> = self
+            .by_user
+            .get(wallet)
+            .map(|ids| ids.to_vec())
+            .unwrap_or_default();
+
+        let from_connections = ids
+            .iter()
+            .filter_map(|id| self.conns.get(id))
+            .map(|handle| handle.presence(now))
+            .max()
+            .unwrap_or(PresenceStatus::Offline);
+
+        let from_beacon = self
+            .beacons
+            .get(wallet)
+            .filter(|entry| now - entry.1 < BEACON_TTL_MS)
+            .map(|entry| entry.0)
+            .unwrap_or(PresenceStatus::Offline);
+
+        from_connections.max(from_beacon)
+    }
+
+    /// Record a `PUT /api/presence` and republish if it moved the needle.
+    ///
+    /// The declaration is applied to the caller's live connections *as well as*
+    /// the beacon map, which is what makes it work on SSE: an SSE stream is
+    /// silent by construction, so without this its handshake timestamp would
+    /// age past the idle threshold and a reader five minutes into a thread
+    /// would be reported away with the stream still open.
+    pub async fn beacon(&self, wallet: &WalletAddress, status: PresenceStatus) {
+        let now = now_ms();
+        let ids: Vec<ConnId> = self
+            .by_user
+            .get(wallet)
+            .map(|ids| ids.to_vec())
+            .unwrap_or_default();
+
+        if ids.is_empty() {
+            // Nothing else speaks for this wallet, so the beacon does.
+            self.beacons.insert(wallet.clone(), (status, now));
+        } else {
+            for id in &ids {
+                if let Some(handle) = self.conns.get(id) {
+                    handle.declare(status, now);
+                }
+            }
+            // No entry written, and any earlier one dropped: a connection can
+            // be closed and a beacon can only time out, so letting the two
+            // coexist would mean the slower of them decided when somebody left.
+            self.beacons.remove(wallet);
+        }
+
+        self.announce_presence(wallet).await;
+    }
+
+    /// The last status announced for a wallet — what a snapshot request should
+    /// answer, and what a client that just received an event already believes.
+    pub fn announced_presence(&self, wallet: &WalletAddress) -> PresenceStatus {
+        self.presence
+            .get(wallet)
+            .map(|s| *s)
+            .unwrap_or(PresenceStatus::Offline)
+    }
+
+    /// Everyone currently non-offline, for the snapshot endpoint to filter.
+    ///
+    /// Returned whole rather than filtered here because the filter is an
+    /// authorisation decision — shared rooms and blocks — and this module has
+    /// neither the caller nor the database query in hand. `routes/presence.rs`
+    /// owns that, in one place, the way every other authorisation in this
+    /// server is done once at the REST boundary.
+    pub fn present_wallets(&self) -> Vec<(WalletAddress, PresenceStatus)> {
+        self.presence
+            .iter()
+            .map(|e| (e.key().clone(), *e.value()))
+            .collect()
+    }
+
+    /// Re-derive one wallet's status and, if it moved, tell everyone who shares
+    /// a room with them.
+    ///
+    /// Publishing only on a change is what keeps this cheap: a client pings
+    /// every 25 seconds and each ping marks activity, but activity that does
+    /// not cross a threshold produces no event and no log record.
+    ///
+    /// Two announcements racing can in principle land in the opposite order to
+    /// the transitions that caused them. That is tolerable here and nowhere
+    /// else in this file, because presence has an authority a client can ask —
+    /// `GET /api/presence` — and every client calls it when a stream comes up.
+    pub async fn announce_presence(&self, wallet: &WalletAddress) {
+        let derived = self.derive_presence(wallet, now_ms());
+
+        let changed = match derived {
+            PresenceStatus::Offline => self.presence.remove(wallet).is_some(),
+            live => self.presence.insert(wallet.clone(), live) != Some(live),
+        };
+        if !changed {
+            return;
+        }
+
+        // Membership comes from the database, not from the connection views:
+        // an SSE stream narrowed with `?room=` subscribes to one room, and
+        // announcing a departure only to that room would leave every other
+        // room showing a ghost until its members happened to refetch.
+        let address = wallet.as_str().to_owned();
+        let room_ids = match self
+            .db
+            .call(move |conn| rooms::user_room_ids(conn, &address))
+            .await
+        {
+            Ok(ids) => ids
+                .iter()
+                .filter_map(|r| RoomId::new(r).ok())
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not resolve rooms for a presence change");
+                return;
+            }
+        };
+        // Somebody in no rooms has nobody to tell. Publishing anyway would be
+        // a log record with a fan-out of zero, every time they open a tab.
+        if room_ids.is_empty() {
+            return;
+        }
+
+        self.publish_best_effort(
+            Target::Rooms { room_ids },
+            Some(wallet.clone()),
+            ServerEvent::Presence {
+                wallet: wallet.clone(),
+                status: derived,
+            },
+        )
+        .await;
+    }
+
+    /// Re-derive everyone who is currently held to be present.
+    ///
+    /// The one transition nothing else can catch: online → away happens
+    /// because *no* frame arrived, and an absence raises no event. Only the
+    /// announced set is walked, so the cost is proportional to who is online
+    /// rather than to how many accounts exist.
+    pub async fn sweep_presence(&self) {
+        let now = now_ms();
+        // Expired beacons go first, so the derivation below sees the state the
+        // announcement will be made against rather than one tick behind it.
+        self.beacons.retain(|_, (_, at)| now - *at < BEACON_TTL_MS);
+
+        let stale: Vec<WalletAddress> = self
+            .presence
+            .iter()
+            .filter(|e| self.derive_presence(e.key(), now) != *e.value())
+            .map(|e| e.key().clone())
+            .collect();
+
+        for wallet in stale {
+            self.announce_presence(&wallet).await;
+        }
+    }
+
+    /// Note activity on a connection and announce if it moved the needle.
+    ///
+    /// The comparison against the announced status is done before any await,
+    /// so the overwhelmingly common case — a keepalive from somebody already
+    /// online — costs two relaxed atomic stores and a map lookup.
+    pub async fn note_activity(&self, handle: &ConnHandle) {
+        handle.mark_active(now_ms());
+        if self.announced_presence(&handle.wallet) != PresenceStatus::Online {
+            self.announce_presence(&handle.wallet).await;
+        }
+    }
+
+    /// Apply a client's own declaration about one of its connections.
+    pub async fn declare_presence(&self, handle: &ConnHandle, status: PresenceStatus) {
+        handle.declare(status, now_ms());
+        self.announce_presence(&handle.wallet).await;
+    }
+
+    /// Drop a connection and republish its holder's presence.
+    ///
+    /// The pair belongs together: every path that closes a connection has to
+    /// re-derive presence, and a separate call would eventually be forgotten on
+    /// one of the six exits the SSE and WebSocket tasks have between them.
+    pub async fn disconnect(&self, id: ConnId) {
+        let wallet = self.conns.get(&id).map(|handle| handle.wallet.clone());
+        self.unregister(id);
+        if let Some(wallet) = wallet {
+            self.announce_presence(&wallet).await;
+        }
     }
 
     /// Replace the view of every connection a wallet holds.
@@ -1003,6 +1332,253 @@ mod tests {
         assert!(handle.allow_typing(10_000, 1000));
         assert!(!handle.allow_typing(10_500, 1000), "inside the window");
         assert!(handle.allow_typing(11_100, 1000));
+    }
+
+    #[test]
+    fn a_presence_target_needs_only_one_room_in_common() {
+        let me = wallet("a");
+        let v = view(&[room("one")], &[]);
+
+        // One shared room out of three is enough.
+        assert!(v.accepts(
+            &envelope(
+                Target::Rooms {
+                    room_ids: vec![room("two"), room("one"), room("three")]
+                },
+                None
+            ),
+            &me
+        ));
+        // None in common: a stranger's presence is not this connection's news.
+        assert!(!v.accepts(
+            &envelope(
+                Target::Rooms {
+                    room_ids: vec![room("two"), room("three")]
+                },
+                None
+            ),
+            &me
+        ));
+        // And a block still wins, exactly as it does for typing: presence is
+        // the same activity oracle in a slower coat.
+        let blocked = wallet("b");
+        let blocker = view(&[room("one")], std::slice::from_ref(&blocked));
+        assert!(!blocker.accepts(
+            &envelope(
+                Target::Rooms {
+                    room_ids: vec![room("one")]
+                },
+                Some(blocked)
+            ),
+            &me
+        ));
+    }
+
+    #[tokio::test]
+    async fn presence_counts_each_recipient_once_however_many_rooms_are_shared() {
+        let hub = hub("presence-fanout");
+        // Two connections: one sharing three rooms with the subject, one none.
+        hub.register(ConnHandle::new(
+            hub.next_conn_id(),
+            wallet("b"),
+            ConnKind::Ws,
+            view(&[room("one"), room("two"), room("three")], &[]),
+            None,
+        ))
+        .unwrap();
+        hub.register(ConnHandle::new(
+            hub.next_conn_id(),
+            wallet("c"),
+            ConnKind::Sse,
+            view(&[room("elsewhere")], &[]),
+            None,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            hub.recipients(
+                &Target::Rooms {
+                    room_ids: vec![room("one"), room("two"), room("three")]
+                },
+                None
+            ),
+            1,
+            "a colleague in three shared rooms is one recipient, not three"
+        );
+    }
+
+    #[test]
+    fn a_connection_is_online_until_it_goes_quiet() {
+        let handle = ConnHandle::new(1, wallet("a"), ConnKind::Ws, ConnView::default(), None);
+
+        handle.mark_active(1_000_000);
+        assert_eq!(handle.presence(1_000_000), PresenceStatus::Online);
+        assert_eq!(
+            handle.presence(1_000_000 + AWAY_AFTER_MS - 1),
+            PresenceStatus::Online
+        );
+        assert_eq!(
+            handle.presence(1_000_000 + AWAY_AFTER_MS),
+            PresenceStatus::Away
+        );
+    }
+
+    #[test]
+    fn a_declaration_beats_the_idle_timer_in_both_directions() {
+        let handle = ConnHandle::new(1, wallet("a"), ConnKind::Ws, ConnView::default(), None);
+
+        // Hidden tab: away immediately, without waiting out five minutes.
+        handle.declare(PresenceStatus::Away, 1_000_000);
+        assert_eq!(handle.presence(1_000_000), PresenceStatus::Away);
+
+        // And any frame at all undoes it — requiring an explicit `online` to
+        // clear it would strand anyone whose "I'm back" was lost.
+        handle.mark_active(1_000_100);
+        assert_eq!(handle.presence(1_000_100), PresenceStatus::Online);
+    }
+
+    #[tokio::test]
+    async fn the_most_present_device_decides() {
+        let hub = hub("presence-devices");
+        let me = wallet("a");
+        let now = crate::db::now_ms();
+
+        assert_eq!(
+            hub.derive_presence(&me, now),
+            PresenceStatus::Offline,
+            "no connections and no beacon is the only way to be offline"
+        );
+
+        let phone = hub
+            .register(ConnHandle::new(
+                hub.next_conn_id(),
+                me.clone(),
+                ConnKind::Ws,
+                ConnView::default(),
+                None,
+            ))
+            .unwrap();
+        let laptop = hub
+            .register(ConnHandle::new(
+                hub.next_conn_id(),
+                me.clone(),
+                ConnKind::Ws,
+                ConnView::default(),
+                None,
+            ))
+            .unwrap();
+
+        phone.declare(PresenceStatus::Away, now);
+        laptop.mark_active(now);
+        assert_eq!(
+            hub.derive_presence(&me, now),
+            PresenceStatus::Online,
+            "a phone idling in a pocket must not drag down the laptop in use"
+        );
+
+        laptop.declare(PresenceStatus::Away, now);
+        assert_eq!(hub.derive_presence(&me, now), PresenceStatus::Away);
+
+        // Closing every connection is what offline means.
+        hub.unregister(phone.id);
+        hub.unregister(laptop.id);
+        assert_eq!(hub.derive_presence(&me, now), PresenceStatus::Offline);
+    }
+
+    #[tokio::test]
+    async fn a_beacon_stands_in_for_a_connection_and_then_expires() {
+        let hub = hub("presence-beacon-ttl");
+        let me = wallet("a");
+
+        hub.beacon(&me, PresenceStatus::Online).await;
+        let now = crate::db::now_ms();
+        assert_eq!(
+            hub.derive_presence(&me, now),
+            PresenceStatus::Online,
+            "the polling tier holds no connection, so the beacon is all it has"
+        );
+
+        // One tick past the window and the stand-in stops counting, which is
+        // how a client that simply stopped calling stops being present.
+        assert_eq!(
+            hub.derive_presence(&me, now + BEACON_TTL_MS),
+            PresenceStatus::Offline
+        );
+    }
+
+    /// A beacon is a stand-in, and a stand-in stands down when the real thing
+    /// arrives. Both orderings, because both happen: a WebSocket client
+    /// beacons once during start-up *before* it knows its transport, and an
+    /// SSE client beacons every minute *while* its stream is open.
+    ///
+    /// The failure this pins is not subtle once seen. A beacon can only expire
+    /// — there is no socket whose closing retracts it — so one left beside a
+    /// connection decides when its owner leaves, and the answer it gives is
+    /// "two and a half minutes after they shut the lid".
+    #[tokio::test]
+    async fn a_connection_retires_the_beacon_that_stood_in_for_it() {
+        let hub = hub("presence-supersede");
+        let me = wallet("a");
+
+        // Start-up order: beacon first, connection second.
+        hub.beacon(&me, PresenceStatus::Online).await;
+        let conn = hub
+            .register(ConnHandle::new(
+                hub.next_conn_id(),
+                me.clone(),
+                ConnKind::Ws,
+                ConnView::default(),
+                None,
+            ))
+            .unwrap();
+        hub.unregister(conn.id);
+        assert_eq!(
+            hub.derive_presence(&me, now_ms()),
+            PresenceStatus::Offline,
+            "closing the socket must end the session, not hand it back to a stale beacon"
+        );
+
+        // SSE order: connection first, beacon after — the heartbeat case.
+        let conn = hub
+            .register(ConnHandle::new(
+                hub.next_conn_id(),
+                me.clone(),
+                ConnKind::Sse,
+                ConnView::default(),
+                None,
+            ))
+            .unwrap();
+        hub.beacon(&me, PresenceStatus::Online).await;
+        hub.unregister(conn.id);
+        assert_eq!(
+            hub.derive_presence(&me, now_ms()),
+            PresenceStatus::Offline,
+            "a heartbeat refreshes the stream it was sent over; it does not outlive it"
+        );
+
+        // With no connection at all, the beacon is still the only evidence
+        // there is — that is what it is for.
+        hub.beacon(&me, PresenceStatus::Online).await;
+        assert_eq!(hub.derive_presence(&me, now_ms()), PresenceStatus::Online);
+    }
+
+    #[tokio::test]
+    async fn a_status_that_did_not_change_publishes_nothing() {
+        let hub = hub("presence-quiet");
+        let me = wallet("a");
+        let mut rx = hub.subscribe();
+
+        // Nobody is in a room, so nothing is published either way — the point
+        // here is the announced-state bookkeeping underneath.
+        hub.beacon(&me, PresenceStatus::Online).await;
+        assert_eq!(hub.announced_presence(&me), PresenceStatus::Online);
+
+        hub.beacon(&me, PresenceStatus::Online).await;
+        assert_eq!(hub.announced_presence(&me), PresenceStatus::Online);
+        assert!(
+            rx.try_recv().is_err(),
+            "a repeated keepalive must not become an event"
+        );
     }
 
     #[test]

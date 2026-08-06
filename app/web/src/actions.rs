@@ -59,8 +59,42 @@ pub async fn refresh_all(store: Store) {
 
     refresh_invitations(store.clone()).await;
     refresh_shouts(store.clone()).await;
+    refresh_presence(store.clone()).await;
     refresh_server_admin(store.clone()).await;
     refresh_blocks(store).await;
+}
+
+/// Replace the presence map from `GET /api/presence`.
+///
+/// Called on sign-in, whenever a transport comes up, and after a membership
+/// change. Presence events are transient by design — never replayed — so a
+/// client that was disconnected has a *hole*, and events alone would never fill
+/// it: nothing re-announces a status that has not changed. This is the
+/// authority, and the reason the event stream can stay as cheap as it is.
+///
+/// Failure is silent and leaves the previous map in place. The alternative,
+/// clearing it, would blank every dot on one flaky request and read as "the
+/// whole team just left".
+pub async fn refresh_presence(store: Store) {
+    if let Ok(entries) = store.client.presence().await {
+        store.dispatch(Action::PresenceSnapshot(
+            entries
+                .into_iter()
+                .map(|e| (e.wallet_address, e.status))
+                .collect(),
+        ));
+    }
+}
+
+/// Tell the server this client stepped away, or came back.
+///
+/// The REST path, for the SSE and polling tiers. A WebSocket client sends the
+/// same thing as a frame instead — see `app.rs` — because it already holds a
+/// channel and a request per tab switch would be pure overhead.
+pub async fn declare_presence(store: Store, status: pocketskynet_core::PresenceStatus) {
+    // Silent on failure: presence is an affordance, and a toast reading
+    // "could not report that you are away" would be worse than the miss.
+    let _ = store.client.set_presence(status).await;
 }
 
 /// Fetch the active paid broadcasts and hand them to the banner layer.

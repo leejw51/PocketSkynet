@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use pocketskynet_core::{ClientMessage, RoomId, ServerEvent};
+use pocketskynet_core::{ClientMessage, PresenceStatus, RoomId, ServerEvent};
 use yew::prelude::*;
 
 use crate::actions;
@@ -22,6 +22,32 @@ use crate::realtime::{self, ConnStatus, RealtimeSignal, Transport};
 use crate::route::Route;
 use crate::session::{Auth, ConnectionMode, Theme};
 use crate::state::{Action, AppState, ConfirmAction, Modal, Store};
+
+/// How often a client with no upstream channel repeats its status.
+///
+/// Comfortably inside the server's `BEACON_TTL_MS` (150 s), because a
+/// background tab's timers are throttled rather than stopped: a cadence any
+/// closer to the window would let ordinary throttling read as "gone".
+const PRESENCE_BEACON_MS: u32 = 60_000;
+
+/// Tell the server this client stepped away, or came back.
+///
+/// Over the socket when there is one — it costs a frame the connection is
+/// already carrying and needs no round trip — and over REST otherwise. Two
+/// paths rather than one because the cheap path does not exist on two of the
+/// three transports, and the expensive one would be a request per tab switch
+/// per person on the tier where most people actually are.
+fn declare(
+    store: &Store,
+    sink: &Rc<RefCell<Option<realtime::UnboundedTypingSink>>>,
+    status: PresenceStatus,
+) {
+    if let Some(sink) = sink.borrow().as_ref() {
+        sink.send_json(&ClientMessage::Presence { status });
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(actions::declare_presence(store.clone(), status));
+}
 
 #[function_component(App)]
 pub fn app() -> Html {
@@ -307,6 +333,15 @@ fn root() -> Html {
                         store.dispatch(Action::SetConn(ConnStatus::Live(t)))
                     }
                     RealtimeSignal::Healthy(t) => {
+                        // The moment the hole gets filled. Presence events are
+                        // transient and never replayed, so a client that was
+                        // away from the network cannot learn what it missed by
+                        // waiting — nothing re-announces a status that has not
+                        // changed. `Healthy` rather than `Connected` because a
+                        // WebSocket object exists before its handshake does,
+                        // and a failing tier would otherwise fetch on every
+                        // retry.
+                        wasm_bindgen_futures::spawn_local(actions::refresh_presence(store.clone()));
                         // Clear the debt only when the *preferred* tier is the
                         // one that proved itself. Clearing it after a demoted
                         // tier succeeds would immediately promote back to the
@@ -440,6 +475,104 @@ fn root() -> Html {
                         actions::refresh_rooms(store).await;
                     });
                 });
+                Box::new(move || drop(interval))
+            },
+        );
+    }
+
+    // --- presence ---------------------------------------------------------
+
+    // The one thing the server cannot see for itself: this tab went to the
+    // background, or came back.
+    //
+    // Without it the server has only an idle timer, and an idle timer gets both
+    // ends of this wrong — somebody reading a long thread looks away after five
+    // minutes, and somebody who shut the lid looks present until their socket
+    // finally dies. `visibilitychange` is the ground truth, and it is the event
+    // browsers fire *before* they start throttling the timers that would
+    // otherwise have been the only clue.
+    {
+        let store = store.clone();
+        let sink_slot = sink_slot.clone();
+        use_effect_with(store.auth.token().map(str::to_owned), move |token| {
+            if token.is_none() {
+                return Box::new(|| ()) as Box<dyn FnOnce()>;
+            }
+            let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+                return Box::new(|| ()) as Box<dyn FnOnce()>;
+            };
+
+            let listener = gloo_events::EventListener::new(&document, "visibilitychange", {
+                let store = store.clone();
+                let sink_slot = sink_slot.clone();
+                move |_| {
+                    let hidden = web_sys::window()
+                        .and_then(|w| w.document())
+                        .map(|d| d.hidden())
+                        .unwrap_or(false);
+                    let status = if hidden {
+                        PresenceStatus::Away
+                    } else {
+                        PresenceStatus::Online
+                    };
+                    declare(&store, &sink_slot, status);
+                }
+            });
+            Box::new(move || drop(listener))
+        });
+    }
+
+    // The heartbeat for the tiers with no upstream channel.
+    //
+    // A WebSocket client already tells the server it is alive every 25 seconds
+    // with its keepalive, and the server counts that as activity. SSE is
+    // one-directional and polling holds no connection at all, so without this
+    // an SSE reader would age into a false *away* after five minutes and a
+    // polling client would never appear at all.
+    //
+    // Named tiers rather than "not WebSocket", and that distinction is the
+    // whole of it. `conn` starts `Offline` and passes through `Syncing`, so the
+    // looser test fires once during start-up — before this client knows which
+    // transport it will get — and a WebSocket session would open with a beacon
+    // it then never repeats or retracts. Beyond being a claim this client
+    // cannot back up, it is a claim nothing can *close*: a socket ends when it
+    // ends, a beacon only times out, so that stray call kept people lit for two
+    // and a half minutes after they shut the lid. Presence is only ever
+    // asserted from a transport that is up and needs asserting.
+    {
+        let store = store.clone();
+        let needs_beacon = matches!(
+            store.conn,
+            ConnStatus::Live(Transport::Sse) | ConnStatus::Live(Transport::Polling)
+        );
+        use_effect_with(
+            (needs_beacon, store.auth.token().map(str::to_owned)),
+            move |(needs_beacon, token)| {
+                if !*needs_beacon || token.is_none() {
+                    return Box::new(|| ()) as Box<dyn FnOnce()>;
+                }
+                let beat = {
+                    let store = store.clone();
+                    move || {
+                        let store = store.clone();
+                        let hidden = web_sys::window()
+                            .and_then(|w| w.document())
+                            .map(|d| d.hidden())
+                            .unwrap_or(false);
+                        let status = if hidden {
+                            PresenceStatus::Away
+                        } else {
+                            PresenceStatus::Online
+                        };
+                        wasm_bindgen_futures::spawn_local(actions::declare_presence(store, status));
+                    }
+                };
+                // Once immediately, or a polling client would be invisible for
+                // the first minute of every session — which is most of the time
+                // anyone spends looking at whether their colleagues are there.
+                beat();
+                let interval =
+                    gloo_timers::callback::Interval::new(PRESENCE_BEACON_MS, beat.clone());
                 Box::new(move || drop(interval))
             },
         );
@@ -664,7 +797,14 @@ fn handle_event(store: &Store, ev: ServerEvent) {
             // `member_removed` means "roster changed", not literally "someone
             // left" — the server reuses it for accept-invitation too.
             let store = store.clone();
-            wasm_bindgen_futures::spawn_local(actions::refresh_rooms(store));
+            wasm_bindgen_futures::spawn_local(async move {
+                actions::refresh_rooms(store.clone()).await;
+                // A roster change changes who this client may see the presence
+                // of, and presence is only announced when it *moves* — a
+                // colleague who has been online for an hour will not announce
+                // themselves again just because you joined their room.
+                actions::refresh_presence(store).await;
+            });
         }
         ServerEvent::InvitationReceived { .. } => {
             let store = store.clone();
@@ -675,6 +815,14 @@ fn handle_event(store: &Store, ev: ServerEvent) {
         }
         ServerEvent::Typing { room_id, from } => {
             store.dispatch(Action::Typing(room_id, from, format::now_ms()));
+        }
+        ServerEvent::Presence { wallet, status } => {
+            // The one event that is its own payload rather than a wake-up.
+            // Authorisation happened before it was sent — it reaches only
+            // shared-room members and never crosses a block — and re-reading
+            // `GET /api/presence` to learn a single enum would cost a round
+            // trip per tab switch across the whole team.
+            store.dispatch(Action::Presence(wallet, status));
         }
         ServerEvent::ResyncRequired { .. } => {
             let store = store.clone();

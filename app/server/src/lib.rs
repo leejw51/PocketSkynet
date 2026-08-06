@@ -600,6 +600,25 @@ impl Bound {
             });
         }
 
+        // Re-derive presence for everyone currently held to be here. The one
+        // transition nothing else can raise: online → away happens because no
+        // frame arrived, and an absence fires no event. Connect, disconnect and
+        // an explicit declaration all announce immediately and never wait for
+        // this tick.
+        {
+            let state = self.state.clone();
+            let mut stop = rx.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(hub::PRESENCE_SWEEP);
+                loop {
+                    tokio::select! {
+                        _ = tick.tick() => state.hub.sweep_presence().await,
+                        _ = stop.changed() => break,
+                    }
+                }
+            });
+        }
+
         // HTTP/3 runs beside the TCP listener, not instead of it: they serve
         // the same router on different transports, so a client can use either
         // and the operator can measure both.
