@@ -13,7 +13,8 @@ use crate::route::Route;
 use crate::state::{use_store, Action, Confirm, ConfirmAction, Load, Modal};
 
 use super::common::{
-    copy_with_toast, hit_control, Addr, Back, Badge, Empty, IconButton, Ident, IdentSize, Skeleton,
+    copy_with_toast, hit_control, Addr, Back, Badge, Empty, IconButton, Ident, IdentSize,
+    PresenceLabel, Skeleton,
 };
 use super::icons;
 use crate::i18n::{t, Key, Lang};
@@ -143,6 +144,7 @@ fn person_row(
     let is_me = &m.user_address == me;
     let is_admin = admins.contains(&m.user_address);
     let blocked = store.blocks.hides(&m.user_address);
+    let presence = store.presence_of(&m.user_address);
     let name = m.user.display_name();
 
     let mut class = classes!("fn-person", "fn-person--tap");
@@ -251,6 +253,7 @@ fn person_row(
                 seed={m.user_address.to_string()}
                 size={IdentSize::Lg}
                 is_self={is_me}
+                presence={presence}
                 image={m.user.profile_image.clone()}
                 zoom={crate::components::common::Zoom {
                     title: m.user.username.clone(),
@@ -272,7 +275,14 @@ fn person_row(
                         <Badge variant="danger">{ t(lang, Key::blocked) }</Badge>
                     }
                 </div>
-                <Addr address={m.user_address.clone()} />
+                <div class="fn-person__meta">
+                    // The word, not just the dot: the tile is `aria-hidden`
+                    // decoration, and a colour on its own is never the whole
+                    // signal (DESIGN.md §17). This is the roster — the one
+                    // screen with room to spell it out.
+                    <PresenceLabel status={presence} />
+                    <Addr address={m.user_address.clone()} />
+                </div>
             </div>
             { actions }
         </li>

@@ -21,7 +21,7 @@ use crate::format;
 use crate::route::Route;
 use crate::state::{use_store, Action, Confirm, ConfirmAction, KnowledgeSeed, Load, Modal, Store};
 
-use super::common::{Badge, Empty, Ident, Lock, MentionBadge, Skeleton, Unread};
+use super::common::{Badge, Empty, Ident, Lock, MentionBadge, PresenceLabel, Skeleton, Unread};
 use super::icons;
 use crate::i18n::{t, Key, Lang};
 
@@ -1172,6 +1172,20 @@ fn room_row(p: &RoomRowProps) -> Html {
 
     let first_letter = title.chars().next().map(|c| c.to_uppercase().to_string());
 
+    // A one-to-one DM row stands for a person, so it carries their dot. A
+    // channel row stands for a room, and a room is not somewhere anybody *is* —
+    // a dot there would either invent a status for a group or quietly pick one
+    // member to speak for it. A group DM is the same problem with a nicer name,
+    // so it is left out too.
+    let peer = store.me().and_then(|me| match r.others(me).as_slice() {
+        [one] if r.is_direct() => Some(one.wallet_address.clone()),
+        _ => None,
+    });
+    let peer_presence = peer
+        .as_ref()
+        .map(|w| store.presence_of(w))
+        .unwrap_or(pocketskynet_core::PresenceStatus::Offline);
+
     html! {
         <div
             class="fn-swipe"
@@ -1204,6 +1218,7 @@ fn room_row(p: &RoomRowProps) -> Html {
                     <Ident
                         seed={id.to_string()}
                         class="fn-room-row__avatar"
+                        presence={peer_presence}
                         corner={first_letter}
                         zoom={crate::components::common::Zoom {
                             title: title.clone(),
@@ -1213,6 +1228,11 @@ fn room_row(p: &RoomRowProps) -> Html {
                     />
                     <div class="fn-room-row__title">
                         <span class="fn-room-row__name">{ &title }</span>
+                        // Screen-reader only: the dot beside the name is the
+                        // sighted reader's version, and a row already carrying
+                        // a name, a lock, an unread count and a timestamp has
+                        // no room for a fifth visible word.
+                        <PresenceLabel status={peer_presence} quiet=true />
                         if r.has_encryption {
                             <Lock pending={rotating} />
                         }

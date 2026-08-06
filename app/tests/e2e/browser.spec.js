@@ -585,6 +585,81 @@ test.describe('the web client', () => {
     expect(errors, errors.join(' | ')).toHaveLength(0);
   });
 
+  // Presence, in the one place it can actually be proved: two real browsers.
+  //
+  // Every other layer of this feature is unit-tested, and none of those tests
+  // can tell you whether a dot appears on somebody's screen when a colleague
+  // opens the app. The path runs client → WebSocket → hub → the *other*
+  // client's reducer → a CSS class, and it is the kind of thing that breaks
+  // quietly: nothing errors when presence stops arriving, everybody just looks
+  // permanently offline.
+  test('a colleague lights up when they arrive and goes dark when they leave', async ({
+    page,
+    browser,
+    request,
+  }) => {
+    const alice = await signIn(request, 'ui-presence-alice');
+    const bob = await signIn(request, 'ui-presence-bob');
+    await dm(request, alice, bob);
+
+    const errors = watchForErrors(page);
+    await signInAs(page, 'ui-presence-alice');
+
+    const bobRow = page.getByRole('option', { name: new RegExp(bob.username) });
+    await expect(bobRow).toBeVisible({ timeout: 15_000 });
+    // Nobody has told this client anything about Bob, and absence is the
+    // offline signal — so there must be no dot at all, rather than a grey one.
+    await expect(bobRow.locator('.fn-ident--online, .fn-ident--away')).toHaveCount(0);
+
+    // Bob opens the app in his own browser. No reload on Alice's side: the
+    // dot has to arrive over the event stream or it has not really shipped.
+    const bobContext = await browser.newContext();
+    const bobPage = await bobContext.newPage();
+    await signInAs(bobPage, 'ui-presence-bob');
+
+    await expect(bobRow.locator('.fn-ident--online')).toHaveCount(1, { timeout: 15_000 });
+    // Colour is never the only signal: the row carries the word for a screen
+    // reader, which is what puts it in the option's accessible name.
+    await expect(bobRow).toHaveAccessibleName(/Online/);
+
+    // And closing the tab is how you leave. This is the assertion that would
+    // have caught the SSE stream that used to linger for half an hour after
+    // its client hung up.
+    await bobContext.close();
+    await expect(bobRow.locator('.fn-ident--online')).toHaveCount(0, { timeout: 20_000 });
+
+    expect(errors, errors.join(' | ')).toHaveLength(0);
+  });
+
+  test('the members roster spells the status out beside the name', async ({ page, request }) => {
+    const alice = await signIn(request, 'ui-roster-alice');
+    const bob = await signIn(request, 'ui-roster-bob');
+    const room = await channel(request, alice, 'Roster');
+    await join(request, alice, bob, room);
+
+    const errors = watchForErrors(page);
+    await signInAs(page, 'ui-roster-alice');
+    await page.getByRole('option', { name: /Roster/ }).click();
+    // The member count in the chat header is the way into the roster.
+    await page.locator('.fn-chat__submeta button').first().click();
+
+    const mine = page.locator('.fn-person', { hasText: alice.username }).first();
+    await expect(mine).toBeVisible({ timeout: 15_000 });
+    // Visible text, not just a dot — this is the one screen with room for it,
+    // and the tile itself is aria-hidden decoration.
+    await expect(mine.locator('.fn-presence')).toHaveText('Online');
+    await expect(mine.locator('.fn-ident--online')).toHaveCount(1);
+
+    // Bob is in the room but not at his desk. No dot, and no "Offline" label
+    // either: labelling every absent colleague is a wall of noise, and the
+    // absence reads on its own.
+    const theirs = page.locator('.fn-person', { hasText: bob.username }).first();
+    await expect(theirs.locator('.fn-presence')).toHaveCount(0);
+    await expect(theirs.locator('.fn-ident--online, .fn-ident--away')).toHaveCount(0);
+
+    expect(errors, errors.join(' | ')).toHaveLength(0);
+  });
+
   test('reacts to a message inside a thread', async ({ page, request }) => {
     const alice = await signIn(request, 'ui-react-alice');
     const bob = await signIn(request, 'ui-react-bob');

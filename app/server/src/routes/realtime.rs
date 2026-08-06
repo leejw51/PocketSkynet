@@ -465,6 +465,12 @@ async fn sse_handler(
 
     let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(64);
     let mut receiver = state.hub.subscribe();
+
+    // Registration, then subscription, then the announcement. See the same
+    // sequence in `ws_conn`: announcing awaits a database read, so doing it
+    // before this receiver exists would silently drop every event published
+    // during the wait.
+    state.hub.announce_presence(&auth.wallet).await;
     let hub = state.hub.clone();
     let suspensions = state.suspensions.clone();
     let conn_id = handle.id;
@@ -478,7 +484,7 @@ async fn sse_handler(
             .await
             .is_err()
         {
-            hub.unregister(conn_id);
+            hub.disconnect(conn_id).await;
             return;
         }
 
@@ -494,7 +500,7 @@ async fn sse_handler(
                             .await
                             .is_err()
                         {
-                            hub.unregister(conn_id);
+                            hub.disconnect(conn_id).await;
                             return;
                         }
                     }
@@ -517,6 +523,19 @@ async fn sse_handler(
         loop {
             tokio::select! {
                 _ = handle.cancel.cancelled() => break,
+                // The client hung up. Dropping the response body drops the
+                // stream this channel feeds, and `closed()` is the only thing
+                // that reports it *without* something to send: every other exit
+                // here is a send that fails, and an idle stream never sends.
+                //
+                // Without this, a browser closing a tab left a registered
+                // connection behind until the 30-minute lifetime cap or the
+                // next event addressed to it — whichever came first. It cost a
+                // slot against the 5000-connection and 8-per-wallet caps, and
+                // once presence started reading the connection index it became
+                // visible: the person who shut their laptop stayed lit for half
+                // an hour, which is the exact opposite of what presence is for.
+                _ = tx.closed() => break,
                 _ = tokio::time::sleep_until(deadline) => {
                     let event = ServerEvent::SessionExpired { reason: "stream_lifetime".into() };
                     let _ = tx.send(Ok(sse_event(hub.lagged_seq(), &event))).await;
@@ -561,7 +580,7 @@ async fn sse_handler(
             }
         }
 
-        hub.unregister(conn_id);
+        hub.disconnect(conn_id).await;
     });
 
     let stream = ReceiverStream::new(rx);
@@ -672,6 +691,20 @@ async fn ws_conn(socket: WebSocket, state: AppState, auth: StreamAuth) {
     };
 
     let mut receiver = state.hub.subscribe();
+
+    // Registration, then subscription, then the announcement — in that order,
+    // and the order is load-bearing.
+    //
+    // *After* registration because the answer is derived from the connection
+    // index this socket has only just been added to. *After* `subscribe`
+    // because announcing awaits a database read, and until this receiver
+    // exists every event published by anybody else is one this connection
+    // never sees. There was no gap to fall into before, only because nothing
+    // between the two ever yielded; adding the first `await` there opened one,
+    // and it presented as a typing indicator that occasionally vanished on a
+    // loaded machine.
+    state.hub.announce_presence(&handle.wallet).await;
+
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.tick().await; // the first tick is immediate; skip it
     let mut missed_pings = 0u32;
@@ -743,6 +776,7 @@ async fn ws_conn(socket: WebSocket, state: AppState, auth: StreamAuth) {
                     // has to stay forward-compatible anyway.
                     match serde_json::from_str::<ClientMessage>(text.as_str()) {
                         Ok(ClientMessage::Ping) => {
+                            state.hub.note_activity(&handle).await;
                             let pong =
                                 serde_json::to_string(&ServerEvent::Pong).unwrap_or_default();
                             if sink.send(Message::Text(pong.into())).await.is_err() {
@@ -750,11 +784,28 @@ async fn ws_conn(socket: WebSocket, state: AppState, auth: StreamAuth) {
                             }
                         }
                         Ok(ClientMessage::Typing { room_id }) => {
+                            state.hub.note_activity(&handle).await;
                             relay_typing(&state, &handle, room_id).await;
+                        }
+                        Ok(ClientMessage::Presence { status }) => {
+                            // A client may say it stepped away or came back;
+                            // it may not claim to be offline over a socket it
+                            // is holding open. Refused silently, like every
+                            // other frame this endpoint declines.
+                            if status.is_declarable() {
+                                state.hub.declare_presence(&handle, status).await;
+                            }
                         }
                         Err(_) => {}
                     }
                 }
+                // Answering a protocol ping keeps the socket alive but is
+                // deliberately *not* presence activity: the browser replies
+                // from its own network stack whether or not the page's
+                // JavaScript is running, so counting it would make the idle
+                // threshold unreachable for every open tab. The client's own
+                // `ping` frame above is the one that stops arriving when a tab
+                // is frozen, and that is the signal presence wants.
                 Some(Ok(Message::Pong(_))) => {
                     missed_pings = 0;
                 }
@@ -768,7 +819,7 @@ async fn ws_conn(socket: WebSocket, state: AppState, auth: StreamAuth) {
     if let Some((code, reason)) = closing {
         let _ = sink.send(close_frame(code, reason)).await;
     }
-    state.hub.unregister(handle.id);
+    state.hub.disconnect(handle.id).await;
 }
 
 fn close_frame(code: u16, reason: &str) -> Message {

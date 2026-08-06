@@ -4,9 +4,10 @@
 where humans and AI agents are equal participants. Supersedes the stale parts
 of [PARITY.md](PARITY.md).*
 
-**Step 1 of §6 has shipped, end to end.** Mentions, threads and DMs exist as
-protocol, storage *and* interface, with a server-admin role beside them. §0
-records what that means concretely.
+**Steps 1, 2 and 5 of §6 have shipped, end to end.** Mentions, threads and DMs
+exist as protocol, storage *and* interface, with a server-admin role beside
+them, and presence now says who is actually there. §0 records what that means
+concretely.
 
 ## 0. What shipped in step 1
 
@@ -64,6 +65,58 @@ Client-side, all driven in a real browser by `tests/e2e/browser.spec.js`:
   and echoes back the list it parsed from `VITE_FRUITNATION_ADMIN` — the only
   way to catch a typo there, whose sole other symptom is a colleague who
   mysteriously has no powers.
+
+## 0a. What shipped in step 5 — presence
+
+Online / away / offline for everybody you share a room with, on the server
+(`server/src/hub.rs`, `routes/presence.rs`) and on screen.
+
+- **Derived, never stored.** No table, no column, no migration. The truth is
+  the set of live connections the hub already holds plus how recently each
+  showed a sign of life, so nothing survives a restart — which is the point. A
+  durable presence record is a log of when each person was at their computer,
+  and "is she there right now?" does not need one.
+- **Three states, and no more.** "Busy" and "in a meeting" are statuses people
+  set once and never clear; a status nobody maintains is worse than none. A
+  wallet's status is the *maximum* over its devices, so the phone idling in
+  somebody's pocket never contradicts the laptop they are typing on.
+- **What the server cannot see, the client says.** A tab going to the
+  background is invisible from the server side, and an idle timer alone gets
+  both ends of it wrong — somebody reading a long thread would go away, and
+  somebody who shut the lid would stay. `visibilitychange` drives a `presence`
+  frame over WebSocket, or `PUT /api/presence` on the tiers with no upstream
+  channel, where the same call doubles as their heartbeat. Without it a silent
+  SSE stream would age into a false *away* and a polling client would never
+  appear at all. A protocol-level pong deliberately does **not** count as
+  activity: browsers answer those whether or not the page is running.
+- **It does not cross a block, in either direction** — the rule typing already
+  followed, for the same reason. Presence is an activity oracle, and a
+  one-directional filter would make it answer "did they block me?". Sharing a
+  room is the whole of what entitles you to know; a server admin gets no
+  exemption.
+- **One fact, one event.** Going online concerns everyone you share *any* room
+  with, so it publishes against the whole set at once (`Target::Rooms`) and each
+  connection tests that set against its own current subscriptions. Somebody in
+  three shared rooms hears it once, and a member who joined a second ago is
+  authorised for the very next one — there is no cached peer set to go stale.
+- **The snapshot is the authority.** Presence events are transient and never
+  replayed, so a disconnection leaves a *hole* rather than a stale value, and
+  nothing re-announces a status that has not changed. `GET /api/presence` fills
+  it, and the client calls it whenever a transport proves healthy.
+
+On screen: a filled dot for online, a **ring** for away, and nothing at all for
+offline. The difference is shape rather than a second colour, because these
+land on generated portraits in every hue in the palette — and because colour is
+never the only signal (DESIGN.md §17), the roster spells the word out beside the
+name and the room list carries it for screen readers. Offline draws nothing:
+it is where most people are most of the time, and a badge on every absent
+colleague is a screen of noise.
+
+The dot appears where it changes a decision — the members roster, one-to-one DM
+rows, and the DM header, which is what tells you whether the message you are
+about to type gets read now or tomorrow morning. Channel rows have none: a room
+is not somewhere anybody *is*, and a dot there would either invent a status for
+a group or quietly pick one member to speak for it.
 
 ## Where it stands today
 
@@ -146,7 +199,9 @@ Lighter than enterprise compliance, but still needed for a real team:
 - **Invite links / codes** — still open. Invites are by wallet address only. A
   link or QR that onboards a new member is table stakes.
 - ~~**History protection**~~ — **done.** Purging a room is admin-only.
-- **Presence** — still nothing. Now the most-missed thing on this list.
+- ~~**Presence**~~ — **done.** Online / away / offline, derived from live
+  connections rather than stored, scoped to shared rooms and filtered by blocks
+  both ways. §0a.
 
 ---
 
@@ -190,11 +245,14 @@ Lighter than enterprise compliance, but still needed for a real team:
 
 1. ~~**Mentions + threads + DMs**~~ — **shipped** (§0), server and client.
 2. ~~**Server owner role + session revocation**~~ — **shipped** (§0).
-3. **Invite links** — the one §3 item step 1 did not touch, and the thing
-   between "a team could use this" and "a team could join this".
+3. **Invite links** — the one §3 item still open, and the thing between "a team
+   could use this" and "a team could join this".
 4. **Webhooks** — external events into rooms; the minimum integration
    surface.
-5. **Presence** — online/away for humans.
+5. ~~**Presence**~~ — **shipped** (§0a), server and client. Taken out of order
+   because it cost no schema: the hub already knew who was connected, and every
+   piece of the authorisation it needed — shared rooms, and blocks in both
+   directions — was already written for typing.
 
 The wallet identity, E2EE, on-chain payment rails, and shared knowledge base
 are the platform's edge — every step above builds on them rather than

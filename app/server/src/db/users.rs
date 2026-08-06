@@ -386,6 +386,30 @@ pub fn mutual_block_set(conn: &Connection, viewer: &str) -> ApiResult<HashSet<St
     Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
 }
 
+/// Everyone the viewer shares at least one room with, themselves excluded.
+///
+/// The visibility rule for presence, and the reason presence is not a
+/// directory: sharing a room is the whole of what entitles you to know whether
+/// somebody is at their desk. A server admin gets no exemption — knowing who is
+/// online in a conversation you are not in is exactly the kind of thing §0 says
+/// the admin role does not grant.
+///
+/// Hidden rooms are *not* excluded. Hiding a room removes it from your list; it
+/// does not remove you from the room, and the people in it can still see you
+/// arrive, so pretending you cannot see them would be a one-way mirror rather
+/// than a privacy setting.
+pub fn room_peers(conn: &Connection, viewer: &str) -> ApiResult<HashSet<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT peer.user_address
+           FROM room_members mine
+           JOIN room_members peer ON peer.room_id = mine.room_id
+          WHERE mine.user_address = ?1
+            AND peer.user_address <> ?1",
+    )?;
+    let rows = stmt.query_map(params![viewer], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -118,6 +118,7 @@ function api(request, user) {
   return {
     get: (path) => request.get(`${BASE}${path}`, { headers }),
     post: (path, data) => request.post(`${BASE}${path}`, { headers, data: data ?? {} }),
+    put: (path, data) => request.put(`${BASE}${path}`, { headers, data: data ?? {} }),
     patch: (path, data) => request.patch(`${BASE}${path}`, { headers, data: data ?? {} }),
     delete: (path) => request.delete(`${BASE}${path}`, { headers }),
   };

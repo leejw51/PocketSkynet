@@ -282,6 +282,9 @@ strings! {
     (conn_live, "Live", "실시간", "ライブ", "即時", "Živě", "En vivo", "实时", "Live"),
     (conn_events, "Events", "이벤트", "イベント", "事件", "Události", "Eventos", "事件流", "Events"),
     (conn_polling, "Polling", "폴링", "ポーリング", "輪詢", "Dotazování", "Sondeo", "轮询", "Polling"),
+    (presence_online, "Online", "접속 중", "オンライン", "喺線", "Online", "En línea", "在线", "Online"),
+    (presence_away, "Away", "자리 비움", "離席中", "唔喺度", "Nepřítomen", "Ausente", "离开", "Abwesend"),
+    (presence_offline, "Offline", "오프라인", "オフライン", "離線", "Offline", "Desconectado", "离线", "Offline"),
     (blocked_people, "Blocked people", "차단한 사용자", "ブロックした人", "已封鎖的人", "Blokovaní lidé", "Personas bloqueadas", "已屏蔽的人", "Blockierte Personen"),
     (hidden_rooms, "Hidden rooms", "숨긴 채팅방", "非表示のルーム", "隱藏的聊天室", "Skryté místnosti", "Salas ocultas", "已隐藏的聊天室", "Ausgeblendete Räume"),
     (language, "Language", "언어", "言語", "語言", "Jazyk", "Idioma", "语言", "Sprache"),
@@ -1187,6 +1190,13 @@ mod tests {
             (Lang::De, Key::thread),
             // Likewise "Admin", which is the ordinary German short form.
             (Lang::De, Key::admin_is_admin),
+            // "Online" and "Offline" were borrowed whole into both Czech and
+            // German and are what every messenger in either language prints.
+            // Only *away* has a native word in both, and it is used.
+            (Lang::Cs, Key::presence_online),
+            (Lang::De, Key::presence_online),
+            (Lang::Cs, Key::presence_offline),
+            (Lang::De, Key::presence_offline),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

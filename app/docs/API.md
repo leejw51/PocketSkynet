@@ -2167,6 +2167,83 @@ state this server should be able to reach.
 
 ---
 
+### 6.15 Presence (2)
+
+Who is at their desk. Three states — `online`, `away`, `offline` — and no more:
+"busy" and "in a meeting" are statuses people set once and never clear, and a
+status nobody maintains is worse than none.
+
+**Derived, never stored.** There is no presence table and no column. The truth
+is the set of live connections the hub already holds (`server/src/hub.rs`) plus
+how recently each showed a sign of life, so nothing survives a restart — which
+is the point. A durable presence record is a log of when each person was at
+their computer, and answering "is she there right now?" does not need one.
+
+#### 6.15.1 `GET /api/presence` — Auth: **yes**
+
+Everyone the caller shares a room with who is not offline, plus the caller,
+sorted by address.
+
+```json
+[{ "walletAddress": "0x742d…", "status": "online" },
+ { "walletAddress": "0x9f31…", "status": "away" }]
+```
+
+Offline is the **absence of an entry**, not an entry saying so. It is the state
+most people are in most of the time, it is a client's default for anybody it has
+never heard about, and enumerating it would make a response that is normally a
+handful of rows grow with the size of every room the caller is in.
+
+This endpoint is the authority. Presence *events* (§12.4) are the fast path and
+are transient by design — never replayed — so a client that was disconnected
+has a hole rather than a stale value, and nothing re-announces a status that has
+not changed. Every client calls this when a transport comes up.
+
+**Visibility is a shared room, both ways.** A stranger's status is not the
+caller's business, and a block hides presence in **both** directions — the same
+rule typing follows (§11), for the same reason: presence is an activity oracle,
+and a one-directional filter would make it answer "did they block me?".
+A server admin gets no exemption (§6.14).
+
+#### 6.15.2 `PUT /api/presence` — Auth: **yes**
+
+```json
+{ "status": "away" }   →   200 { "status": "away" }
+```
+
+`online` and `away` only. `offline` is refused with a 400 naming why: it is
+derived from holding no connection, and a client that could assert it while
+plainly connected would be lurking invisibly — a different feature, with
+different consent questions.
+
+Two jobs in one call. The first is the one thing the server cannot observe: a
+tab going to the background. WebSocket clients say this over the socket instead
+(§12.5), which costs a frame rather than a request. The second is a
+**heartbeat** — SSE is one-directional and polling holds no connection at all,
+so without a repeated call an SSE reader would age past the idle threshold into
+a false *away* after five minutes, and a polling client would never appear at
+all. Clients on those tiers repeat it every 60 s; the server counts a beacon for
+150 s.
+
+Repeating a status the caller already has is a success, not a no-op: the
+timestamp is the payload.
+
+**The derivation, in full.** A wallet's status is the *maximum* over its
+devices — up to eight connections plus the beacon — ordered
+`offline < away < online`. So a phone idling in a pocket never drags down the
+laptop somebody is typing on. One connection contributes `away` if the client
+declared it, or if nothing has been heard from it for five minutes, and `online`
+otherwise; a beacon contributes what it declared while it is fresh. Offline is
+what is left when a wallet has neither.
+
+A protocol-level WebSocket pong deliberately does **not** count as a sign of
+life: browsers answer those from the network stack whether or not the page's
+JavaScript is running, so counting them would make the idle threshold
+unreachable for every open tab. The client's own `ping` frame is what stops
+arriving when a tab is frozen, and that is the signal presence wants.
+
+---
+
 ## 7. Authentication Flow (End to End)
 
 ### 7.1 Challenge → sign → login
@@ -2614,11 +2691,19 @@ Reconnect with exponential backoff and a fresh token.
 | `{"type":"member_removed","roomId":"…"}` | leave, kick, **and accept-invitation** | refresh the room's members/details. Despite the name it means *"roster changed"* |
 | `{"type":"invitation_received","roomId":"…"}` | invite | refetch `GET /api/invitations` |
 | `{"type":"typing","roomId":"…","from":"0x…"}` | another member's typing relay | show indicator; expire after ~4 s of silence |
+| `{"type":"presence","wallet":"0x…","status":"online"}` | somebody sharing a room changed status (§6.15) | update the dot. `offline` **removes** the entry |
 | `{"type":"pong"}` | reply to a client `ping` | reset keepalive |
 
 Delivery is fan-out to every socket subscribed to the room, where subscriptions are the room-ID
 set loaded at connect time and refreshed by `refreshUserRooms`. Room creation and room deletion
 emit **nothing** — clients must refetch on their own.
+
+`presence` is the exception to "one event, one room": one person going online is one fact that
+concerns everyone they share *any* room with, so it is published against the whole set at once and
+each connection tests that set against its own current subscriptions. Somebody in three shared
+rooms receives it once, not three times, and a member who joined a second ago is authorised for the
+very next one — the check cannot go stale, because there is no cached "who are my peers" to go
+stale.
 
 ### 12.5 Client → server messages
 
@@ -2626,9 +2711,14 @@ emit **nothing** — clients must refetch on their own.
 |---|---|
 | `{"type":"ping"}` | resets the 3-minute idle timer, clears missed-ping count, replies `{"type":"pong"}`. Send every ~25 s |
 | `{"type":"typing","roomId":"…"}` | relays `typing` to the room's other connected members. Server enforces membership (via the subscription set) and the 1/s throttle; clients should self-throttle to ~1 per 2 s |
+| `{"type":"presence","status":"away"}` | this tab went to the background, or came back. `online` and `away` only; `offline` is dropped silently. The socket form of `PUT /api/presence` (§6.15.2), which is what the SSE and polling tiers use instead |
 
 Non-JSON frames and unknown types are silently ignored. Typing is filtered by blocks in **both**
-directions and never echoes to the sender's own sockets.
+directions and never echoes to the sender's own sockets. Presence is filtered the same way and for
+the same reason, and it is the one event that carries its own answer rather than being a wake-up:
+the status *is* the fact, and a round trip per tab switch across a whole team would cost more than
+it could protect. `GET /api/presence` remains the authority, because presence events are never
+replayed (§12.4) and a reconnect therefore leaves a hole rather than a stale value.
 
 ---
 
@@ -2811,6 +2901,8 @@ URL lands in browser history and in every log that records one.
 | 50 | GET | `/api/rooms/:roomId/latest-serial` | ✓ | **member** |
 | 51 | GET | `/api/rooms/:roomId/latest-timestamp` | ✓ | **member** |
 | 52 | POST | `/api/rooms/:roomId/read` | ✓ | **member** |
+| 53 | GET | `/api/presence` | ✓ | shared-room peers, block-filtered both ways (§6.15) |
+| 54 | PUT | `/api/presence` | ✓ | self; `online`/`away` only |
 | — | WS | `/ws` | ✓ (subprotocol or `?token=`) | subscribed to own rooms |
 
 ### 14.1 Route-precedence requirements

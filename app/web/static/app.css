@@ -2407,8 +2407,17 @@ input.topcoat-checkbox__input:checked {
    outside a primary action where the accent appears at all. */
 .fn-ident--self { box-shadow: 0 0 0 2px var(--fn-bg), 0 0 0 4px var(--fn-primary); }
 
-/* Presence dot, bottom-right, notched out of the tile. */
-.fn-ident--online::after {
+/* Presence dot, bottom-right, notched out of the tile.
+
+   Online is filled, away is a ring — a difference of *shape*, not of colour,
+   which is the rule (§17) and also the only version that survives the tile it
+   sits on. These dots land on generated portraits in every hue in the palette,
+   so a second colour would collide with one of them somewhere; a hole in the
+   middle collides with nothing. Offline draws nothing at all: three states and
+   only two marks, because "not here" is the common case and a badge on every
+   absent colleague is a screen of noise. */
+.fn-ident--online::after,
+.fn-ident--away::after {
   content: "";
   position: absolute;
   inset-inline-end: -2px;
@@ -2419,6 +2428,18 @@ input.topcoat-checkbox__input:checked {
   background: var(--fn-online);
   box-shadow: 0 0 0 2px var(--fn-bg);
 }
+.fn-ident--away::after {
+  background: var(--fn-bg);
+  border: 2px solid var(--fn-fg-muted);
+}
+
+/* The word beside the dot. Carried by the row rather than by the tile, which
+   is `aria-hidden` decoration — the dot is the glance, this is the meaning. */
+.fn-presence {
+  font-size: var(--fn-t-xs);
+  color: var(--fn-fg-muted);
+}
+.fn-presence--online { color: var(--fn-online-text); }
 
 /* --- Wallet address ------------------------------------------------------ */
 .fn-addr,
@@ -4252,6 +4273,21 @@ span.fn-conn { cursor: default; }
   row-gap: 2px;
 }
 .fn-person__name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The second line of a member row: status, then address. A dot separates them
+   only when the status is there to separate — offline renders no label, and a
+   leading bullet in front of an address would be a mark with nothing before
+   it. */
+.fn-person__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-inline-size: 0;
+}
+.fn-person__meta > .fn-presence + .fn-addr::before {
+  content: "·";
+  margin-inline-end: 6px;
+  color: var(--fn-fg-faint);
+}
 .fn-person__actions {
   display: flex;
   gap: var(--fn-s1);
