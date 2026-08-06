@@ -8685,6 +8685,14 @@ span.fn-conn { cursor: default; }
 @media (hover: hover) {
   .fn-trust__get:hover { box-shadow: 0 0 14px var(--fn-glow); }
 }
+/* The refresh step is a <button>, so strip the UA chrome the <a> never had
+   and keep the pair visually identical; block display stacks it under the
+   iOS instructions as step 2. */
+.fn-trust__reload {
+  display: flex;
+  font: inherit;
+  cursor: pointer;
+}
 
 /* === Profile-image picker (Settings → Profile image) ====================== */
 /* The gallery is a grid of square portraits; the selected one wears the
