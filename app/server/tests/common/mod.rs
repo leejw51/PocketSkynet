@@ -18,7 +18,10 @@ pub use api::{
     b, expect_keys, expect_message_shape, expect_no_keys, expect_room_key_shape, expect_room_shape,
     expect_user_shape, i, s, Api, Resp,
 };
-pub use crypto::{Identity, Signer};
+pub use crypto::{
+    new_entry_id, open_secret, seal_secret, sealed_from_json, sealed_to_json, vault_key, Identity,
+    Signer,
+};
 pub use harness::{TestServer, JWT_SECRET};
 
 // --- authentication -------------------------------------------------------

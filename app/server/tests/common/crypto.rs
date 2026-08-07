@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use pocketskynet_core::keys::EncryptionKeypair;
 use pocketskynet_core::wallet::Wallet;
-use pocketskynet_core::{crypto as core_crypto, eip191, hash, keys, WalletAddress};
+use pocketskynet_core::{crypto as core_crypto, eip191, hash, keys, secrets, WalletAddress};
 
 // --- wallet ---------------------------------------------------------------
 
@@ -178,6 +178,63 @@ pub fn decrypt_message(
 ) -> Option<String> {
     core_crypto::decrypt_message_v2(content, iv_hex, hmac_hex, &key_bytes(room_key_hex), room_id)
         .ok()
+}
+
+// --- Skynet Password sealing (CRYPTO §14) ---------------------------------
+
+/// The vault key for an identity: `HMAC-SHA256(encPriv, "…/password/vault")`.
+///
+/// Built from the identity's private key hex rather than from a curve type, so
+/// the test is hashing the same 32 bytes the browser hashes.
+pub fn vault_key(identity: &Identity) -> secrets::VaultKey {
+    let hex_str = identity.private_key_hex();
+    let raw = hex::decode(hex_str.trim_start_matches("0x")).expect("private key hex");
+    let scalar: [u8; 32] = raw.try_into().expect("32 bytes");
+    secrets::VaultKey::derive(&scalar)
+}
+
+/// Seal one field of one entry (§14.2).
+pub fn seal_secret(
+    vault: &secrets::VaultKey,
+    entry_id: &str,
+    field: secrets::Field,
+    plaintext: &str,
+) -> secrets::SealedField {
+    secrets::seal_field(vault, entry_id, field, plaintext).expect("seal a secret")
+}
+
+/// Verify-then-decrypt one field (§14.3). `None` on any failure, never a
+/// panic — several tests deliberately open with a key that must not work.
+pub fn open_secret(
+    vault: &secrets::VaultKey,
+    entry_id: &str,
+    field: secrets::Field,
+    sealed: &secrets::SealedField,
+) -> Option<String> {
+    secrets::open_field(vault, entry_id, field, sealed).ok()
+}
+
+/// A fresh client-minted entry id.
+pub fn new_entry_id() -> String {
+    secrets::new_entry_id().expect("mint an entry id")
+}
+
+/// Turn a wire JSON object back into a sealed field.
+pub fn sealed_from_json(value: &serde_json::Value) -> secrets::SealedField {
+    secrets::SealedField {
+        ciphertext: value["ciphertext"].as_str().expect("ciphertext").to_owned(),
+        iv: value["iv"].as_str().expect("iv").to_owned(),
+        hmac: value["hmac"].as_str().expect("hmac").to_owned(),
+    }
+}
+
+/// A sealed field as the wire carries it.
+pub fn sealed_to_json(field: &secrets::SealedField) -> serde_json::Value {
+    serde_json::json!({
+        "ciphertext": field.ciphertext,
+        "iv": field.iv,
+        "hmac": field.hmac,
+    })
 }
 
 // --- room-key wrapping (encVer 2) -----------------------------------------
