@@ -1372,6 +1372,11 @@ fn room_menu(
     let id = room.id().clone();
     let name = title.to_owned();
     let direct = room.is_direct();
+    // A built-in room refuses leave and delete server-side and would be
+    // provisioned straight back on the next listing, so the only thing those
+    // buttons could accomplish is an error dialog. Hiding — below, and
+    // reversible — is the verb that works, which is why it stays.
+    let built_in = room.room.is_static();
 
     let item = |label: &'static str, action: Modal, open: UseStateHandle<bool>| {
         let store = store.clone();
@@ -1481,7 +1486,7 @@ fn room_menu(
             // Leaving is a channel verb too — a departed member would leave a
             // DM still keyed to their name, which they could then never
             // re-open. Hiding, below, is the reversible answer for both.
-            if !direct {
+            if !direct && !built_in {
                 // An admin's exit asks a second question — see
                 // `ConfirmAction::ExitAsAdmin`. The first dialog says so, so
                 // that "Leave" is never a button whose consequences arrive
@@ -1503,11 +1508,17 @@ fn room_menu(
                       t(lang, Key::hide_room).to_owned(),
                       ConfirmAction::HideRoom(id.clone()), open.clone()) }
             if is_admin {
+                // Clearing the transcript stays available for a built-in room
+                // and is the only reason this distinction is drawn: the room
+                // cannot be deleted, so emptying it is the only way to start a
+                // notebook over, and removing both would leave no way at all.
                 { confirm(t(lang, Key::delete_all_messages), true,
                           t(lang, Key::delete_all_title).replace("{name}", &name),
                           t(lang, Key::delete_all_body).to_owned(),
                           t(lang, Key::delete_all).to_owned(),
                           ConfirmAction::DeleteAllMessages(id.clone()), open.clone()) }
+            }
+            if is_admin && !built_in {
                 { confirm(t(lang, Key::delete_room), true,
                           t(lang, Key::delete_room_title).replace("{name}", &name),
                           t(lang, Key::delete_room_body).to_owned(),

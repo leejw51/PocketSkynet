@@ -254,10 +254,7 @@ async fn agent_reply(
     ValidJson(body): ValidJson<AgentBody>,
 ) -> ApiResult<Response> {
     let room = validate::room_id(&room_id)?;
-    let expected = rooms::static_room_id(
-        crate::db::models::ROOM_KIND_JARVIS,
-        caller.as_str(),
-    );
+    let expected = rooms::static_room_id(crate::db::models::ROOM_KIND_JARVIS, caller.as_str());
     if room.as_str() != expected {
         // Deliberately the same refusal a non-member gets anywhere else: a
         // distinct "that is not your agent room" would confirm which room ids

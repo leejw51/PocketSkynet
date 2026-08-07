@@ -99,13 +99,25 @@ pub fn hidden_rooms(p: &HiddenProps) -> Html {
                     <div class="fn-picklist">
                         { for rooms.iter().enumerate().map(|(i, h)| {
                             let acting = busy.as_ref() == Some(&h.room_id);
+                            // A built-in room can be hidden like any other, so
+                            // it can appear here — and its stored name is the
+                            // English fallback the `NOT NULL` column needs
+                            // rather than its label. Resolved the same way the
+                            // sidebar resolves it, or the one place that
+                            // offers to bring the room back would be the one
+                            // place calling it something else.
+                            let built_in = h.room.as_ref().and_then(crate::rooms::static_room);
                             html! {
                                 <div key={h.room_id.to_string()} class="fn-picklist__row"
                                      style={format!("--i: {i}")}>
-                                    <Ident seed={h.room_id.to_string()} size={IdentSize::Xs} />
+                                    <Ident seed={h.room_id.to_string()} size={IdentSize::Xs}
+                                           art={built_in.map(|r| r.art())} />
                                     <div class="fn-grow">
-                                        <div>{ h.room.as_ref().map(|r| r.room.name.clone())
-                                                .unwrap_or_else(|| h.room_id.to_string()) }</div>
+                                        <div>{ match built_in {
+                                            Some(r) => t(lang, r.title()).to_owned(),
+                                            None => h.room.as_ref().map(|r| r.room.name.clone())
+                                                .unwrap_or_else(|| h.room_id.to_string()),
+                                        } }</div>
                                         if let Some(at) = h.created_at.as_deref().and_then(format::parse_iso8601_ms) {
                                             <div class="fn-muted">
                                                 { format!("hidden {}", format::short_date(at, tz)) }

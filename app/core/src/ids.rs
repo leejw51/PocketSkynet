@@ -165,7 +165,9 @@ impl WalletAddress {
     /// it cannot drift apart.
     pub fn agent_of(owner: &WalletAddress) -> Self {
         use sha2::{Digest, Sha256};
-        let digest = hex::encode(Sha256::digest(format!("jarvis:{}", owner.as_str()).as_bytes()));
+        let digest = hex::encode(Sha256::digest(
+            format!("jarvis:{}", owner.as_str()).as_bytes(),
+        ));
         Self(format!("{AGENT_SENDER_PREFIX}{}", &digest[..32]))
     }
 

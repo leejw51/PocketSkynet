@@ -73,7 +73,11 @@ async fn signing_in_and_asking_for_the_room_list_is_all_it_takes() {
     // No create call anywhere in this test. That is the feature.
     let rooms = rooms_by_kind(&alice).await;
 
-    assert_eq!(rooms.len(), 3, "exactly the three built-in rooms: {rooms:?}");
+    assert_eq!(
+        rooms.len(),
+        3,
+        "exactly the three built-in rooms: {rooms:?}"
+    );
     for kind in ["note", "jarvis", "lobby"] {
         let room = rooms
             .get(kind)

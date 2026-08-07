@@ -142,7 +142,9 @@ pub struct RoomLine {
 /// a leading agent turn is dropped entirely because a conversation cannot open
 /// with an assistant message.
 pub fn turns(lines: &[RoomLine]) -> Vec<ChatTurn> {
-    let window = lines.iter().skip(lines.len().saturating_sub(CONTEXT_MESSAGES));
+    let window = lines
+        .iter()
+        .skip(lines.len().saturating_sub(CONTEXT_MESSAGES));
 
     let mut out: Vec<ChatTurn> = Vec::new();
     for line in window {

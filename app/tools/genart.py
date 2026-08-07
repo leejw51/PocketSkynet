@@ -1273,28 +1273,28 @@ CUTE_PROMPTS: dict[str, str] = {
         "conversation out of a list. " + CUTE_STYLE
     ),
     "my-note": (
-            "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
-            "chunky rounded notebook with a glossy cobalt blue cover, a warm "
-            "gold ribbon bookmark curling from the lower edge and a small "
-            "rounded gold padlock clipped to its spine. Entirely an object — "
-            "no cartoon face, no eyes, nothing that reads as a character. "
-            "Must read as a private notebook at 40 pixels. " + CUTE_STYLE
+        "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
+        "chunky rounded notebook with a glossy cobalt blue cover, a warm "
+        "gold ribbon bookmark curling from the lower edge and a small "
+        "rounded gold padlock clipped to its spine. Entirely an object — "
+        "no cartoon face, no eyes, nothing that reads as a character. "
+        "Must read as a private notebook at 40 pixels. " + CUTE_STYLE
     ),
     "my-jarvis": (
-            "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
-            "plump rounded speech bubble in glossy cobalt blue with a single "
-            "wide warm gold lens set into its middle, and three small rounded "
-            "motes drifting toward it. Entirely an object — no cartoon face, "
-            "no eyes, no smile, nothing that reads as a character. Must read "
-            "as a conversation with a machine at 40 pixels. " + CUTE_STYLE
+        "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
+        "plump rounded speech bubble in glossy cobalt blue with a single "
+        "wide warm gold lens set into its middle, and three small rounded "
+        "motes drifting toward it. Entirely an object — no cartoon face, "
+        "no eyes, no smile, nothing that reads as a character. Must read "
+        "as a conversation with a machine at 40 pixels. " + CUTE_STYLE
     ),
     "my-lobby": (
-            "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
-            "chunky rounded reception counter in glossy cobalt blue under a "
-            "wide rounded arch, with a small warm gold call bell on top of "
-            "the counter. Entirely an object — no cartoon face, no eyes, "
-            "nothing that reads as a character, and nobody standing at it. "
-            "Must read as a front desk at 40 pixels. " + CUTE_STYLE
+        "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
+        "chunky rounded reception counter in glossy cobalt blue under a "
+        "wide rounded arch, with a small warm gold call bell on top of "
+        "the counter. Entirely an object — no cartoon face, no eyes, "
+        "nothing that reads as a character, and nobody standing at it. "
+        "Must read as a front desk at 40 pixels. " + CUTE_STYLE
     ),
     "encrypted-badge": (
         "Icon: a chubby rounded padlock, closed, with a warm gold body and a "
@@ -1584,28 +1584,26 @@ HUMAN_PROMPTS: dict[str, str] = {
         + HUMAN_STYLE
     ),
     "my-note": (
-            "Emblem centred in frame: a slim closed notebook seen head-on, "
-            "drawn as a flat glowing cyan hologram on a dark plate, with a "
-            "thin ribbon bookmark trailing from the lower edge and a small "
-            "closed padlock at its spine. Entirely an object. No people, no "
-            "face, no hands. Must read as a private notebook at 40 pixels. "
-            + HUMAN_STYLE
+        "Emblem centred in frame: a slim closed notebook seen head-on, "
+        "drawn as a flat glowing cyan hologram on a dark plate, with a "
+        "thin ribbon bookmark trailing from the lower edge and a small "
+        "closed padlock at its spine. Entirely an object. No people, no "
+        "face, no hands. Must read as a private notebook at 40 pixels. " + HUMAN_STYLE
     ),
     "my-jarvis": (
-            "Emblem centred in frame: a rounded speech bubble drawn as a flat "
-            "glowing cyan hologram on a dark plate, one thin circular lens "
-            "outline at its centre, three small square data motes travelling "
-            "toward it along a fine dotted arc. Entirely a symbol. No people, "
-            "no face, no hands. Must read as a conversation with a machine at "
-            "40 pixels. " + HUMAN_STYLE
+        "Emblem centred in frame: a rounded speech bubble drawn as a flat "
+        "glowing cyan hologram on a dark plate, one thin circular lens "
+        "outline at its centre, three small square data motes travelling "
+        "toward it along a fine dotted arc. Entirely a symbol. No people, "
+        "no face, no hands. Must read as a conversation with a machine at "
+        "40 pixels. " + HUMAN_STYLE
     ),
     "my-lobby": (
-            "Emblem centred in frame: a low reception counter under a simple "
-            "arch, drawn as a flat glowing cyan hologram on a dark plate, with "
-            "a small faceted call bell on the counter and one thin light bar "
-            "across the top of the arch. Entirely a symbol. No people, no "
-            "face, no hands. Must read as a front desk at 40 pixels. "
-            + HUMAN_STYLE
+        "Emblem centred in frame: a low reception counter under a simple "
+        "arch, drawn as a flat glowing cyan hologram on a dark plate, with "
+        "a small faceted call bell on the counter and one thin light bar "
+        "across the top of the arch. Entirely a symbol. No people, no "
+        "face, no hands. Must read as a front desk at 40 pixels. " + HUMAN_STYLE
     ),
     "encrypted-badge": (
         "Icon: a closed padlock whose shackle is formed from two interlocking "

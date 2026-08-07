@@ -327,7 +327,10 @@ mod tests {
         let sections = sectioned(&rooms, |k| category_of_kind(k));
         assert_eq!(
             sections.iter().map(|(h, _)| *h).collect::<Vec<_>>(),
-            vec![Some(Key::section_channels), Some(Key::section_direct_messages)]
+            vec![
+                Some(Key::section_channels),
+                Some(Key::section_direct_messages)
+            ]
         );
     }
 }
