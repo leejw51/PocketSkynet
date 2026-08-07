@@ -45,6 +45,23 @@ async fn connect_subprotocol(
     Ok((stream, echoed))
 }
 
+/// Block until the server has registered this socket with the hub.
+///
+/// `connect_*` returns at the 101 handshake, but the server only registers
+/// the connection — the step that makes events deliverable — inside the
+/// upgraded task, after an awaited database read (`load_view`). An event
+/// published in that window is not late, it is *gone*: a broadcast channel
+/// has no memory for receivers that did not exist yet. The message loop
+/// starts strictly after registration, so one ping→pong round trip proves
+/// the subscription is live. Skipping this before "trigger, then expect the
+/// wake-up" is a race that only ever loses on a loaded machine.
+async fn await_subscribed(ws: &mut Ws) {
+    send_json(ws, json!({ "type": "ping" })).await;
+    next_event_of(ws, "pong", EVENT_TIMEOUT)
+        .await
+        .expect("the socket must answer a ping once its subscription is live");
+}
+
 /// Connect with the `?token=` fallback retained for native CLIs.
 async fn connect_query(server: &TestServer, token: &str) -> Result<Ws, WsError> {
     let (stream, _) = connect_async(server.ws_url(&format!("/ws?token={token}"))).await?;
@@ -370,7 +387,7 @@ async fn a_message_from_one_member_wakes_another() {
     let (mut ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
-
+    await_subscribed(&mut ws).await;
     let sent = send_message(&alice.api, &room, "wake up").await;
 
     let event = next_event_of(&mut ws, "new_message", EVENT_TIMEOUT)
@@ -400,6 +417,7 @@ async fn edits_deletes_and_reactions_all_produce_a_wake_up() {
     let (mut ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut ws).await;
 
     alice
         .api
@@ -446,6 +464,7 @@ async fn a_key_rotation_wakes_the_room() {
     let (mut ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut ws).await;
 
     alice
         .api
@@ -477,6 +496,7 @@ async fn a_non_member_is_never_woken() {
     let (mut ws, _) = connect_subprotocol(&server, outsider.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut ws).await;
 
     send_message(&alice.api, &room, "not for you").await;
 
@@ -497,6 +517,7 @@ async fn an_invitee_receives_invitation_received() {
     let (mut ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut ws).await;
 
     alice
         .api
@@ -530,6 +551,7 @@ async fn accepting_an_invitation_updates_the_accepters_room_list() {
     let (mut ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut ws).await;
 
     bob.api
         .post_empty(&format!("/api/invitations/{room}/accept"))
@@ -551,6 +573,7 @@ async fn remaining_members_are_told_the_roster_changed() {
     let (mut ws, _) = connect_subprotocol(&server, alice.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut ws).await;
 
     bob.api
         .post_empty(&format!("/api/rooms/{room}/leave"))
@@ -573,6 +596,7 @@ async fn a_kicked_member_loses_their_subscription() {
     let (mut ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut ws).await;
 
     alice
         .api
@@ -610,6 +634,7 @@ async fn typing_is_relayed_to_other_members_with_the_sender_address() {
     let (mut bob_ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut bob_ws).await;
 
     send_json(&mut alice_ws, json!({ "type": "typing", "roomId": room })).await;
 
@@ -637,6 +662,7 @@ async fn typing_is_never_echoed_to_the_sender() {
     let (mut bob_ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut bob_ws).await;
 
     send_json(&mut alice_ws, json!({ "type": "typing", "roomId": room })).await;
     next_event_of(&mut bob_ws, "typing", EVENT_TIMEOUT)
@@ -664,6 +690,7 @@ async fn typing_is_throttled_to_one_per_second_per_socket() {
     let (mut bob_ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut bob_ws).await;
 
     for _ in 0..5 {
         send_json(&mut alice_ws, json!({ "type": "typing", "roomId": room })).await;
@@ -694,6 +721,7 @@ async fn typing_for_a_room_you_are_not_in_is_silently_dropped() {
     let (mut bob_ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut bob_ws).await;
 
     send_json(
         &mut outsider_ws,
@@ -732,6 +760,7 @@ async fn typing_is_filtered_in_both_directions_across_a_block() {
     let (mut bob_ws, _) = connect_subprotocol(&server, bob.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut bob_ws).await;
 
     send_json(&mut bob_ws, json!({ "type": "typing", "roomId": room })).await;
     assert!(
@@ -769,6 +798,7 @@ async fn a_blocked_users_message_produces_no_wake_up_at_all() {
     let (mut alice_ws, _) = connect_subprotocol(&server, alice.api.token())
         .await
         .expect("connect");
+    await_subscribed(&mut alice_ws).await;
 
     send_message(&bob.api, &room, "from a blocked sender").await;
     assert!(
