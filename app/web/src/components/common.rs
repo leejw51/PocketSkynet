@@ -45,6 +45,66 @@ impl IdentSize {
     }
 }
 
+/// Whether this keystroke belongs to an IME still assembling a character.
+///
+/// Every Enter-submits handler over a text field must check this first. With a
+/// Korean (or any CJK) IME, the Enter that *commits* the syllable being
+/// composed arrives as a keydown too — acting on it sends the message while
+/// the IME then deposits the half-built syllable into the freshly cleared
+/// field, so the next Enter posts it again. `keyCode` 229 is the same signal
+/// from browsers that predate `isComposing`.
+pub fn ime_composing(e: &KeyboardEvent) -> bool {
+    e.is_composing() || e.key_code() == 229
+}
+
+/// How long after a `compositionend` an Enter is still the IME's.
+///
+/// The two events are dispatched back to back in the same task, so the real
+/// gap is under a millisecond; 50 ms is slack, and still far below the ~100 ms
+/// a person needs to decide to press Enter a second time.
+const COMPOSITION_TAIL_MS: f64 = 50.0;
+
+/// Composition state for a field where Enter submits.
+///
+/// [`ime_composing`] alone is not enough, because the two engines order the
+/// events differently. Chrome and Firefox fire `keydown` *before*
+/// `compositionend` and flag it `isComposing`, so the flag catches it. WebKit
+/// fires `compositionend` *first* — by the time `keydown` arrives the
+/// composition is already over and nothing on the event distinguishes it from
+/// a deliberate press. The timestamp is what covers that second ordering.
+#[derive(Clone, PartialEq)]
+pub struct ImeGuard {
+    ended_at: std::rc::Rc<std::cell::RefCell<f64>>,
+}
+
+/// Per-field composition tracking, watching the field behind `field`.
+///
+/// The listener is attached by hand because Yew 0.21 has no `oncompositionend`
+/// attribute — composition events are simply absent from its event table.
+#[hook]
+pub fn use_ime_guard(field: NodeRef) -> ImeGuard {
+    let ended_at = use_mut_ref(|| 0f64);
+    {
+        let ended_at = ended_at.clone();
+        use_effect_with(field, move |field| {
+            let listener = field.get().map(|target| {
+                gloo_events::EventListener::new(&target, "compositionend", move |_| {
+                    *ended_at.borrow_mut() = js_sys::Date::now();
+                })
+            });
+            move || drop(listener)
+        });
+    }
+    ImeGuard { ended_at }
+}
+
+impl ImeGuard {
+    /// Whether this keystroke belongs to the IME rather than to the app.
+    pub fn blocks(&self, e: &KeyboardEvent) -> bool {
+        ime_composing(e) || js_sys::Date::now() - *self.ended_at.borrow() < COMPOSITION_TAIL_MS
+    }
+}
+
 /// What the spotlight should say when a tile is tapped to zoom it.
 ///
 /// Carried by the caller rather than derived here, because only the caller

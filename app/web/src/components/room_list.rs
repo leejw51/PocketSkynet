@@ -311,7 +311,7 @@ pub fn room_list(p: &RoomListProps) -> Html {
                     onkeydown={{
                         let quick_submit = quick_submit.clone();
                         Callback::from(move |e: KeyboardEvent| {
-                            if e.key() == "Enter" {
+                            if e.key() == "Enter" && !super::common::ime_composing(&e) {
                                 e.prevent_default();
                                 quick_submit.emit(());
                             }

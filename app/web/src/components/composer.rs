@@ -79,6 +79,9 @@ pub fn composer(p: &ComposerProps) -> Html {
     let send_btn = use_node_ref();
     let file_input = use_node_ref();
     let last_typing = use_mut_ref(|| 0f64);
+    // Korean and every other composed script: Enter finishes the syllable
+    // before it means "send". See `common::ImeGuard`.
+    let ime = super::common::use_ime_guard(area.clone());
     // The `@` being completed, and which suggestion is highlighted.
     let mention = use_state(|| Option::<crate::mentions::ActiveMention>::None);
     let mention_index = use_state(|| 0usize);
@@ -204,7 +207,16 @@ pub fn composer(p: &ComposerProps) -> Html {
         let mention_index = mention_index.clone();
         let accept = accept.clone();
         let names: Vec<String> = suggestions.iter().map(|c| c.name.clone()).collect();
+        let ime = ime.clone();
         Callback::from(move |e: KeyboardEvent| {
+            // Enter and Tab are the committing keys, and while an IME is
+            // assembling a syllable they belong to it rather than to us — see
+            // `common::ImeGuard`. Only those two: the arrows and Escape stay
+            // live, or finishing a Hangul name would briefly freeze the
+            // suggestion list's navigation.
+            if matches!(e.key().as_str(), "Enter" | "Tab") && ime.blocks(&e) {
+                return;
+            }
             // The suggestion list owns the arrows, Enter, Tab and Escape while
             // it is open. Enter especially: with a list on screen it means
             // "this one", and sending the half-typed handle instead is the

@@ -573,6 +573,9 @@ pub fn login(p: &LoginProps) -> Html {
                 .target()
                 .and_then(|t| t.dyn_into::<HtmlTextAreaElement>().ok())
                 .is_some();
+            if crate::components::common::ime_composing(&e) {
+                return;
+            }
             if e.key() == "Enter" && (!from_textarea || e.ctrl_key() || e.meta_key()) {
                 e.prevent_default();
                 on_submit.emit(());
