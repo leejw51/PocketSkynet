@@ -90,7 +90,7 @@ pub(super) async fn require_admin(
 ///
 /// 400 rather than 403 on purpose — the caller is not unauthorised, the
 /// request does not apply.
-async fn require_channel(state: &AppState, room: &RoomId, verb: &str) -> ApiResult<()> {
+pub(super) async fn require_channel(state: &AppState, room: &RoomId, verb: &str) -> ApiResult<()> {
     if is_direct(state, room).await? {
         return Err(ApiError::bad_request(format!(
             "Cannot {verb} a direct message."
@@ -113,7 +113,7 @@ async fn is_direct(state: &AppState, room: &RoomId) -> ApiResult<bool> {
     Ok(record.is_direct())
 }
 
-async fn require_room_exists(state: &AppState, room: &RoomId) -> ApiResult<()> {
+pub(super) async fn require_room_exists(state: &AppState, room: &RoomId) -> ApiResult<()> {
     let room_id = room.as_str().to_owned();
     let exists = state
         .db

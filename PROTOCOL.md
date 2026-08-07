@@ -307,7 +307,10 @@ Rules:
   rejects encrypted posts with `409 KEY_ROTATION_REQUIRED`): any member
   generates a fresh key, `newVersion = current + 1`, runs the §6 binding check
   for **every** member, wraps to each, and posts atomically to
-  `/api/rooms/:id/rotate-key`.
+  `/api/rooms/:id/rotate-key`. A member *joining* an encrypted room through an
+  invite link (`/api/invites/:token/redeem`, API.md §6.7a) sets the same flag
+  from the other side — the joiner holds no wrap for the current epoch, and
+  the full-coverage rule above is what gets them one at the next rotation.
 - `409 STALE_KEY_VERSION` → clear cache, refetch epochs, re-encrypt, retry
   once. `409 KEY_ROTATION_REQUIRED` → perform the rotation, then retry.
 - Honesty notes for UI: no backward secrecy, no per-message ratchet, metadata

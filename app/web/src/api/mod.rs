@@ -25,6 +25,9 @@ mod auth;
 pub mod downloads;
 pub mod files;
 mod invitations;
+/// Public for the [`invites::InviteLink`] and [`invites::InvitePeek`] types
+/// the share dialog and the landing page render.
+pub mod invites;
 mod keys;
 /// Public for the [`mentions::Mention`] type the inbox renders.
 pub mod mentions;

@@ -29,6 +29,10 @@ gloo-storage = "0.3"
 gloo-events = "0.2"
 futures = "0.3"
 getrandom = { version = "0.2", features = ["js"] }
+# Invite-link QR codes, rendered to an inline SVG string. `svg` only: the
+# default `image` feature drags a raster stack into a `.wasm` that only
+# needs markup.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [dependencies.web-sys]
 version = "0.3"

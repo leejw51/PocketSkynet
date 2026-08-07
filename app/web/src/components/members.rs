@@ -83,6 +83,20 @@ pub fn members(p: &MembersProps) -> Html {
                 <span class="fn-badge fn-badge--muted">{ roster.len() }</span>
                 <span class="fn-push">
                     if is_admin {
+                        // Share-by-link, for people whose wallet address
+                        // nobody has yet — the quiet sibling of the CTA.
+                        <button
+                            type="button"
+                            class="topcoat-button--quiet"
+                            disabled={offline}
+                            onclick={{
+                                let store = store.clone();
+                                let id = p.room_id.clone();
+                                Callback::from(move |_: MouseEvent| {
+                                    store.dispatch(Action::OpenModal(Modal::InviteLinks(id.clone())))
+                                })
+                            }}
+                        >{ t(lang, Key::invite_links) }</button>
                         <button
                             type="button"
                             class="topcoat-button--cta"

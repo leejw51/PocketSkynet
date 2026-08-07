@@ -1418,6 +1418,9 @@ fn room_menu(
                 { item(t(lang, Key::invite_people), Modal::Invite(id.clone()), open.clone()) }
             }
             if !direct && is_admin {
+                // Share-by-link sits beside share-by-address: the first is for
+                // people whose wallet address nobody has yet.
+                { item(t(lang, Key::invite_links), Modal::InviteLinks(id.clone()), open.clone()) }
                 { item(t(lang, Key::rename_room), Modal::RenameRoom(id.clone(), name.clone()), open.clone()) }
                 { item(t(lang, Key::manage_admins), Modal::ManageAdmins(id.clone()), open.clone()) }
             }

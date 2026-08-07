@@ -150,6 +150,39 @@ CREATE TABLE IF NOT EXISTS room_invitations (
 CREATE INDEX IF NOT EXISTS idx_room_invitations_invitee
     ON room_invitations (invited_address, created_at DESC);
 
+-- Invite links (ROADMAP §7 M1): a bearer token that seats whoever presents
+-- it, so a room can onboard somebody who does not have a wallet address yet —
+-- the token travels over a link or a QR code, and the wallet is created on
+-- the landing page it opens.
+--
+-- Only the SHA-256 of the token is stored. The server can still recognise a
+-- token it issued — hash the presented token and look it up — but a copy of
+-- this table cannot be turned back into a working link, which matters for a
+-- credential that grants membership to anyone who holds it. Revocation is a
+-- timestamp rather than a DELETE: the row keeps answering "what was this and
+-- who used it" after an admin kills the link, and a revoked token is
+-- distinguishable from one that never existed, so the person holding it gets
+-- told the truth instead of a generic failure.
+CREATE TABLE IF NOT EXISTS room_invites (
+    id          TEXT    PRIMARY KEY,
+    room_id     TEXT    NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
+    -- SHA-256 of the bearer token, lowercase hex. UNIQUE doubles as the
+    -- redeem-time lookup index.
+    token_hash  TEXT    NOT NULL UNIQUE,
+    created_by  TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    -- NULL means unlimited. Enforced by the conditional UPDATE in
+    -- `db::invites::consume`, never by a read-then-write.
+    max_uses    INTEGER,
+    use_count   INTEGER NOT NULL DEFAULT 0,
+    -- NULL while the link is live; set once, never cleared.
+    revoked_at  INTEGER
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_room_invites_room
+    ON room_invites (room_id, created_at DESC);
+
 -- One wrapped room key per (room, user, epoch). A member accumulates one row
 -- per epoch they can read, which is what preserves their access to history
 -- across rotations.

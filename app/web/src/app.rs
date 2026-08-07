@@ -13,8 +13,9 @@ use yew::prelude::*;
 use crate::actions;
 use crate::api::Client;
 use crate::components::{
-    bank, boot, burst, chat, dialogs, gallery, invitations, knowledge, lightbox, login, members,
-    operator, publish, room_list, settings, shell, shout, spotlight, toast, transfers,
+    bank, boot, burst, chat, dialogs, gallery, invitations, invite_landing, knowledge, lightbox,
+    login, members, operator, publish, room_list, settings, shell, shout, spotlight, toast,
+    transfers,
 };
 use crate::format;
 use crate::i18n::{t, Key};
@@ -284,6 +285,31 @@ fn root() -> Html {
                     }
                     actions::refresh_all(store).await;
                 });
+            }
+            || ()
+        });
+    }
+
+    // --- parked invite token (ROADMAP §7 M1) ------------------------------
+
+    // The other half of the invite-link landing flow. Opening a link while
+    // signed out parks the token in `localStorage` (see
+    // `invite_landing::InviteLanding`); this effect fires when a session
+    // token appears — a fresh sign-in, a wallet-created-then-signed-in
+    // journey, or a vault unlock — takes the parked token and redeems it.
+    // `take_pending_invite` deletes on read, so a refused redeem is spent,
+    // never retried on every reload.
+    {
+        let store = store.clone();
+        let navigate = navigate.clone();
+        let token = store.auth.token().map(str::to_owned);
+        use_effect_with(token, move |token| {
+            if token.is_some() {
+                if let Some(invite) = crate::session::take_pending_invite() {
+                    wasm_bindgen_futures::spawn_local(actions::redeem_invite(
+                        store, invite, navigate,
+                    ));
+                }
             }
             || ()
         });
@@ -618,6 +644,21 @@ fn root() -> Html {
 
     let on_navigate = navigate.clone();
 
+    // The invite landing page, before the auth gate: it renders in both auth
+    // states and decides for itself — redeem immediately with a session, or
+    // park the token and route through sign-in without one (ROADMAP §7 M1).
+    if let Route::Invite(token) = &*route {
+        return html! {
+            <>
+                <invite_landing::InviteLanding
+                    token={token.clone()}
+                    on_navigate={on_navigate.clone()}
+                />
+                <toast::Toasts />
+            </>
+        };
+    }
+
     // The auth gate. A route that needs a session with none present becomes
     // the login screen rather than a redirect loop.
     if route.needs_auth() && !store.auth.is_authenticated() {
@@ -889,6 +930,9 @@ fn render_modal(store: &Store, route: &Route, on_navigate: &Callback<Route>) -> 
         },
         Some(Modal::Invite(id)) => html! {
             <dialogs::Invite room_id={id} on_close={close} />
+        },
+        Some(Modal::InviteLinks(id)) => html! {
+            <dialogs::InviteLinks room_id={id} on_close={close} />
         },
         Some(Modal::ManageAdmins(id)) => html! {
             <dialogs::ManageAdmins room_id={id} on_close={close} />

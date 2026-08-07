@@ -41,8 +41,23 @@ pub enum Route {
     Operator,
     /// `/settings` — settings and profile.
     Settings,
+    /// `/invite/:token` — an invite-link landing page (ROADMAP §7 M1). The
+    /// other unauthenticated route: the person opening one may have no wallet
+    /// yet, and this is the road that gets them one and into the room.
+    Invite(String),
     /// Anything else.
     NotFound,
+}
+
+/// Whether a path segment is shaped like a minted invite token: `inv_` + 64
+/// hex. Anything else could never have been issued, so it is a 404 here
+/// rather than a landing page that will 404 on its first fetch — the same
+/// reasoning as the room-id check below.
+fn is_invite_token(s: &str) -> bool {
+    match s.strip_prefix("inv_") {
+        Some(hex) => hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        None => false,
+    }
 }
 
 impl Route {
@@ -73,6 +88,7 @@ impl Route {
             ["rooms", id, "gallery"] => RoomId::new(id)
                 .map(Route::Gallery)
                 .unwrap_or(Route::NotFound),
+            ["invite", token] if is_invite_token(token) => Route::Invite((*token).to_owned()),
             _ => Route::NotFound,
         }
     }
@@ -91,6 +107,7 @@ impl Route {
             Route::Bank => "/bank".into(),
             Route::Operator => "/operator".into(),
             Route::Settings => "/settings".into(),
+            Route::Invite(token) => format!("/invite/{token}"),
             // A 404 has no canonical path; going "back" to it is meaningless.
             Route::NotFound => "/".into(),
         }
@@ -105,10 +122,11 @@ impl Route {
         }
     }
 
-    /// Whether this route requires a session. Everything except `/login` and
-    /// the 404 does.
+    /// Whether this route requires a session. Everything except `/login`, the
+    /// invite landing page and the 404 does — an invite link is *how* someone
+    /// without a session gets one.
     pub fn needs_auth(&self) -> bool {
-        !matches!(self, Route::Login | Route::NotFound)
+        !matches!(self, Route::Login | Route::Invite(_) | Route::NotFound)
     }
 
     /// Which pane `.fn-panes[data-view]` should show on a narrow viewport
@@ -152,6 +170,7 @@ impl Route {
     pub fn title(&self) -> &'static str {
         match self {
             Route::Login => "Sign in · PocketSkynet",
+            Route::Invite(_) => "You're invited · PocketSkynet",
             Route::Rooms | Route::Room(_) => "PocketSkynet",
             Route::Members(_) => "Members · PocketSkynet",
             Route::Gallery(_) => "Gallery · PocketSkynet",
@@ -257,9 +276,33 @@ mod tests {
     }
 
     #[test]
+    fn an_invite_link_parses_only_when_the_token_could_have_been_minted() {
+        let token = format!("inv_{}", "a".repeat(64));
+        assert_eq!(
+            Route::parse(&format!("/invite/{token}")),
+            Route::Invite(token.clone())
+        );
+        let r = Route::Invite(token);
+        assert_eq!(Route::parse(&r.to_path()), r, "invite links round trip");
+
+        // Wrong prefix, wrong length, wrong charset: all could never have
+        // been issued, so none deserve a landing page.
+        for bad in [
+            "/invite/evt_0000",
+            &format!("/invite/inv_{}", "a".repeat(63)),
+            &format!("/invite/inv_{}", "g".repeat(64)),
+            "/invite/",
+            &format!("/invite/{}/extra", format_args!("inv_{}", "a".repeat(64))),
+        ] {
+            assert_eq!(Route::parse(bad), Route::NotFound, "for {bad}");
+        }
+    }
+
+    #[test]
     fn auth_gate_covers_exactly_the_authenticated_routes() {
         assert!(!Route::Login.needs_auth());
         assert!(!Route::NotFound.needs_auth());
+        assert!(!Route::Invite(format!("inv_{}", "a".repeat(64))).needs_auth());
         assert!(Route::Rooms.needs_auth());
         assert!(Route::Room(rid(ROOM)).needs_auth());
         assert!(Route::Members(rid(ROOM)).needs_auth());

@@ -15,6 +15,7 @@ pub mod files;
 pub mod gallery;
 pub mod images;
 pub mod invitations;
+pub mod invites;
 pub mod keys;
 pub mod mentions;
 pub mod messages;
@@ -169,6 +170,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(users::router())
         .merge(rooms::router())
         .merge(invitations::router())
+        .merge(invites::router())
         .merge(keys::router())
         .merge(messages::router())
         .merge(mentions::router())

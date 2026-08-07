@@ -314,6 +314,8 @@ idempotent. Clients tolerate deduplicated lists.
 | Message | `msg_{Date.now()}_{uuidv4()}` |
 | Emoticon event | `emoticon_{Date.now()}_{uuidv4()}` |
 | Auth challenge | `uuidv4()` (bare UUID) |
+| Invite link row | `invite_{now_ms}_{uuidv4()}` (PocketSkynet extension, §6.7a) |
+| Invite link token | `inv_` + 64 hex chars (32 CSPRNG bytes; only its SHA-256 is stored) |
 
 Room IDs contain `-` and `_` → valid under the `roomId` regex. Message IDs from emoticon
 events likewise. **Note:** `messageId` forbids `.`, and no generated ID contains one.
@@ -1449,6 +1451,102 @@ that the caller is a member.
 | 500 | `{"message":"Failed to decline invitation"}` |
 
 No WebSocket event; the inviter is not notified of a decline.
+
+---
+
+### 6.7a Invite links (5) — PocketSkynet extension
+
+The onboarding funnel (ROADMAP §7 M1). Where §6.7 invites an *address*, these
+mint a bearer token that seats whoever presents it — the newcomer can create
+their wallet after following the link, which is the whole point.
+
+**Token.** `inv_` + 32 CSPRNG bytes as 64 hex chars (same generator as the
+login challenge nonce). The server stores only its SHA-256:
+
+```
+room_invites(id TEXT PK ("invite_{now_ms}_{uuidv4}"),
+             room_id FK→rooms ON DELETE CASCADE,
+             token_hash TEXT UNIQUE (sha256 hex of the token),
+             created_by, created_at, expires_at,
+             max_uses NULL=unlimited, use_count NOT NULL DEFAULT 0,
+             revoked_at NULL=live)
+```
+
+The token appears in exactly one response — 6.7a.1's — and can never be
+re-read; a lost link is replaced by minting a new one and revoking the old.
+Expiry, revocation, and the use budget are all enforced at redeem time by one
+conditional `UPDATE`, so revocation is immediate and two redeems racing on a
+one-use link cannot both win.
+
+#### 6.7a.1 `POST /api/rooms/:roomId/invites` — Auth: **yes, admin-only**
+
+```json
+{ "expiresInHours": 168, "maxUses": 10 }
+```
+
+Both fields optional: `expiresInHours` 1–720, default 168 (a week);
+`maxUses` 1–1000, default unlimited. Check order: room exists (404) →
+channel (400 for a DM, same reasoning as 6.7.1) → admin (403).
+
+| Status | Body |
+|---|---|
+| 200 | `{"message":"Invite link created","invite":{invite-link object},"token":"inv_…"}` |
+| 400 | DM, or a field out of range |
+| 403 | `{"message":"Only room admins can create invite links"}` |
+| 404 | `{"message":"Room not found"}` |
+
+The invite-link object: `{id, roomId, createdBy, createdAt, expiresAt,
+maxUses, useCount, expired}` — ISO timestamps, `expired` computed against the
+server's clock so clients never parse dates to grey a row out.
+
+#### 6.7a.2 `GET /api/rooms/:roomId/invites` — Auth: **yes, admin-only**
+
+The revocation list: non-revoked links, newest first, as invite-link objects.
+Expired and exhausted links stay listed (flagged) until revoked — they are
+exactly the ones an admin wants to see and reissue.
+
+#### 6.7a.3 `DELETE /api/rooms/:roomId/invites/:inviteId` — Auth: **yes, admin-only**
+
+Sets `revoked_at`; the very next redeem attempt is refused. No undo.
+
+| Status | Body |
+|---|---|
+| 200 | `{"message":"Invite link revoked"}` |
+| 404 | `{"message":"Invite link not found"}` — unknown id, another room's id, or already revoked |
+
+#### 6.7a.4 `GET /api/invites/:token` — Auth: **no**
+
+Peek without spending a use — unauthenticated like `/api/auth/challenge`,
+because the landing page needs "you're invited to «Team chat»" before its
+visitor has an account. A valid token reveals the room's name and size; that
+is the capability working as designed.
+
+| Status | Body |
+|---|---|
+| 200 | `{"roomName":"…","memberCount":3,"expiresAt":"…"}` |
+| 404 | distinct wording per state — see 6.7a.5 |
+
+#### 6.7a.5 `POST /api/invites/:token/redeem` — Auth: **yes** (any user)
+
+Check order: token shape (`inv_` + 64 hex, else 404) → row found (404) → room
+exists (404) → **already a member → 200, spending nothing** → live
+(revoked / expired / exhausted → 404) → atomic use-count increment →
+`addMember`. When the room has any wrap (`room_keys` rows),
+`keyRotationPending` is set — the joiner holds no wrap for the current epoch,
+mirroring leave/kick from the other side (§11 of PROTOCOL.md); a plaintext
+room is left unflagged. Emits `roomsUpdated` to the joiner and
+`member_removed` (roster-changed) to the room, like 6.7.3.
+
+| Status | Body |
+|---|---|
+| 200 | `{"message":"Joined room","roomId":"…","roomName":"…","alreadyMember":false}` |
+| 404 | `{"message":"Invite link not found"}` — never issued (or malformed) |
+| 404 | `{"message":"This invite link has been revoked"}` |
+| 404 | `{"message":"This invite link has expired"}` |
+| 404 | `{"message":"This invite link has reached its use limit"}` |
+
+All four refusals are 404 — the link is equally dead — but the wording tells
+the holder whether to ask for a fresh link or take the hint.
 
 ---
 
@@ -3061,6 +3159,11 @@ open past the hour re-fetches the listing when its tiles start failing.
 | 52 | POST | `/api/rooms/:roomId/read` | ✓ | **member** |
 | 53 | GET | `/api/presence` | ✓ | shared-room peers, block-filtered both ways (§6.15) |
 | 54 | PUT | `/api/presence` | ✓ | self; `online`/`away` only |
+| 55 | POST | `/api/rooms/:roomId/invites` | ✓ | **admin** (PocketSkynet extension, §6.7a) |
+| 56 | GET | `/api/rooms/:roomId/invites` | ✓ | **admin** (§6.7a) |
+| 57 | DELETE | `/api/rooms/:roomId/invites/:inviteId` | ✓ | **admin** (§6.7a) |
+| 58 | GET | `/api/invites/:token` | — | capability token (§6.7a) |
+| 59 | POST | `/api/invites/:token/redeem` | ✓ | any user with a valid token (§6.7a) |
 | — | WS | `/ws` | ✓ (subprotocol or `?token=`) | subscribed to own rooms |
 
 ### 14.1 Route-precedence requirements
