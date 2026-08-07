@@ -36,6 +36,9 @@ pub mod messages;
 /// and the composer sends; everything else in these modules is `impl Client`.
 /// Public for the [`operators::OperatorFile`] type the ladder renders.
 pub mod operators;
+/// Public for the [`passwords::PasswordEntry`] type the Skynet Password page
+/// renders — sealed, and only openable through [`crate::secrets`].
+pub mod passwords;
 /// Public for the [`presence::PresenceEntry`] type the store folds.
 pub mod presence;
 mod rooms;

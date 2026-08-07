@@ -39,6 +39,14 @@ pub enum Route {
     /// `/operator` — the operator's file: clearance, standing orders, the
     /// trophy wall, and this server's ladder.
     Operator,
+    /// `/passwords` — Skynet Password: the encrypted key/value store
+    /// (docs/API.md §18). A full-screen page like `/bank`, and for the same
+    /// reason — a list, a form and a generator do not fit a dialog.
+    ///
+    /// Reachable without keys, like every other authenticated route: a locked
+    /// session sees its entries listed and sealed rather than a wall, which is
+    /// the same thing an encrypted room does.
+    Passwords,
     /// `/dashboard` — the Skynet Dashboard: the whole deployment in counts,
     /// then the disk in files. Admin-only in effect: the
     /// route parses for anybody (a URL is not an access control), but every
@@ -84,6 +92,7 @@ impl Route {
             ["publish"] => Route::Publish,
             ["bank"] => Route::Bank,
             ["operator"] => Route::Operator,
+            ["passwords"] => Route::Passwords,
             ["dashboard"] => Route::Dashboard,
             ["settings"] => Route::Settings,
             // A malformed room id is a 404, not a room screen that will 400 on
@@ -113,6 +122,7 @@ impl Route {
             Route::Publish => "/publish".into(),
             Route::Bank => "/bank".into(),
             Route::Operator => "/operator".into(),
+            Route::Passwords => "/passwords".into(),
             Route::Dashboard => "/dashboard".into(),
             Route::Settings => "/settings".into(),
             Route::Invite(token) => format!("/invite/{token}"),
@@ -152,6 +162,7 @@ impl Route {
             | Route::Publish
             | Route::Operator
             | Route::Dashboard
+            | Route::Passwords
             | Route::Bank => "settings",
             _ => "rooms",
         }
@@ -169,6 +180,7 @@ impl Route {
             Route::Publish => "publish",
             Route::Bank => "bank",
             Route::Operator => "operator",
+            Route::Passwords => "passwords",
             Route::Dashboard => "dashboard",
             Route::Settings => "settings",
             _ => "",
@@ -189,6 +201,7 @@ impl Route {
             Route::Publish => "Publish · PocketSkynet",
             Route::Bank => "Bank · PocketSkynet",
             Route::Operator => "Operator · PocketSkynet",
+            Route::Passwords => "Skynet Password · PocketSkynet",
             Route::Dashboard => "Skynet Dashboard · PocketSkynet",
             Route::Settings => "Settings · PocketSkynet",
             Route::NotFound => "Page not found · PocketSkynet",
@@ -227,6 +240,8 @@ mod tests {
         assert_eq!(Route::parse("/knowledge"), Route::Knowledge);
         assert_eq!(Route::parse("/publish"), Route::Publish);
         assert_eq!(Route::parse("/bank"), Route::Bank);
+        assert_eq!(Route::parse("/operator"), Route::Operator);
+        assert_eq!(Route::parse("/passwords"), Route::Passwords);
         assert_eq!(Route::parse("/dashboard"), Route::Dashboard);
         assert_eq!(Route::parse("/settings"), Route::Settings);
     }
@@ -280,6 +295,8 @@ mod tests {
             Route::Knowledge,
             Route::Publish,
             Route::Bank,
+            Route::Operator,
+            Route::Passwords,
             Route::Dashboard,
             Route::Settings,
         ];
@@ -324,6 +341,9 @@ mod tests {
         assert!(Route::Knowledge.needs_auth());
         assert!(Route::Publish.needs_auth());
         assert!(Route::Bank.needs_auth());
+        assert!(Route::Operator.needs_auth());
+        // A secret store nobody is signed into is not a screen.
+        assert!(Route::Passwords.needs_auth());
         assert!(Route::Dashboard.needs_auth());
         assert!(Route::Settings.needs_auth());
     }
@@ -348,6 +368,40 @@ mod tests {
         assert_eq!(Route::Knowledge.pane_view(), "settings");
         assert_eq!(Route::Publish.pane_view(), "settings");
         assert_eq!(Route::Bank.pane_view(), "settings");
+        assert_eq!(Route::Passwords.pane_view(), "settings");
         assert_eq!(Route::Dashboard.pane_view(), "settings");
+    }
+
+    #[test]
+    fn every_full_screen_route_has_its_own_nav_key() {
+        // `nav_key` decides which button is `aria-current="page"`. Two routes
+        // sharing a key would light up the wrong destination — and a route
+        // that forgot to add one lights up nothing, which reads as a broken
+        // nav rather than a missing string.
+        let keyed = [
+            Route::Rooms,
+            Route::Invitations,
+            Route::Knowledge,
+            Route::Publish,
+            Route::Bank,
+            Route::Operator,
+            Route::Passwords,
+            Route::Dashboard,
+            Route::Settings,
+        ];
+        let mut keys: Vec<&str> = keyed.iter().map(Route::nav_key).collect();
+        assert!(keys.iter().all(|k| !k.is_empty()), "a route has no nav key");
+        let before = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(before, keys.len(), "two routes share a nav key");
+    }
+
+    #[test]
+    fn every_route_has_a_document_title() {
+        for r in [Route::Passwords, Route::Operator, Route::Bank] {
+            assert!(r.title().ends_with("PocketSkynet"), "{r:?}");
+            assert!(r.title().len() > "PocketSkynet".len(), "{r:?}");
+        }
     }
 }

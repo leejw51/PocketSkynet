@@ -27,6 +27,7 @@ use pocketskynet_core::keys::{
     derive_encryption_keys_from_signature, derive_encryption_keys_v2,
     derive_legacy_encryption_keys, sign_key_binding, verify_key_binding, EncryptionKeypair,
 };
+use pocketskynet_core::secrets::VaultKey;
 use pocketskynet_core::{hash, CryptoError, RoomId, Wallet, WalletAddress};
 
 use crate::api::messages::MessageBody;
@@ -139,6 +140,24 @@ impl SessionKeys {
     /// The wallet's signature over the binding message. Also safe to publish.
     pub fn binding_sig(&self) -> &str {
         &self.binding_sig
+    }
+
+    /// The Skynet Password vault key for this session (`crate::secrets`).
+    ///
+    /// Derived here rather than exposing the encryption private key, so the
+    /// scalar itself never leaves this type — the same reason
+    /// [`Self::sign_transaction`] takes a transaction instead of handing out
+    /// the wallet key. What comes back is a one-way subkey: it opens this
+    /// account's password entries and is useless for anything else, so a
+    /// component holding one cannot accidentally be holding an identity.
+    ///
+    /// Available to an external-wallet session too. The vault key descends from
+    /// the *derivation signature*, not from a locally held wallet key, so a
+    /// MetaMask or Privy session reaches exactly the same entries — which is
+    /// the whole point of deriving rather than generating.
+    pub fn vault_key(&self) -> VaultKey {
+        let scalar: [u8; 32] = (*self.encryption.secret_key().to_bytes()).into();
+        VaultKey::derive(&scalar)
     }
 
     /// Sign an EVM transaction with the wallet key.

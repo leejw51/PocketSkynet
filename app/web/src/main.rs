@@ -40,6 +40,7 @@ mod progression;
 mod realtime;
 mod route;
 mod rpc;
+mod secrets;
 mod session;
 mod state;
 mod store;
