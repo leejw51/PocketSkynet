@@ -51,26 +51,17 @@ pub enum StaticRoom {
 }
 
 impl StaticRoom {
-    /// Pinned order, and the order the room list renders them in. Note first
-    /// because it is the one people open every day; lobby last because it is
-    /// the one they open when something is wrong.
-    pub const ALL: [StaticRoom; 3] = [StaticRoom::Note, StaticRoom::Jarvis, StaticRoom::Lobby];
-
     /// Which built-in room this wire `kind` names, if any.
+    ///
+    /// The only constructor, deliberately: every one of these values arrives
+    /// from the server as a string, so a second way to build one would be a
+    /// way to build one the server never sent.
     pub fn from_kind(kind: &str) -> Option<Self> {
         match kind {
             RoomKind::NOTE => Some(StaticRoom::Note),
             RoomKind::JARVIS => Some(StaticRoom::Jarvis),
             RoomKind::LOBBY => Some(StaticRoom::Lobby),
             _ => None,
-        }
-    }
-
-    pub fn kind(self) -> &'static str {
-        match self {
-            StaticRoom::Note => RoomKind::NOTE,
-            StaticRoom::Jarvis => RoomKind::JARVIS,
-            StaticRoom::Lobby => RoomKind::LOBBY,
         }
     }
 
@@ -238,25 +229,36 @@ mod tests {
         assert_eq!(StaticRoom::from_kind("holodeck"), None);
     }
 
+    /// The three kinds paired with what they must resolve to. Written out
+    /// rather than iterated from the enum so the wire strings themselves are
+    /// pinned: `kind` is a protocol value, and a rename that stayed internally
+    /// consistent would still stop matching what the server sends.
+    const VOCABULARY: [(&str, StaticRoom); 3] = [
+        (RoomKind::NOTE, StaticRoom::Note),
+        (RoomKind::JARVIS, StaticRoom::Jarvis),
+        (RoomKind::LOBBY, StaticRoom::Lobby),
+    ];
+
     #[test]
     fn the_static_vocabulary_round_trips_and_is_distinct() {
-        for room in StaticRoom::ALL {
-            assert_eq!(StaticRoom::from_kind(room.kind()), Some(room));
+        for (kind, room) in VOCABULARY {
+            assert_eq!(StaticRoom::from_kind(kind), Some(room), "{kind}");
         }
-        // Three kinds, three titles, three pictures — no accidental sharing,
-        // which is exactly the copy-paste error this table invites.
-        let kinds: Vec<&str> = StaticRoom::ALL.iter().map(|r| r.kind()).collect();
-        let art: Vec<&str> = StaticRoom::ALL.iter().map(|r| r.art()).collect();
-        for set in [kinds, art] {
-            let mut sorted = set.clone();
-            sorted.sort_unstable();
-            sorted.dedup();
-            assert_eq!(sorted.len(), set.len(), "{set:?} repeats a value");
+        // Three titles, three blurbs, three pictures — no accidental sharing,
+        // which is exactly the copy-paste error a table of `match` arms
+        // invites and the one a compiler cannot see.
+        let art: Vec<&str> = VOCABULARY.iter().map(|(_, r)| r.art()).collect();
+        let mut sorted = art.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), art.len(), "{art:?} repeats a picture");
+
+        for pick in [StaticRoom::title, StaticRoom::blurb] {
+            let keys: Vec<Key> = VOCABULARY.iter().map(|(_, r)| pick(*r)).collect();
+            assert_ne!(keys[0], keys[1]);
+            assert_ne!(keys[1], keys[2]);
+            assert_ne!(keys[0], keys[2]);
         }
-        let titles: Vec<Key> = StaticRoom::ALL.iter().map(|r| r.title()).collect();
-        assert_ne!(titles[0], titles[1]);
-        assert_ne!(titles[1], titles[2]);
-        assert_ne!(titles[0], titles[2]);
     }
 
     #[test]
