@@ -17,12 +17,12 @@ use elliptic_curve::sec1::ToEncodedPoint;
 use elliptic_curve::PrimeField;
 use hmac::{Hmac, Mac};
 use k256::{FieldBytes, NonZeroScalar, PublicKey, Scalar, SecretKey};
-use rand::RngCore;
 use sha2::Sha512;
 
 use crate::crypto::CryptoError;
 use crate::eip191;
 use crate::ids::WalletAddress;
+use crate::random;
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -67,14 +67,20 @@ impl MnemonicLength {
 /// Generate a fresh BIP-39 English mnemonic from the OS/browser CSPRNG.
 ///
 /// The entropy is drawn here rather than inside `bip39` so the crate's optional
-/// `rand` feature (and its extra dependency graph) is not needed, and so the
-/// single source of randomness in this crate is `OsRng` — one place to audit.
+/// `rand` feature (and its extra dependency graph) is not needed, and so that
+/// the single source of randomness in this crate is [`crate::random`] — one
+/// place to audit. That module is the whole of the claim: this crate does not
+/// depend on `rand` at all, so there is no second generator for a reader to
+/// wonder about, and a failure to draw comes back as an error rather than as
+/// twelve words anybody could guess.
+///
+/// The buffer is 32 bytes regardless of length and only the first `ENT/8` are
+/// filled and used, which keeps the two cases one code path. `Mnemonic::from_entropy`
+/// reads the slice it is given, so the unused tail never reaches the phrase.
 pub fn generate_mnemonic(length: MnemonicLength) -> Result<String, CryptoError> {
     let mut entropy = [0u8; 32];
     let entropy = &mut entropy[..length.entropy_bytes()];
-    rand::rngs::OsRng
-        .try_fill_bytes(entropy)
-        .map_err(|_| CryptoError::Randomness)?;
+    random::fill(entropy)?;
     let mnemonic = Mnemonic::from_entropy(entropy).map_err(|_| CryptoError::InvalidMnemonic)?;
     Ok(mnemonic.to_string())
 }
@@ -238,12 +244,17 @@ impl Wallet {
     ///
     /// Prefer [`generate_mnemonic`] for anything a human has to back up: a raw
     /// key that only exists in one place is a key that gets lost.
+    ///
+    /// [`random::secret_key`] rejection-samples, so unlike a draw fed straight
+    /// into [`Self::from_private_key_bytes`] this cannot report
+    /// [`CryptoError::InvalidPrivateKey`] for a scalar that merely landed
+    /// outside `[1, n)`. The only error it can return is
+    /// [`CryptoError::Randomness`], which means exactly one thing: the OS would
+    /// not produce entropy.
     pub fn random() -> Result<Self, CryptoError> {
-        let mut bytes = [0u8; 32];
-        rand::rngs::OsRng
-            .try_fill_bytes(&mut bytes)
-            .map_err(|_| CryptoError::Randomness)?;
-        Self::from_private_key_bytes(&bytes)
+        let secret = random::secret_key()?;
+        let address = eip191::address_from_public_key(&secret.public_key());
+        Ok(Self { secret, address })
     }
 
     /// The wallet's lowercase Ethereum address — the protocol's primary key.
@@ -441,6 +452,69 @@ mod tests {
         assert_ne!(
             Wallet::random().unwrap().address(),
             Wallet::random().unwrap().address()
+        );
+    }
+
+    /// A generated phrase has to be a phrase the rest of the world accepts, and
+    /// it has to lead back to one address. Length and checksum are pinned
+    /// above; what this adds is the part a user actually depends on — write the
+    /// twelve words down, type them in again, and land on the same account.
+    ///
+    /// The re-derivation goes through the *public* entry point rather than
+    /// reusing the entropy, so a generator that produced a phrase this crate
+    /// alone could parse would fail here.
+    #[test]
+    fn a_generated_mnemonic_round_trips_to_its_address() {
+        for _ in 0..4 {
+            let phrase = generate_mnemonic(MnemonicLength::Words12).unwrap();
+            let wallet = Wallet::from_mnemonic(&phrase, 0).unwrap();
+
+            // Same phrase, same index, same address — twice, from scratch.
+            assert_eq!(
+                Wallet::from_mnemonic(&phrase, 0).unwrap().address(),
+                wallet.address()
+            );
+            // And the BIP-39 → BIP-32 path agrees with the seed-level one, so
+            // the phrase is not merely *parseable* but carries the entropy the
+            // derivation actually used.
+            let seed = seed_from_mnemonic(&parse_mnemonic(&phrase).unwrap());
+            assert_eq!(
+                Wallet::from_seed(&seed, 0).unwrap().address(),
+                wallet.address()
+            );
+
+            // Index 1 is a different account off the same phrase. A generator
+            // returning a constant would pass every assertion above; this is
+            // the one that also needs the address to be a function of the
+            // words rather than of nothing.
+            assert_ne!(
+                Wallet::from_mnemonic(&phrase, 1).unwrap().address(),
+                wallet.address()
+            );
+        }
+    }
+
+    /// The failure that must never be silent. With the OS refusing entropy,
+    /// both generators return an error — not a fixed phrase, not the
+    /// all-`abandon` wallet that zero entropy would produce, not a wallet at
+    /// all. `ABANDON` is exactly what a zero-filled buffer becomes, so naming
+    /// it here is the check that a future "sensible default" would trip.
+    #[test]
+    fn generation_refuses_rather_than_falling_back_when_entropy_fails() {
+        let _guard = crate::random::FailureGuard::new();
+
+        for length in [MnemonicLength::Words12, MnemonicLength::Words24] {
+            assert_eq!(
+                generate_mnemonic(length).err(),
+                Some(CryptoError::Randomness)
+            );
+        }
+        assert_eq!(Wallet::random().err(), Some(CryptoError::Randomness));
+
+        // Not the phrase 128 zero bits would have produced.
+        assert_ne!(
+            generate_mnemonic(MnemonicLength::Words12).ok(),
+            Some(ABANDON.to_owned())
         );
     }
 

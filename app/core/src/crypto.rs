@@ -24,10 +24,11 @@ use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvI
 use elliptic_curve::sec1::ToEncodedPoint;
 use hmac::{Hmac, Mac};
 use k256::{ecdh::diffie_hellman, PublicKey, SecretKey};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+
+use crate::random;
 
 type Aes256CbcEnc = cbc::Encryptor<Aes256>;
 type Aes256CbcDec = cbc::Decryptor<Aes256>;
@@ -202,21 +203,17 @@ fn aes_cbc_decrypt(
         .map_err(|_| CryptoError::DecryptionFailed)
 }
 
-/// Fill a buffer from the OS/browser CSPRNG.
-fn random_bytes<const N: usize>() -> Result<[u8; N], CryptoError> {
-    let mut out = [0u8; N];
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut out)
-        .map_err(|_| CryptoError::Randomness)?;
-    Ok(out)
-}
-
 /// A fresh 32-byte room symmetric key.
 ///
 /// No structure, no derivation, no version marker inside the key — the epoch
 /// lives beside it in `keyVersion`, never in the key material.
+///
+/// Straight from [`crate::random`], with no post-processing whatsoever. Hashing
+/// or stretching the draw would look like diligence and would add nothing: the
+/// output of the OS CSPRNG is already the strongest thing available, and every
+/// extra step is one more place for a mistake to hide.
 pub fn generate_room_key() -> Result<[u8; 32], CryptoError> {
-    random_bytes::<32>()
+    random::bytes::<32>()
 }
 
 fn decode_iv(iv_hex: &str) -> Option<[u8; 16]> {
@@ -262,7 +259,7 @@ pub fn encrypt_message_v2(
     room_key: &[u8; 32],
     room_id: &str,
 ) -> Result<EncryptedMessage, CryptoError> {
-    encrypt_message_v2_with_iv(plaintext, room_key, room_id, &random_bytes::<16>()?)
+    encrypt_message_v2_with_iv(plaintext, room_key, room_id, &random::bytes::<16>()?)
 }
 
 /// Encrypt with a caller-supplied IV.
@@ -407,8 +404,8 @@ pub fn wrap_room_key_v2(
     recipient_public_key: &PublicKey,
     room_id: &str,
 ) -> Result<WrappedRoomKey, CryptoError> {
-    let ephemeral = SecretKey::random(&mut rand::rngs::OsRng);
-    let iv = random_bytes::<16>()?;
+    let ephemeral = random::secret_key()?;
+    let iv = random::bytes::<16>()?;
     Ok(wrap_room_key_v2_with(
         room_key,
         recipient_public_key,
@@ -877,10 +874,50 @@ mod tests {
 
     #[test]
     fn wrap_round_trips_with_fresh_randomness() {
-        let recipient = SecretKey::random(&mut rand::rngs::OsRng);
+        let recipient = random::secret_key().unwrap();
         let key = generate_room_key().unwrap();
         let wrap = wrap_room_key_v2(&key, &recipient.public_key(), ROOM).unwrap();
         assert_eq!(unwrap_room_key_v2(&wrap, &recipient, ROOM).unwrap(), key);
+    }
+
+    /// Room keys are the one value in this file that has no second chance: a
+    /// predictable one is undetectable from the wire and stays wrong for every
+    /// message ever sealed under it. Sixteen draws is a wiring check, not a
+    /// statistical claim — the assertions that carry weight are "never zero"
+    /// and "never repeated", both of which a degraded generator fails
+    /// immediately and a good one cannot fail by chance at 256 bits.
+    #[test]
+    fn room_keys_are_fresh_every_time_and_never_zero() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..16 {
+            let key = generate_room_key().unwrap();
+            assert_ne!(key, [0u8; 32], "a zero room key is not a room key");
+            assert!(seen.insert(key), "generate_room_key repeated itself");
+        }
+    }
+
+    /// Every value drawn from the CSPRNG in this module — the room key, the
+    /// per-message IV, the ephemeral ECDH secret and the wrap IV — refuses
+    /// rather than degrades. Encryption with a fixed IV leaks whether two
+    /// messages share a prefix and a fixed ephemeral key collapses forward
+    /// secrecy across wraps, so "return something and log it" is not an option
+    /// for any of them.
+    #[test]
+    fn nothing_here_encrypts_with_degraded_randomness() {
+        let recipient = random::secret_key().unwrap();
+        let recipient_public = recipient.public_key();
+
+        let _guard = crate::random::FailureGuard::new();
+
+        assert_eq!(generate_room_key().err(), Some(CryptoError::Randomness));
+        assert_eq!(
+            encrypt_message_v2("hello", &K1, ROOM).err(),
+            Some(CryptoError::Randomness)
+        );
+        assert_eq!(
+            wrap_room_key_v2(&K1, &recipient_public, ROOM).err(),
+            Some(CryptoError::Randomness)
+        );
     }
 
     #[test]
@@ -933,8 +970,8 @@ mod tests {
 
     #[test]
     fn wrap_rejects_the_wrong_recipient_key() {
-        let recipient = SecretKey::random(&mut rand::rngs::OsRng);
-        let impostor = SecretKey::random(&mut rand::rngs::OsRng);
+        let recipient = random::secret_key().unwrap();
+        let impostor = random::secret_key().unwrap();
         let wrap = wrap_room_key_v2(&K1, &recipient.public_key(), ROOM).unwrap();
         assert_eq!(
             unwrap_room_key_v2(&wrap, &impostor, ROOM),

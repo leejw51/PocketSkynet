@@ -20,6 +20,7 @@ pub mod hash;
 pub mod ids;
 pub mod keys;
 pub mod progression;
+pub mod random;
 pub mod username;
 pub mod wallet;
 
