@@ -13,8 +13,8 @@ use yew::prelude::*;
 use crate::actions;
 use crate::api::Client;
 use crate::components::{
-    bank, boot, burst, chat, dialogs, invitations, knowledge, lightbox, login, members, operator,
-    publish, room_list, settings, shell, shout, spotlight, toast, transfers,
+    bank, boot, burst, chat, dialogs, gallery, invitations, knowledge, lightbox, login, members,
+    operator, publish, room_list, settings, shell, shout, spotlight, toast, transfers,
 };
 use crate::format;
 use crate::i18n::{t, Key};
@@ -716,6 +716,9 @@ fn root() -> Html {
         },
         Route::Members(id) => html! {
             <members::Members room_id={id.clone()} on_navigate={on_navigate.clone()} />
+        },
+        Route::Gallery(id) => html! {
+            <gallery::Gallery room_id={id.clone()} on_navigate={on_navigate.clone()} />
         },
         Route::Invitations => html! {
             <invitations::Invitations on_navigate={on_navigate.clone()} />

@@ -125,11 +125,21 @@ pub async fn destroy_room(
         })
         .await?;
 
+    // Each original takes its thumbnail sidecar with it. The sidecar needs no
+    // reference check of its own: it exists exactly for these bytes, so the
+    // decision that the bytes may go *is* the decision that it may — and a
+    // recognisable 512px copy surviving a purge would keep the promise to the
+    // database while breaking it to anyone who looks. Not counted in the
+    // report's file totals (it is a derived artifact, not content someone
+    // shared), but a failure to remove one is still a failure.
     let files_dir = state.cfg.files_dir();
     for name in orphan_files {
         match unlink(&files_dir, &name).await {
             true => report.attachments += 1,
             false => report.failed += 1,
+        }
+        if !crate::thumbs::unlink_sidecar(&files_dir, &name).await {
+            report.failed += 1;
         }
     }
 
@@ -138,6 +148,9 @@ pub async fn destroy_room(
         match unlink(&images_dir, &name).await {
             true => report.media += 1,
             false => report.failed += 1,
+        }
+        if !crate::thumbs::unlink_sidecar(&images_dir, &name).await {
+            report.failed += 1;
         }
     }
 
@@ -483,6 +496,40 @@ mod tests {
         assert_eq!(report.attachments, 0);
         assert_eq!(report.failed, 1, "refused, and counted as such");
         assert!(outside.exists(), "the purge stays inside its directories");
+    }
+
+    #[tokio::test]
+    async fn a_thumbnail_sidecar_goes_with_its_original_and_stays_with_a_survivor() {
+        let state = state("purge-thumbs");
+        let alice = wallet("alice").as_str().to_owned();
+        room(&state, ROOM, &alice).await;
+        room(&state, OTHER, &alice).await;
+
+        // One attachment only this room names, one that another room shares —
+        // each with a sidecar, the way an image upload leaves them.
+        let doomed = format!("{}.png", digest(0x91));
+        let shared = format!("{}.png", digest(0x92));
+        attach(&state, ROOM, "f1", &doomed).await;
+        attach(&state, ROOM, "f2", &shared).await;
+        attach(&state, OTHER, "f3", &shared).await;
+        let dir = state.cfg.files_dir();
+        for name in [&doomed, &shared] {
+            let sidecar = crate::thumbs::sidecar_name(name).unwrap();
+            std::fs::write(dir.join(sidecar), b"jpeg").unwrap();
+        }
+
+        destroy_room(&state, ROOM, None).await.unwrap();
+
+        let gone = crate::thumbs::sidecar_name(&doomed).unwrap();
+        let kept = crate::thumbs::sidecar_name(&shared).unwrap();
+        assert!(
+            !exists(&dir, &gone),
+            "a recognisable copy must not survive the purge"
+        );
+        assert!(
+            exists(&dir, &kept),
+            "the other room's picture keeps its thumbnail"
+        );
     }
 
     #[tokio::test]

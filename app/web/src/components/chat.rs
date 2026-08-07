@@ -1435,6 +1435,22 @@ fn room_menu(
                     })
                 }}
             >{ t(lang, Key::view_members) }</button>
+            // The gallery is a place, not an action, so it navigates exactly
+            // as the roster does rather than opening a modal.
+            <button
+                type="button"
+                role="menuitem"
+                class="topcoat-button--quiet"
+                onclick={{
+                    let on_navigate = on_navigate.clone();
+                    let id = id.clone();
+                    let open = open.clone();
+                    Callback::from(move |_: MouseEvent| {
+                        on_navigate.emit(Route::Gallery(id.clone()));
+                        open.set(false);
+                    })
+                }}
+            >{ t(lang, Key::gallery_open) }</button>
 
             // Leaving is a channel verb too — a departed member would leave a
             // DM still keyed to their name, which they could then never

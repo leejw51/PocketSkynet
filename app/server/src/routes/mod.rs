@@ -12,6 +12,7 @@ pub mod admin;
 pub mod auth;
 pub mod emoticons;
 pub mod files;
+pub mod gallery;
 pub mod images;
 pub mod invitations;
 pub mod keys;
@@ -173,6 +174,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(mentions::router())
         .merge(presence::router())
         .merge(files::router())
+        .merge(gallery::router())
         .merge(images::router())
         .merge(search::router())
         .merge(operators::router())

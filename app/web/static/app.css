@@ -10378,3 +10378,126 @@ span.fn-conn { cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .fn-attach__play-badge { transition: none; }
 }
+
+/* ==========================================================================
+   §21 PHOTO GALLERY — /rooms/:id/gallery (components/gallery.rs)
+
+   The phone-photo-roll shape: square tiles, hairline gaps, newest first.
+   Tiles are `object-fit: cover` because a grid is a contact sheet, not a
+   viewer — the lightbox (§23) is where a picture keeps its own shape.
+   ========================================================================== */
+
+.fn-gallery-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--fn-s2);
+}
+
+.fn-gallery {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  /* Hairline gaps, not card gutters: the pictures are the surface. */
+  gap: 3px;
+}
+
+.fn-gallery__cell { min-inline-size: 0; }
+
+.fn-gallery__tile {
+  position: relative;
+  display: block;
+  inline-size: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: var(--fn-r1);
+  overflow: hidden;
+  cursor: pointer;
+  /* The plate a transparent PNG or a slow load sits on — near-black, so a
+     tile arriving late is a dark square, not a white flash. */
+  background: color-mix(in srgb, var(--fn-ink, #000) 92%, #fff);
+}
+
+.fn-gallery__shot {
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* A video with no poster frame: the dark plate alone, under the badge. */
+.fn-gallery__plate {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  background:
+    radial-gradient(circle at 50% 45%,
+      color-mix(in srgb, #fff 8%, transparent), transparent 70%);
+}
+
+/* Same badge grammar as the in-bubble player (§ above), scaled to a tile. */
+.fn-gallery__badge {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  inline-size: 38px;
+  block-size: 38px;
+  border-radius: 50%;
+  color: #fff;
+  background: color-mix(in srgb, #000 55%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+  transition: transform var(--fn-dur) var(--fn-ease), background var(--fn-dur) var(--fn-ease);
+}
+.fn-gallery__tile:hover .fn-gallery__badge {
+  transform: translate(-50%, -50%) scale(var(--fn-tap-hover));
+  background: color-mix(in srgb, var(--fn-primary) 70%, #000);
+}
+.fn-gallery__tile:focus-visible {
+  outline: 2px solid var(--fn-primary);
+  outline-offset: 2px;
+}
+
+.fn-gallery__more {
+  display: flex;
+  justify-content: center;
+  padding: var(--fn-s3);
+}
+
+/* The video overlay: the lightbox's scrim with a player where the picture
+   would be. Clicks on the video are its controls; the scrim is the dismiss. */
+.fn-gallery__player {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, #000 82%, transparent);
+  backdrop-filter: blur(6px);
+}
+.fn-gallery__player video {
+  max-inline-size: min(96vw, 1280px);
+  max-block-size: 88dvh;
+  border-radius: var(--fn-r2);
+  background: #000;
+}
+.fn-gallery__player-close {
+  position: fixed;
+  inset-block-start: max(var(--fn-s2), env(safe-area-inset-top));
+  inset-inline-end: max(var(--fn-s2), env(safe-area-inset-right));
+  color: #fff;
+}
+
+@media (max-width: 600px) {
+  /* Three across on a phone, like every photo roll. */
+  .fn-gallery { grid-template-columns: repeat(3, 1fr); gap: 2px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fn-gallery__badge { transition: none; }
+}

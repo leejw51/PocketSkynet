@@ -398,6 +398,14 @@ strings! {
     (attachment_failed, "This attachment could not be loaded.", "이 첨부 파일을 불러올 수 없습니다.", "この添付を読み込めませんでした。", "無法載入此附件。", "Tuto přílohu nelze načíst.", "No se pudo cargar este adjunto.", "无法加载此附件。", "Dieser Anhang konnte nicht geladen werden."),
     (file_filter_all, "All", "전체", "すべて", "全部", "Vše", "Todos", "全部", "Alle"),
 
+    // --- Photo gallery ------------------------------------------------------
+    (gallery_title, "Photos", "사진", "写真", "相片", "Fotky", "Fotos", "照片", "Fotos"),
+    (gallery_open, "Photos & videos", "사진·동영상", "写真・動画", "相片同影片", "Fotky a videa", "Fotos y vídeos", "照片和视频", "Fotos & Videos"),
+    (gallery_empty, "Nothing shared yet", "아직 공유된 항목이 없습니다", "まだ共有された写真はありません", "仲未有人分享過相", "Zatím nic nesdíleno", "Aún no se ha compartido nada", "还没有共享内容", "Noch nichts geteilt"),
+    (gallery_empty_desc, "Pictures and videos shared in this room gather here.", "이 방에서 공유된 사진과 동영상이 여기에 모입니다.", "このルームで共有された写真と動画がここに集まります。", "呢個房分享嘅相同影片會集中喺度。", "Obrázky a videa sdílená v této místnosti se shromažďují zde.", "Las imágenes y vídeos compartidos en esta sala se reúnen aquí.", "此房间共享的图片和视频会汇集在这里。", "In diesem Raum geteilte Bilder und Videos sammeln sich hier."),
+    (gallery_load_more, "Load more", "더 보기", "さらに読み込む", "載入更多", "Načíst další", "Cargar más", "加载更多", "Mehr laden"),
+    (gallery_couldnt_load, "Couldn't load the gallery", "갤러리를 불러올 수 없습니다", "ギャラリーを読み込めませんでした", "載入唔到相簿", "Galerii nelze načíst", "No se pudo cargar la galería", "无法加载相册", "Galerie konnte nicht geladen werden"),
+
     // --- Members ------------------------------------------------------------
     (invite_people, "Invite people", "사람 초대", "メンバーを招待", "邀請其他人", "Pozvat lidi", "Invitar personas", "邀请成员", "Personen einladen"),
     (blocked, "Blocked", "차단됨", "ブロック中", "已封鎖", "Blokován", "Bloqueado", "已屏蔽", "Blockiert"),

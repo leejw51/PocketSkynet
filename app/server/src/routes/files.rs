@@ -124,6 +124,15 @@ pub fn router() -> Router<AppState> {
 pub fn media_router() -> Router<AppState> {
     Router::new()
         .route("/files/{id}/raw", get(download))
+        // GET on the media budget with `raw` because a gallery grid fetches
+        // one per tile; POST beside it because axum will not merge one path
+        // from two routers, and a posted frame is a rare, authenticated
+        // request the generous budget absorbs without noticing. The body
+        // limit is lifted to the image cap for the POST — harmless on GETs.
+        .route(
+            "/files/{id}/thumbnail",
+            get(serve_thumbnail).post(accept_thumbnail),
+        )
         // GET as well as POST, and GET is what clients should use. Minting a
         // capability reads state and changes none, so it was only ever a POST
         // out of habit — and a request with a body is exactly what fails from
@@ -134,6 +143,7 @@ pub fn media_router() -> Router<AppState> {
             "/files/{id}/download-token",
             get(download_token).post(download_token),
         )
+        .layer(DefaultBodyLimit::max(super::images::MAX_IMAGE_BYTES))
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +222,11 @@ async fn upload(
             .map_err(|e| ApiError::Internal(e.into()))?;
     }
 
+    // A picture gets its thumbnail while the bytes are still in hand; a video
+    // gets one when the client posts a captured frame. Best-effort: bytes that
+    // do not decode simply have no thumbnail — see `thumbs::accompany`.
+    crate::thumbs::accompany(&dir, &stored_name, body.to_vec()).await;
+
     let new = NewFile {
         id: format!("file_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4()),
         room_id: room.as_str().to_owned(),
@@ -274,6 +289,11 @@ pub(crate) async fn finalize_upload(
             .await
             .map_err(|e| ApiError::Internal(e.into()))?;
     }
+
+    // The chunked path never held the bytes, so the thumbnail reads them back
+    // — bounded, because "image" here is judged by extension and a 4 GB file
+    // wearing `.png` must not be slurped into memory on that say-so.
+    crate::thumbs::accompany_file(&dir, &stored_name, MAX_FILE_BYTES as u64).await;
 
     let new = NewFile {
         id: format!("file_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4()),
@@ -559,19 +579,29 @@ struct DownloadParams {
 /// Mirrors `web/src/api/types.rs::preview_mime`. The two are one contract in
 /// two places: a type the client will render but the server will not serve
 /// inline is a video that silently does not play.
+///
+/// A table rather than a `match` so `routes/gallery.rs` can borrow the key
+/// column: the gallery's definition of "media" must be exactly the set this
+/// route will serve inline, and a second list would drift.
+pub(crate) const INLINE_MEDIA: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("avif", "image/avif"),
+    ("bmp", "image/bmp"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("mp4", "video/mp4"),
+    ("m4v", "video/mp4"),
+    ("webm", "video/webm"),
+    ("ogv", "video/ogg"),
+];
+
 fn inline_media_mime(ext: &str) -> Option<&'static str> {
-    Some(match ext {
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "avif" => "image/avif",
-        "bmp" => "image/bmp",
-        "jpg" | "jpeg" => "image/jpeg",
-        "mp4" | "m4v" => "video/mp4",
-        "webm" => "video/webm",
-        "ogv" => "video/ogg",
-        _ => return None,
-    })
+    INLINE_MEDIA
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, mime)| *mime)
 }
 
 /// Work out who is asking, from a header or a capability.
@@ -600,7 +630,7 @@ fn resolve_downloader(
 /// Namespaced rather than the bare id so that a capability for an attachment
 /// can never be replayed against another resource kind that happens to use the
 /// same identifier space.
-fn download_scope(id: &str) -> String {
+pub(crate) fn download_scope(id: &str) -> String {
     format!("file:{id}")
 }
 
@@ -732,13 +762,128 @@ async fn download_token(
         .ok_or_else(|| ApiError::not_found("File not found"))?;
     let (digest, _) = validated_path(&state, &stored)?;
 
+    // The capability's scope is the *file*, not a route, so the same token
+    // opens the thumbnail — which is how a chat bubble renders one without a
+    // second mint. Announced only when it exists, so a client never renders
+    // an `<img>` it knows will 404.
+    let thumb_url = crate::thumbs::exists(&state.cfg.files_dir(), &stored).then(|| {
+        format!(
+            "/api/files/{}/thumbnail?dl={}",
+            url_escape(&id),
+            url_escape(&token)
+        )
+    });
+
     Ok(Json(serde_json::json!({
         "url": format!("/api/files/{}/raw?dl={}", url_escape(&id), url_escape(&token)),
         "expiresIn": crate::auth::DOWNLOAD_TTL_SECONDS,
         "sha256": digest,
         "sizeBytes": file.size_bytes,
         "filename": file.filename,
+        "thumbUrl": thumb_url,
     })))
+}
+
+/// `GET /api/files/{id}/thumbnail` — the thumbnail of an attachment.
+///
+/// Authenticated exactly as [`download`] is: bearer header or the same
+/// `?dl=` capability, membership re-checked either way. A thumbnail is a
+/// recognisable copy of the picture, so it is exactly as private as the
+/// picture.
+async fn serve_thumbnail(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<DownloadParams>,
+) -> ApiResult<Response> {
+    let caller = resolve_downloader(&state, &headers, &id, params.dl.as_deref())?;
+    visible_file(&state, &caller, &id).await?;
+
+    let owned = id.clone();
+    let stored = state
+        .db
+        .call(move |conn| files::stored_name(conn, &owned))
+        .await?
+        .ok_or_else(|| ApiError::not_found("File not found"))?;
+    // Same shape check the download makes; the digest is not needed here.
+    validated_path(&state, &stored)?;
+
+    let path = crate::thumbs::sidecar_path(&state.cfg.files_dir(), &stored)
+        .ok_or_else(|| ApiError::not_found("File not found"))?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|_| ApiError::not_found("File not found"))?;
+
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let headers = response.headers_mut();
+    // Always JPEG: `thumbs::render` writes nothing else.
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
+    // Private for the same reason `raw` is; a day because a video's sidecar
+    // appears after the original, and first-writer-wins means that is the
+    // only transition a cache could ever miss.
+    headers.insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=86400"),
+    );
+    headers.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
+}
+
+/// `POST /api/files/{id}/thumbnail` — attach a client-captured frame to a
+/// **video** attachment.
+///
+/// The mirror of `images::accept_thumbnail`, with the same three rules —
+/// videos only, rendered never stored verbatim, first writer wins — plus one
+/// this store can have because attachments have owners: **only the uploader**
+/// may post the frame. They are the one who had the file to capture from, and
+/// it keeps another member from racing a misleading poster onto somebody
+/// else's video.
+async fn accept_thumbnail(
+    State(state): State<AppState>,
+    AuthUser(caller): AuthUser,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<Response> {
+    let file = visible_file(&state, &caller, &id).await?;
+    if file.uploader != caller.as_str() {
+        return Err(ApiError::forbidden(
+            "Only the uploader can attach a thumbnail",
+        ));
+    }
+
+    let owned = id.clone();
+    let stored = state
+        .db
+        .call(move |conn| files::stored_name(conn, &owned))
+        .await?
+        .ok_or_else(|| ApiError::not_found("File not found"))?;
+    let (_, path) = validated_path(&state, &stored)?;
+    let ext = stored.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    if !crate::thumbs::is_video(ext) {
+        return Err(ApiError::bad_request(
+            "Only a video takes a posted thumbnail; images get theirs at upload",
+        ));
+    }
+    if !path.exists() {
+        return Err(ApiError::not_found("File not found"));
+    }
+    if body.is_empty() {
+        return Err(ApiError::bad_request("A thumbnail must be a small image"));
+    }
+    let dir = state.cfg.files_dir();
+    if crate::thumbs::exists(&dir, &stored) {
+        return Ok(super::message("Thumbnail already stored"));
+    }
+    let Some(jpeg) = crate::thumbs::render_blocking(body.to_vec()).await else {
+        return Err(ApiError::bad_request("Not a decodable image"));
+    };
+    crate::thumbs::store(&dir, &stored, &jpeg)
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    Ok(super::message("Thumbnail stored"))
 }
 
 /// Percent-encode a value going into a URL this server builds.
@@ -746,7 +891,7 @@ async fn download_token(
 /// The id and the token are both generated here and both already URL-safe, so
 /// this changes nothing today — it is here so that stops being an assumption
 /// the next time one of those formats moves.
-fn url_escape(s: &str) -> String {
+pub(crate) fn url_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
@@ -835,6 +980,265 @@ async fn remove(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    use crate::db::rooms;
+    use crate::routes::build;
+    use crate::test_support::{register, send, send_raw, state, wallet};
+
+    fn png() -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(320, 240, image::Rgb([10, 120, 240]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    async fn get_status(router: &axum::Router, uri: &str, token: Option<&str>) -> StatusCode {
+        let mut req = Request::builder().uri(uri);
+        if let Some(token) = token {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        router
+            .clone()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn an_image_attachment_grows_a_thumbnail_and_the_token_announces_it() {
+        let state = state("files-thumb-image");
+        let alice = wallet("alice");
+        let carol = wallet("carol");
+        let alice_token = register(&state, &alice, "alice");
+        let carol_token = register(&state, &carol, "carol");
+        let router = build(state.clone());
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms",
+            Some(&alice_token),
+            Some(serde_json::json!({ "name": "Pics" })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let file = send_raw(
+            &router,
+            "POST",
+            &format!("/api/rooms/{room}/files?filename=photo.png"),
+            Some(&alice_token),
+            png(),
+            "application/octet-stream",
+        )
+        .await;
+        assert_eq!(file.status, StatusCode::CREATED);
+        let id = file.json()["id"].as_str().unwrap().to_owned();
+
+        // Bearer path.
+        assert_eq!(
+            get_status(
+                &router,
+                &format!("/api/files/{id}/thumbnail"),
+                Some(&alice_token)
+            )
+            .await,
+            StatusCode::OK
+        );
+        // The mint announces the thumbnail, and its capability opens it with
+        // no header at all — the way an <img> will use it.
+        let minted = send(
+            &router,
+            "GET",
+            &format!("/api/files/{id}/download-token"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+        let thumb_url = minted.json()["thumbUrl"]
+            .as_str()
+            .expect("announced")
+            .to_owned();
+        assert_eq!(get_status(&router, &thumb_url, None).await, StatusCode::OK);
+
+        // A non-member gets the same uniform 404 the file itself gives.
+        assert_eq!(
+            get_status(
+                &router,
+                &format!("/api/files/{id}/thumbnail"),
+                Some(&carol_token)
+            )
+            .await,
+            StatusCode::NOT_FOUND
+        );
+        // And no header at all is a 401, same as `raw`.
+        assert_eq!(
+            get_status(&router, &format!("/api/files/{id}/thumbnail"), None).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn a_video_attachment_takes_a_frame_from_its_uploader_only() {
+        let state = state("files-thumb-video");
+        let alice = wallet("alice");
+        let bob = wallet("bob");
+        let alice_token = register(&state, &alice, "alice");
+        let bob_token = register(&state, &bob, "bob");
+        let router = build(state.clone());
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms",
+            Some(&alice_token),
+            Some(serde_json::json!({ "name": "Clips" })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        state
+            .db
+            .call_blocking({
+                let room = room.clone();
+                let bob = bob.as_str().to_owned();
+                move |conn| rooms::add_member(conn, &room, &bob)
+            })
+            .unwrap();
+
+        let file = send_raw(
+            &router,
+            "POST",
+            &format!("/api/rooms/{room}/files?filename=clip.mp4"),
+            Some(&alice_token),
+            vec![0x21u8; 4096],
+            "application/octet-stream",
+        )
+        .await;
+        let id = file.json()["id"].as_str().unwrap().to_owned();
+
+        // No thumbnail yet, and the mint says so by omission.
+        let minted = send(
+            &router,
+            "GET",
+            &format!("/api/files/{id}/download-token"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+        assert!(minted.json()["thumbUrl"].is_null());
+
+        // Bob shares the room but did not upload; his frame is refused.
+        let refused = send_raw(
+            &router,
+            "POST",
+            &format!("/api/files/{id}/thumbnail"),
+            Some(&bob_token),
+            png(),
+            "image/jpeg",
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN);
+
+        // Junk from the right person is refused as content, not stored.
+        let junk = send_raw(
+            &router,
+            "POST",
+            &format!("/api/files/{id}/thumbnail"),
+            Some(&alice_token),
+            b"not pixels".to_vec(),
+            "image/jpeg",
+        )
+        .await;
+        assert_eq!(junk.status, StatusCode::BAD_REQUEST);
+
+        let accepted = send_raw(
+            &router,
+            "POST",
+            &format!("/api/files/{id}/thumbnail"),
+            Some(&alice_token),
+            png(),
+            "image/jpeg",
+        )
+        .await;
+        assert_eq!(accepted.status, StatusCode::OK);
+
+        // Now both members can see it, and the mint announces it.
+        assert_eq!(
+            get_status(
+                &router,
+                &format!("/api/files/{id}/thumbnail"),
+                Some(&bob_token)
+            )
+            .await,
+            StatusCode::OK
+        );
+        let minted = send(
+            &router,
+            "GET",
+            &format!("/api/files/{id}/download-token"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+        assert!(minted.json()["thumbUrl"].is_string());
+    }
+
+    #[tokio::test]
+    async fn a_non_video_attachment_takes_no_posted_frame() {
+        let state = state("files-thumb-nonvideo");
+        let alice = wallet("alice");
+        let alice_token = register(&state, &alice, "alice");
+        let router = build(state.clone());
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms",
+            Some(&alice_token),
+            Some(serde_json::json!({ "name": "Docs" })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        for filename in ["report.pdf", "photo.png"] {
+            let file = send_raw(
+                &router,
+                "POST",
+                &format!("/api/rooms/{room}/files?filename={filename}"),
+                Some(&alice_token),
+                png(),
+                "application/octet-stream",
+            )
+            .await;
+            let id = file.json()["id"].as_str().unwrap().to_owned();
+            let refused = send_raw(
+                &router,
+                "POST",
+                &format!("/api/files/{id}/thumbnail"),
+                Some(&alice_token),
+                png(),
+                "image/jpeg",
+            )
+            .await;
+            assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{filename}");
+        }
+    }
 
     #[test]
     fn an_extension_is_reduced_to_something_that_cannot_be_a_path() {

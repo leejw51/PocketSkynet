@@ -10,6 +10,7 @@ pub mod chat;
 pub mod common;
 pub mod composer;
 pub mod dialogs;
+pub mod gallery;
 pub mod icons;
 pub mod invitations;
 pub mod knowledge;

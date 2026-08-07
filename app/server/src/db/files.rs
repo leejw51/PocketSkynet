@@ -185,6 +185,60 @@ pub fn list_for_room(
     Ok(out)
 }
 
+/// One attachment as the gallery reads it: the wire metadata, plus two fields
+/// the *route* needs and the wire must not carry — the stored name (to judge
+/// image-or-video and find the thumbnail sidecar) and the raw timestamp (to
+/// merge-sort against hosted media without re-parsing ISO strings).
+pub struct GalleryFile {
+    pub meta: FileMeta,
+    pub stored_name: String,
+    pub created_ms: i64,
+}
+
+/// The room's image and video attachments, newest first, older than `before`.
+///
+/// `exts` is the caller's allow-list of previewable extensions — passed in
+/// rather than copied here, so the authority stays `routes/files.rs::
+/// inline_media_mime` and this query can never drift from what the server
+/// will actually render. Matched on `substr(stored_name, 66)`: the stem is
+/// always 64 hex characters and a dot, so position 66 is the extension by
+/// construction.
+pub fn media_for_room(
+    conn: &Connection,
+    room_id: &str,
+    before_ms: i64,
+    limit: i64,
+    exts: &[&str],
+) -> ApiResult<Vec<GalleryFile>> {
+    if exts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; exts.len()].join(", ");
+    let sql = format!(
+        "SELECT {COLUMNS} FROM files
+         WHERE room_id = ?1 AND created_at < ?2
+           AND substr(stored_name, 66) IN ({placeholders})
+         ORDER BY created_at DESC, rowid DESC
+         LIMIT ?{}",
+        exts.len() + 3
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params = rusqlite::params_from_iter(
+        [room_id.to_owned(), before_ms.to_string()]
+            .into_iter()
+            .chain(exts.iter().map(|e| (*e).to_owned()))
+            .chain([limit.to_string()]),
+    );
+    let rows = stmt.query_map(params, |row| {
+        Ok(GalleryFile {
+            meta: FileMeta::from_row(row)?,
+            stored_name: row.get("stored_name")?,
+            created_ms: row.get("created_at")?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Drop the metadata and the search entry. The bytes stay — see the module
 /// docs; another row may name them.
 pub fn delete(conn: &mut Connection, id: &str) -> ApiResult<bool> {
@@ -357,6 +411,54 @@ mod tests {
             orphan_candidates(&conn, &[name]).unwrap().is_empty(),
             "the surviving row still names these bytes"
         );
+    }
+
+    #[test]
+    fn the_gallery_query_takes_media_by_extension_and_pages_by_time() {
+        let mut conn = world();
+        let mut add = |id: &str, ext: &str, at: i64| {
+            create(
+                &mut conn,
+                NewFile {
+                    id: id.into(),
+                    room_id: "r1".into(),
+                    uploader: "alice".into(),
+                    filename: format!("{id}.{ext}"),
+                    stored_name: format!("{}.{ext}", id.repeat(64 / id.len())),
+                    mime: "application/octet-stream".into(),
+                    size_bytes: 1,
+                    caption: String::new(),
+                },
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE files SET created_at = ?1 WHERE id = ?2",
+                params![at, id],
+            )
+            .unwrap();
+        };
+        add("aa", "png", 100);
+        add("bb", "mp4", 200);
+        add("cc", "pdf", 300); // not media: never listed however new
+        add("dd", "jpg", 400);
+
+        let exts = ["png", "jpg", "mp4"];
+        let all = media_for_room(&conn, "r1", i64::MAX, 10, &exts).unwrap();
+        let ids: Vec<_> = all.iter().map(|f| f.meta.id.as_str()).collect();
+        assert_eq!(ids, vec!["dd", "bb", "aa"], "newest first, PDF excluded");
+        assert_eq!(all[0].created_ms, 400);
+        assert!(all[0].stored_name.ends_with(".jpg"));
+
+        // The cursor is exclusive, so paging from an item's own timestamp
+        // yields strictly older items.
+        let older = media_for_room(&conn, "r1", 200, 10, &exts).unwrap();
+        let ids: Vec<_> = older.iter().map(|f| f.meta.id.as_str()).collect();
+        assert_eq!(ids, vec!["aa"]);
+
+        // An empty allow-list is no media at all, not an SQL error.
+        assert!(media_for_room(&conn, "r1", i64::MAX, 10, &[])
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

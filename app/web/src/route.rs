@@ -24,6 +24,8 @@ pub enum Route {
     Room(RoomId),
     /// `/rooms/:id/members` — shell with the member roster.
     Members(RoomId),
+    /// `/rooms/:id/gallery` — the room's media, as a grid.
+    Gallery(RoomId),
     /// `/invitations` — the invitations inbox.
     Invitations,
     /// `/knowledge` — search everything, teach the server (docs/SEARCH.md).
@@ -68,6 +70,9 @@ impl Route {
             ["rooms", id, "members"] => RoomId::new(id)
                 .map(Route::Members)
                 .unwrap_or(Route::NotFound),
+            ["rooms", id, "gallery"] => RoomId::new(id)
+                .map(Route::Gallery)
+                .unwrap_or(Route::NotFound),
             _ => Route::NotFound,
         }
     }
@@ -79,6 +84,7 @@ impl Route {
             Route::Rooms => "/rooms".into(),
             Route::Room(id) => format!("/rooms/{id}"),
             Route::Members(id) => format!("/rooms/{id}/members"),
+            Route::Gallery(id) => format!("/rooms/{id}/gallery"),
             Route::Invitations => "/invitations".into(),
             Route::Knowledge => "/knowledge".into(),
             Route::Publish => "/publish".into(),
@@ -94,7 +100,7 @@ impl Route {
     /// realtime layer should treat as focused.
     pub fn room_id(&self) -> Option<&RoomId> {
         match self {
-            Route::Room(id) | Route::Members(id) => Some(id),
+            Route::Room(id) | Route::Members(id) | Route::Gallery(id) => Some(id),
             _ => None,
         }
     }
@@ -111,6 +117,9 @@ impl Route {
         match self {
             Route::Room(_) => "chat",
             Route::Members(_) => "members",
+            // The gallery replaces the chat pane for its room, exactly as the
+            // roster does: on a phone it *is* the screen.
+            Route::Gallery(_) => "members",
             Route::Invitations
             | Route::Settings
             | Route::Knowledge
@@ -127,6 +136,7 @@ impl Route {
             Route::Rooms => "rooms",
             Route::Room(_) => "chat",
             Route::Members(_) => "members",
+            Route::Gallery(_) => "chat",
             Route::Invitations => "invites",
             Route::Knowledge => "knowledge",
             Route::Publish => "publish",
@@ -144,6 +154,7 @@ impl Route {
             Route::Login => "Sign in · PocketSkynet",
             Route::Rooms | Route::Room(_) => "PocketSkynet",
             Route::Members(_) => "Members · PocketSkynet",
+            Route::Gallery(_) => "Gallery · PocketSkynet",
             Route::Invitations => "Invitations · PocketSkynet",
             Route::Knowledge => "Knowledge · PocketSkynet",
             Route::Publish => "Publish · PocketSkynet",
@@ -177,6 +188,10 @@ mod tests {
         assert_eq!(
             Route::parse(&format!("/rooms/{ROOM}/members")),
             Route::Members(rid(ROOM))
+        );
+        assert_eq!(
+            Route::parse(&format!("/rooms/{ROOM}/gallery")),
+            Route::Gallery(rid(ROOM))
         );
         assert_eq!(Route::parse("/invitations"), Route::Invitations);
         assert_eq!(Route::parse("/knowledge"), Route::Knowledge);
@@ -229,6 +244,7 @@ mod tests {
             Route::Rooms,
             Route::Room(rid(ROOM)),
             Route::Members(rid(ROOM)),
+            Route::Gallery(rid(ROOM)),
             Route::Invitations,
             Route::Knowledge,
             Route::Publish,
@@ -247,6 +263,7 @@ mod tests {
         assert!(Route::Rooms.needs_auth());
         assert!(Route::Room(rid(ROOM)).needs_auth());
         assert!(Route::Members(rid(ROOM)).needs_auth());
+        assert!(Route::Gallery(rid(ROOM)).needs_auth());
         assert!(Route::Invitations.needs_auth());
         assert!(Route::Knowledge.needs_auth());
         assert!(Route::Publish.needs_auth());
@@ -258,6 +275,7 @@ mod tests {
     fn room_id_is_exposed_only_by_room_scoped_routes() {
         assert_eq!(Route::Room(rid(ROOM)).room_id().unwrap().as_str(), ROOM);
         assert_eq!(Route::Members(rid(ROOM)).room_id().unwrap().as_str(), ROOM);
+        assert_eq!(Route::Gallery(rid(ROOM)).room_id().unwrap().as_str(), ROOM);
         assert!(Route::Rooms.room_id().is_none());
         assert!(Route::Settings.room_id().is_none());
     }
@@ -267,6 +285,7 @@ mod tests {
         assert_eq!(Route::Rooms.pane_view(), "rooms");
         assert_eq!(Route::Room(rid(ROOM)).pane_view(), "chat");
         assert_eq!(Route::Members(rid(ROOM)).pane_view(), "members");
+        assert_eq!(Route::Gallery(rid(ROOM)).pane_view(), "members");
         assert_eq!(Route::Settings.pane_view(), "settings");
         assert_eq!(Route::Invitations.pane_view(), "settings");
         assert_eq!(Route::Knowledge.pane_view(), "settings");

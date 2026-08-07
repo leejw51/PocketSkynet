@@ -26,6 +26,7 @@ mod app;
 mod asset;
 mod bank_agent;
 mod cache;
+mod capture;
 mod components;
 mod crypto;
 mod eip1193;

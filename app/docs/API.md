@@ -620,6 +620,43 @@ by `<img>` and `<video>` tags, which cannot attach a bearer header — the
 unguessable hash name is the capability. `name` must be exactly 64 hex chars
 plus a known extension; anything else is 404.
 
+#### 6.1.7 Thumbnails *(PocketSkynet extension)*
+
+Every stored image gains a **thumbnail sidecar** at upload: a JPEG re-encode
+capped at 512px on its long edge, stored beside the original as
+`{stem}.thumb.jpg` in the same directory. The sidecar name can never collide
+with, or be served as, an original — every serving route validates
+`{64 hex}.{ext}` with a single dot, which the `.thumb.` infix fails. Bytes
+that do not decode simply get no thumbnail; generation never fails an upload
+(`server/src/thumbs.rs` argues the whole design).
+
+Videos cannot be thumbnailed server-side without a codec stack the server
+deliberately does not carry, so the client that already decoded the video for
+playback captures a frame and posts it:
+
+`POST /api/images/{name}/thumbnail` — Auth: **✓**. Raw image bytes, ≤ 5 MB,
+accepted for hosted **videos** only (an image's thumbnail is the server's to
+make). The posted bytes are never stored verbatim: they are decoded and
+re-encoded through the same pipeline, so what lands on disk is always this
+server's own JPEG of the frame's pixels. First writer wins — the sidecar is
+content-addressed to the original, so a second, different frame is a no-op.
+
+| Status | Body |
+|---|---|
+| 200 | `{"message":"Thumbnail stored"}` (or `…already stored`) |
+| 400 | not a video, not a decodable image, or empty/oversized body |
+| 404 | the named media is not hosted here |
+
+`GET /api/images/{name}/thumbnail` — Auth: **no**, same reasoning as
+§6.1.5: the URL derives from the content hash that is already the
+capability. Serves `image/jpeg`, `Cache-Control: public, max-age=86400`
+(a day, not immutable — a video's sidecar appears after the original; once
+present it never changes). 404 when no sidecar exists, which clients treat
+as "use the original".
+
+Attachment thumbnails are the same idea under the attachment rules — see
+§13b.
+
 #### 6.1.6 `GET /api/server/info` — Auth: **no** *(PocketSkynet extension)*
 
 Where this server is and how you got here: `protocol` (`h3` | `h2` |
@@ -2885,6 +2922,73 @@ URL lands in browser history and in every log that records one.
 
 ---
 
+## 13b. Attachment thumbnails and the room gallery (PocketSkynet extension)
+
+### Attachment thumbnails
+
+The sidecar scheme of §6.1.7, applied to `data/files/` under the attachment
+rules: a thumbnail is a recognisable copy of the picture, so it is exactly as
+private as the picture.
+
+* `GET /api/files/{id}/thumbnail` — authenticated the two ways `raw` is: a
+  bearer header, or the **same** `?dl=` capability (the token's scope is the
+  file, not a route), membership re-checked either way. `image/jpeg`,
+  `Cache-Control: private, max-age=86400`, uniform 404 for non-members and
+  for files with no sidecar.
+* `POST /api/files/{id}/thumbnail` — **uploader only**, video attachments
+  only, and rendered-never-stored-verbatim, as §6.1.7. Uploader-only is one
+  rule stricter than the hosted route can be, because attachments have
+  owners: it keeps another member from racing a misleading poster onto
+  somebody else's video.
+* `GET /api/files/{id}/download-token` now carries
+  `"thumbUrl": "/api/files/{id}/thumbnail?dl=…" | null` — announced only
+  when the sidecar exists, so a client never renders an `<img>` it knows
+  will 404, and riding the same token so a chat bubble costs no second mint.
+
+Room purge (§6.5.5) unlinks each sidecar with its original: the decision
+that the bytes may go is the decision that their recognisable copy may.
+
+### `GET /api/rooms/{roomId}/media?limit=&before=` — Auth: **yes, member-only**
+
+The room's photo gallery: a read-model over both media stores, merged by
+time, newest first. Attachments whose stored extension is previewable
+(§13a's inline table) union `message_media` references (§6.10.1b) — the
+same two sources a purge consults, because "what does this room show?" is
+one question. It creates no state: deleting a message or an attachment
+removes its tile with no second bookkeeping. Rooms older than
+`message_media` list attachments and declared media only (the purge's
+plaintext scan is deliberately not run per request).
+
+`limit` clamps to 1..=500 (default 200). `before` is epoch-milliseconds,
+exclusive — pass the smallest `createdAtMs` seen to page backwards; items
+sharing that exact millisecond are skipped, a corner accepted for a cursor
+that never duplicates under concurrent posting.
+
+```json
+{ "items": [ {
+    "kind": "image" | "video",
+    "source": "attachment" | "hosted",
+    "id": "file_…",                // attachment only
+    "filename": "photo.png",       // attachment only
+    "caption": "",                 // attachment only
+    "name": "{sha256}.{ext}",      // hosted only
+    "messageId": "msg_…",          // hosted only
+    "sender": "0x…",
+    "url": "/api/files/{id}/raw?dl=…" | "/api/images/{name}",
+    "thumbUrl": "…thumbnail…" | null,
+    "createdAt": "2026-08-07T…Z",
+    "createdAtMs": 1780000000000
+} ], "hasMore": false }
+```
+
+Attachment items arrive with a **freshly minted `?dl=` capability** in
+`url` and `thumbUrl` — the same hour-lived, single-file token
+`download-token` hands out, minted inline so a hundred tiles cost one
+listing rather than a hundred round trips. An `<img>` needs no header, and
+membership is still re-checked on every fetch. Append `&inline=1` to `url`
+for a playable/renderable Content-Type, exactly as with `raw`. A grid left
+open past the hour re-fetches the listing when its tiles start failing.
+
 ## 14. Endpoint Index
 
 | # | Method | Path | Auth | Authorization |
@@ -2900,6 +3004,11 @@ URL lands in browser history and in every log that records one.
 | 2i | DELETE | `/api/uploads/{id}` | ✓ | owner only; abandon and reclaim the disk |
 | 2c | GET | `/api/images/{name}` | — | capability URL (PocketSkynet extension) |
 | 2d | POST | `/api/images/import` | ✓ | any user (allow-listed provider hosts, PocketSkynet extension) |
+| 2j | GET | `/api/images/{name}/thumbnail` | — | capability URL; thumbnail sidecar (§6.1.7, PocketSkynet extension) |
+| 2k | POST | `/api/images/{name}/thumbnail` | ✓ | any user; hosted **videos** only, first writer wins (§6.1.7) |
+| 2l | GET | `/api/files/{id}/thumbnail` | ✓ or `?dl=` | **member**; same capability scope as `raw` (§13b) |
+| 2m | POST | `/api/files/{id}/thumbnail` | ✓ | **uploader** only; video attachments only (§13b) |
+| 2n | GET | `/api/rooms/{roomId}/media` | ✓ | **member**; the room's photo gallery (§13b) |
 | 3 | POST | `/api/auth/challenge` | — | — (10/min) |
 | 4 | POST | `/api/auth/login` | — | — (5/min) |
 | 5 | POST | `/api/auth/logout` | — | — |
