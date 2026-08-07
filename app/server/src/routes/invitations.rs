@@ -203,7 +203,7 @@ async fn decline(
 mod tests {
     use super::*;
     use crate::routes::build;
-    use crate::test_support::{register, send, state, wallet};
+    use crate::test_support::{made_rooms, register, send, state, wallet};
     use axum::http::StatusCode;
     use axum::Router;
 
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(accepted.json()["roomId"], room);
 
         let rooms_now = send(&router, "GET", "/api/rooms", Some(&bob_token), None).await;
-        assert_eq!(rooms_now.json().as_array().unwrap().len(), 1);
+        assert_eq!(made_rooms(&rooms_now).len(), 1);
 
         // The invitation is consumed.
         let empty = send(&router, "GET", "/api/invitations", Some(&bob_token), None).await;

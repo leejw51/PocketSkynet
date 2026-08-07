@@ -817,7 +817,9 @@ async fn unhide(
 mod tests {
     use super::*;
     use crate::routes::build;
-    use crate::test_support::{register, send, state, wallet, Response as TestResponse};
+    use crate::test_support::{
+        made_rooms, register, send, state, wallet, Response as TestResponse,
+    };
     use axum::http::StatusCode;
     use axum::Router;
 
@@ -869,12 +871,13 @@ mod tests {
         // A bare Room, not the enriched shape.
         assert!(created.json().get("members").is_none());
 
-        let listed = send(&router, "GET", "/api/rooms", Some(&token), None).await;
-        assert_eq!(listed.json().as_array().unwrap().len(), 1);
-        assert_eq!(listed.json()[0]["memberCount"], 1);
-        assert_eq!(listed.json()[0]["unreadCount"], 0);
-        assert_eq!(listed.json()[0]["lastReadSerial"], 0);
-        assert_eq!(listed.json()[0]["kind"], "channel");
+        // Beside the three built-in rooms every account is given.
+        let listed = made_rooms(&send(&router, "GET", "/api/rooms", Some(&token), None).await);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["memberCount"], 1);
+        assert_eq!(listed[0]["unreadCount"], 0);
+        assert_eq!(listed[0]["lastReadSerial"], 0);
+        assert_eq!(listed[0]["kind"], "channel");
     }
 
     #[tokio::test]
@@ -914,9 +917,9 @@ mod tests {
         assert_eq!(from_bob.json()["id"], room_id);
 
         for token in [&alice_token, &bob_token] {
-            let listed = send(&router, "GET", "/api/rooms", Some(token), None).await;
-            assert_eq!(listed.json().as_array().unwrap().len(), 1);
-            assert_eq!(listed.json()[0]["id"], room_id);
+            let listed = made_rooms(&send(&router, "GET", "/api/rooms", Some(token), None).await);
+            assert_eq!(listed.len(), 1, "one DM, not two");
+            assert_eq!(listed[0]["id"], room_id);
         }
     }
 
@@ -1407,7 +1410,7 @@ mod tests {
         assert!(hidden.json()[0]["room"].get("unreadCount").is_none());
 
         let visible = send(&router, "GET", "/api/rooms", Some(&alice_token), None).await;
-        assert!(visible.json().as_array().unwrap().is_empty());
+        assert!(made_rooms(&visible).is_empty());
 
         send(
             &router,
@@ -1418,7 +1421,7 @@ mod tests {
         )
         .await;
         let back = send(&router, "GET", "/api/rooms", Some(&alice_token), None).await;
-        assert_eq!(back.json().as_array().unwrap().len(), 1);
+        assert_eq!(made_rooms(&back).len(), 1);
     }
 
     #[tokio::test]

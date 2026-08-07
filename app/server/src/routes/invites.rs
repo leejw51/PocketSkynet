@@ -344,7 +344,7 @@ async fn redeem(
 #[cfg(test)]
 mod tests {
     use crate::routes::build;
-    use crate::test_support::{register, send, state, wallet};
+    use crate::test_support::{made_rooms, register, send, state, wallet};
     use axum::http::StatusCode;
     use axum::Router;
 
@@ -488,10 +488,10 @@ mod tests {
         assert_eq!(redeemed.json()["roomId"], room);
         assert_eq!(redeemed.json()["alreadyMember"], false);
 
-        let rooms_now = send(&router, "GET", "/api/rooms", Some(&bob_token), None).await;
-        assert_eq!(rooms_now.json().as_array().unwrap().len(), 1);
+        let joined = made_rooms(&send(&router, "GET", "/api/rooms", Some(&bob_token), None).await);
+        assert_eq!(joined.len(), 1);
         // No wraps exist, so joining must not demand a rotation of nothing.
-        assert_eq!(rooms_now.json()[0]["keyRotationPending"], false);
+        assert_eq!(joined[0]["keyRotationPending"], false);
     }
 
     #[tokio::test]

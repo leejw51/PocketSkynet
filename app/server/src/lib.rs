@@ -1362,6 +1362,27 @@ mod test_support {
         state.jwt.issue(wallet).unwrap()
     }
 
+    /// A `GET /api/rooms` listing with the three built-in rooms filtered out —
+    /// the rooms somebody actually made.
+    ///
+    /// Every account has My Note, My Jarvis and My Lobby, provisioned by the
+    /// listing itself, so a bare `len() == 1` is no longer the question those
+    /// assertions were asking. Filtering by kind rather than subtracting three
+    /// keeps them honest: a test that said `len() == 4` would still pass if
+    /// provisioning created the wrong three rooms, or created one twice.
+    pub fn made_rooms(response: &Response) -> Vec<serde_json::Value> {
+        response
+            .json()
+            .as_array()
+            .expect("a room listing")
+            .iter()
+            .filter(|room| {
+                !crate::db::models::STATIC_ROOM_KINDS.contains(&room["kind"].as_str().unwrap_or(""))
+            })
+            .cloned()
+            .collect()
+    }
+
     pub struct Response {
         pub status: StatusCode,
         pub headers: axum::http::HeaderMap,

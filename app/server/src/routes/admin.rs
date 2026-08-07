@@ -496,7 +496,7 @@ async fn disconnect(state: &AppState, wallet: &WalletAddress) {
 #[cfg(test)]
 mod tests {
     use crate::routes::build;
-    use crate::test_support::{arm_server_admin, boss, register, send, state, wallet};
+    use crate::test_support::{arm_server_admin, boss, made_rooms, register, send, state, wallet};
     use axum::http::StatusCode;
     use sha2::Digest;
 
@@ -831,12 +831,12 @@ mod tests {
         )
         .await;
         assert_eq!(deleted.status, StatusCode::OK, "{:?}", deleted.body);
-        assert!(send(&router, "GET", "/api/rooms", Some(&alice_token), None)
-            .await
-            .json()
-            .as_array()
-            .unwrap()
-            .is_empty());
+        // Alice's three built-in rooms survive, as they must — this route can
+        // reach past a room's own admins but not past those.
+        assert!(
+            made_rooms(&send(&router, "GET", "/api/rooms", Some(&alice_token), None).await)
+                .is_empty()
+        );
     }
 
     #[tokio::test]
