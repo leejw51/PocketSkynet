@@ -81,8 +81,12 @@ pub fn transfer_rail() -> Html {
             { for store.transfers.iter().map(|tr| {
                 let pct = tr.percent();
 
-                // Has this row moved since it was last looked at?
-                let stalled = match marks.iter_mut().find(|(id, _, _)| *id == tr.id) {
+                let done = tr.stage == TransferStage::Done;
+
+                // Has this row moved since it was last looked at? A finished
+                // row is exempt: it is not waiting on anything, and "stalled"
+                // over a full green bar would be nonsense.
+                let stalled = !done && match marks.iter_mut().find(|(id, _, _)| *id == tr.id) {
                     Some(mark) => {
                         if (mark.1 - tr.done).abs() > f64::EPSILON {
                             mark.1 = tr.done;
@@ -99,6 +103,7 @@ pub fn transfer_rail() -> Html {
                 };
 
                 let label = match (tr.direction, tr.stage) {
+                    (_, TransferStage::Done) => t(lang, Key::transfer_done),
                     (TransferDirection::Download, _) => t(lang, Key::transfer_downloading),
                     (_, TransferStage::Checksum) => t(lang, Key::transfer_checksum),
                     (TransferDirection::Upload, _) => t(lang, Key::transfer_uploading),
@@ -117,7 +122,12 @@ pub fn transfer_rail() -> Html {
                 };
 
                 html! {
-                    <div class="fn-transfer" key={tr.id} data-stalled={stalled.to_string()}>
+                    <div
+                        class="fn-transfer"
+                        key={tr.id}
+                        data-stalled={stalled.to_string()}
+                        data-done={done.to_string()}
+                    >
                         <div class="fn-transfer__head">
                             <span class="fn-transfer__name" title={tr.name.clone()}>
                                 { tr.name.clone() }
@@ -153,6 +163,7 @@ pub fn transfer_rail() -> Html {
                                 data-stage={match tr.stage {
                                     TransferStage::Checksum => "checksum",
                                     TransferStage::Moving => "moving",
+                                    TransferStage::Done => "done",
                                 }}
                                 style={format!("width:{pct}%")}
                             />

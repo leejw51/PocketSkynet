@@ -342,6 +342,10 @@ pub enum TransferStage {
     Checksum,
     /// Sending, or receiving.
     Moving,
+    /// Finished, and about to leave the screen. A brief state whose whole
+    /// purpose is the exit: a row that vanishes the frame its last byte lands
+    /// reads as "it broke", while half a second of green says "it worked".
+    Done,
 }
 
 /// Which way the bytes are going.
@@ -649,6 +653,11 @@ pub enum Action {
         done: f64,
         stage: TransferStage,
     },
+    /// It finished *well*: snap the bar to full and turn the row green for the
+    /// moment before [`Action::TransferEnded`] takes it down. Success only —
+    /// a failure goes straight to `TransferEnded`, because a green flash in
+    /// front of an error toast would be the UI contradicting itself.
+    TransferDone(u64),
     /// It finished, failed, or was cancelled — either way it stops being shown.
     TransferEnded(u64),
     /// A verified session parked behind the boot cutscene (vault unlock on
@@ -822,6 +831,15 @@ impl Reducible for AppState {
                 if let Some(t) = s.transfers.iter_mut().find(|t| t.id == id) {
                     t.done = done;
                     t.stage = stage;
+                }
+            }
+            Action::TransferDone(id) => {
+                if let Some(t) = s.transfers.iter_mut().find(|t| t.id == id) {
+                    // `done = total`, not the last reported count: the final
+                    // ack can be in flight when this fires, and a "done" row
+                    // showing 99% would undercut the one thing it exists to say.
+                    t.done = t.total;
+                    t.stage = TransferStage::Done;
                 }
             }
             Action::TransferEnded(id) => {

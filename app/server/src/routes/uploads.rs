@@ -78,12 +78,14 @@ use crate::AppState;
 
 /// The largest file this server will assemble, for every kind.
 ///
-/// 4 GB. The ceiling is not arbitrary and is not a disk question: it is one
-/// byte under what a `u32` byte-count can express, which is the limit every
-/// 32-bit boundary in the stack shares — wasm32's address space, `zip`'s
-/// classic (non-Zip64) headers, and a great deal of client tooling. Going past
-/// it means auditing all of those rather than editing this constant.
-pub const MAX_UPLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// `u32::MAX` — one byte under 4 GiB. The ceiling is not arbitrary and is not
+/// a disk question: it is the largest count a `u32` byte-count can express,
+/// which is the limit every 32-bit boundary in the stack shares — wasm32's
+/// address space, `zip`'s classic (non-Zip64) headers, and a great deal of
+/// client tooling. Exactly 4 GiB would be one byte past all of them, which is
+/// why this is a subtraction and not a round number. Going further means
+/// auditing all of those rather than editing this constant.
+pub const MAX_UPLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024 - 1;
 
 /// The largest single chunk, and therefore the server's per-upload memory.
 ///
@@ -185,10 +187,12 @@ async fn begin(
     }
     if req.size > MAX_UPLOAD_BYTES {
         // Refused before a byte is sent, which is the entire reason the size is
-        // declared up front rather than discovered at the end.
+        // declared up front rather than discovered at the end. `+ 1` because
+        // the ceiling is 4 GiB minus a byte, and integer division would call
+        // it a "3 GB limit".
         return Err(ApiError::bad_request(format!(
             "File is larger than the {} GB limit",
-            MAX_UPLOAD_BYTES / (1024 * 1024 * 1024)
+            (MAX_UPLOAD_BYTES + 1) / (1024 * 1024 * 1024)
         )));
     }
     let sha256 = normalise_digest(req.sha256.as_deref())?;
