@@ -35,7 +35,7 @@ use crate::format;
 use crate::i18n::{t, Key, Lang};
 use crate::route::Route;
 use crate::secrets::{Opened, SecretEntry, Vault};
-use crate::state::{use_store, Store};
+use crate::state::use_store;
 
 use super::common::{Back, Empty};
 use super::icons;
@@ -560,7 +560,7 @@ fn draft_form(
                 </button>
                 <span class="fn-pw__bits">
                     { t(lang, Key::pw_gen_strength)
-                        .replace("{bits}", &entropy_label(&recipe)) }
+                        .replace("{bits}", &entropy_label(recipe)) }
                 </span>
             </div>
 
@@ -781,15 +781,6 @@ fn entry_card(
 /// number people have opinions about.
 fn entropy_label(recipe: &Recipe) -> String {
     (recipe.entropy_bits().floor() as i64).to_string()
-}
-
-/// Whether the store's session can seal anything at all.
-///
-/// Split out so the "locked" branch of this screen is testable without a
-/// browser: `Store` is not constructible on the host, but the decision it
-/// drives is one line.
-fn can_seal(store: &Store) -> bool {
-    store.auth.session().is_some()
 }
 
 #[cfg(test)]

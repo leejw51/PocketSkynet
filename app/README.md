@@ -23,6 +23,14 @@ Three things in one shell — a small-team Slack alternative you run yourself:
   as a same-origin URL, so it renders inline in the room and still resolves
   next year — the providers' own links expire within about a day.
 
+- **Skynet Password** (🔒 `/passwords`) — an encrypted key/value secret
+  store, one per wallet. Both halves of an entry are sealed in the browser
+  under a key derived from your E2EE identity, so the server stores what it
+  cannot read — including the *name* of each secret, which is itself worth
+  hiding. Add, edit, remove, generate a strong password from the OS CSPRNG,
+  copy it. There is no recovery: lose the wallet and the entries go with it.
+  Design and honest limitations in `docs/CRYPTO.md` §14.
+
 Two **paid features** fund the deployment — each requires an on-chain payment
 to the operator's wallet (`VITE_FRUITNATION_WALLET`), verified by the server
 over the configured chain's RPC, one transaction hash per action (which also
