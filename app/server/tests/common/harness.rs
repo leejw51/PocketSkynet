@@ -191,6 +191,9 @@ impl TestServer {
             // The suite runs offline; the payment verifier's RPC half has its
             // own unit tests against a mock chain (`payment.rs`).
             "--no-payment-verify",
+            // Advertising would spawn a `dns-sd` child per server on macOS,
+            // and the SIGKILL in `Drop` below would orphan every one of them.
+            "--no-mdns",
             "--log",
             "warn",
         ])
@@ -213,6 +216,7 @@ impl TestServer {
             "PS_SSE_TOKEN_QUERY",
             "PS_NO_RATE_LIMIT",
             "PS_NO_PAYMENT_VERIFY",
+            "PS_NO_MDNS",
             "PS_SHOUT_PRICE_CRO",
             "PS_PUBLISH_PRICE_CRO",
             "PS_TLS",

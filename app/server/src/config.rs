@@ -110,6 +110,16 @@ pub struct Cli {
     #[arg(long, env = "PS_NO_PAYMENT_VERIFY", default_value_t = false)]
     pub no_payment_verify: bool,
 
+    /// Do not advertise this server over Bonjour/mDNS.
+    ///
+    /// Intended for tests, which start hundreds of short-lived servers: on
+    /// macOS each advertisement is a spawned `dns-sd` child, and a test
+    /// harness that kills its server outright (SIGKILL, so no `Drop` runs)
+    /// orphans that child forever. A test server has no business announcing
+    /// itself to the LAN anyway.
+    #[arg(long, env = "PS_NO_MDNS", default_value_t = false)]
+    pub no_mdns: bool,
+
     /// How many trusted reverse proxies sit in front of this server.
     ///
     /// `0` (the default) ignores `X-Forwarded-For` entirely and rate-limits on
@@ -185,6 +195,8 @@ pub struct Config {
     /// Whether paid-feature transaction hashes are verified against the
     /// configured chain's RPC before being honoured.
     pub verify_payments: bool,
+    /// Whether the server announces itself over Bonjour/mDNS.
+    pub advertise: bool,
     pub trust_proxy: u8,
     pub tls: Tls,
     /// Plain-HTTP port that redirects to HTTPS, when TLS is on.
@@ -404,6 +416,7 @@ impl Cli {
             sse_token_query: self.sse_token_query,
             rate_limit: !self.no_rate_limit,
             verify_payments: !self.no_payment_verify,
+            advertise: !self.no_mdns,
             trust_proxy: self.trust_proxy,
             tls,
             http_redirect_port,
@@ -493,6 +506,7 @@ mod tests {
             sse_token_query: false,
             no_rate_limit: false,
             no_payment_verify: false,
+            no_mdns: false,
             trust_proxy: 0,
             tls: false,
             tls_cert: None,

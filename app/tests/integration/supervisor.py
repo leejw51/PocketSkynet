@@ -89,6 +89,9 @@ class Backend:
             "--static-dir",
             self.static_dir,
             "--no-rate-limit",
+            # A test server has no business announcing itself on the LAN, and
+            # on macOS each advertisement is a `dns-sd` child to clean up.
+            "--no-mdns",
             "--log",
             "warn",
         ]

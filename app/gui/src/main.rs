@@ -101,6 +101,9 @@ fn main() {
                 // Paid features are real money even on a desktop: the shout
                 // and publish endpoints verify their transactions here too.
                 verify_payments: true,
+                // A desktop app is exactly the deployment phones discover by
+                // name, so it advertises like the CLI server does.
+                advertise: true,
                 trust_proxy: 0,
                 // Plain HTTP, deliberately. The window loads the server over
                 // loopback, and a webview meets a self-signed certificate with
