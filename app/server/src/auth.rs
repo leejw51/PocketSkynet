@@ -391,12 +391,32 @@ pub fn verify_challenge_signature(
     }
 }
 
-/// 32 bytes of CSPRNG output as lowercase hex — the challenge nonce and the
-/// SSE ticket both use this.
-pub fn random_hex_32() -> String {
-    let mut buf = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
-    hex::encode(buf)
+/// 32 bytes of CSPRNG output as lowercase hex.
+///
+/// Every unguessable string this server hands out is this function with a
+/// prefix on the front: the login challenge nonce, the SSE ticket, an invite
+/// link (`db::invites::mint_token`) and a webhook token. All four are bearer
+/// credentials — whoever holds one is, for that purpose, whoever it was issued
+/// to — so there is exactly one generator for them and it lives here.
+///
+/// The bytes come from [`pocketskynet_core::random`], the same entry point the
+/// browser client's room keys and mnemonics come from. What this replaced,
+/// `rand::thread_rng()`, was not a weakness: it is a CSPRNG seeded from the
+/// operating system and reseeded as it runs. It was simply a *second* answer to
+/// "where do this deployment's secrets come from", and the whole value of an
+/// audited entry point is that the question has one answer on both sides of the
+/// wire.
+///
+/// Returning `Result` is the part that is not cosmetic. `thread_rng`'s
+/// `fill_bytes` cannot report that the OS refused and panics instead; here the
+/// caller gets an [`ApiError::Internal`], the request becomes a 500 with the
+/// cause logged and nothing leaked, and — the point — no token is minted. A
+/// credential that is secretly a constant is far worse than a login that
+/// failed, because only one of the two is visible to anybody.
+pub fn random_hex_32() -> ApiResult<String> {
+    let buf = pocketskynet_core::random::bytes::<32>()
+        .map_err(|e| ApiError::Internal(anyhow::Error::new(e).context("entropy")))?;
+    Ok(hex::encode(buf))
 }
 
 #[cfg(test)]
@@ -650,12 +670,20 @@ mod tests {
         ));
     }
 
+    /// Sixteen draws rather than two. At 256 bits a repeat cannot happen by
+    /// chance, so any collision here is a defect and never a flake — which is
+    /// what makes the assertion worth making. It is a wiring check all the
+    /// same: no test can establish that a generator is *good*, only that this
+    /// one is not obviously broken and not returning a constant.
     #[test]
     fn nonces_are_64_hex_characters_and_do_not_repeat() {
-        let a = random_hex_32();
-        let b = random_hex_32();
-        assert_eq!(a.len(), 64);
-        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, b);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..16 {
+            let nonce = random_hex_32().expect("the OS CSPRNG should answer");
+            assert_eq!(nonce.len(), 64);
+            assert!(nonce.bytes().all(|c| c.is_ascii_hexdigit()));
+            assert_ne!(nonce, "0".repeat(64), "a zero nonce is not a nonce");
+            assert!(seen.insert(nonce), "two nonces collided");
+        }
     }
 }

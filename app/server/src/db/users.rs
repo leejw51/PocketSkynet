@@ -221,10 +221,16 @@ pub fn get_public_keys(conn: &Connection, addresses: &[String]) -> ApiResult<Vec
 /// The insert is `ON CONFLICT DO NOTHING` followed by a read, so two
 /// concurrent first logins both end up with the winner's salt rather than one
 /// of them silently deriving a different encryption identity.
+///
+/// The candidate comes from `auth::random_hex_32` — the one generator — and is
+/// drawn *before* the insert even though it is usually thrown away. That order
+/// is deliberate: a salt is what separates this account's E2EE identity from
+/// the one the same wallet would derive on another deployment, and a predictable
+/// salt would quietly undo that for the first login it ever served. Refusing the
+/// login is the correct answer; there is no salt worth writing that the OS did
+/// not produce.
 pub fn get_or_create_salt(conn: &Connection, address: &str) -> ApiResult<String> {
-    let mut buf = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
-    let candidate = hex::encode(buf);
+    let candidate = crate::auth::random_hex_32()?;
 
     conn.execute(
         "INSERT INTO encryption_salts (wallet_address, salt, created_at)

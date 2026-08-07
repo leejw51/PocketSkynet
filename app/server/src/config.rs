@@ -312,6 +312,13 @@ pub enum ConfigError {
     ReadSecret(PathBuf, #[source] std::io::Error),
     #[error("writing JWT secret {0}: {1}")]
     WriteSecret(PathBuf, #[source] std::io::Error),
+    /// The OS would not produce entropy for a fresh signing secret.
+    ///
+    /// Fatal at startup, and it has to be: a server that came up with a
+    /// predictable JWT secret would mint sessions anybody could forge, and it
+    /// would do so while looking completely healthy.
+    #[error("generating a JWT signing secret: {0}")]
+    SecretEntropy(#[source] pocketskynet_core::CryptoError),
     #[error("PS_JWT_SECRET must be at least 32 characters")]
     WeakSecret,
     #[error(
@@ -442,8 +449,10 @@ pub fn load_or_create_secret(path: &Path) -> Result<Secret, ConfigError> {
         Err(e) => return Err(ConfigError::ReadSecret(path.to_path_buf(), e)),
     }
 
-    let mut buf = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
+    // Through `core::random` like every other secret in the deployment. This
+    // is the highest-value one of them all — it signs every session — so it is
+    // the last place that should have its own generator.
+    let buf = pocketskynet_core::random::bytes::<32>().map_err(ConfigError::SecretEntropy)?;
     let hex = hex::encode(buf);
 
     std::fs::write(path, &hex).map_err(|e| ConfigError::WriteSecret(path.to_path_buf(), e))?;

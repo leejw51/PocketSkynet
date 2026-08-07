@@ -101,8 +101,13 @@ pub enum ConsumeOutcome {
 /// The bearer token: `inv_` + 32 CSPRNG bytes, hex. Same generator as the
 /// login challenge nonce (`auth::random_hex_32`), and the prefix keeps a token
 /// visually distinct from a row id (`invite_…`) in logs and bug reports.
-pub fn mint_token() -> String {
-    format!("inv_{}", crate::auth::random_hex_32())
+///
+/// Fallible for the reason that generator is: only the hash of this string is
+/// ever stored, so a predictable token is a room membership anybody can mint
+/// and nothing in the table would show it. Refusing to issue the link is the
+/// only safe answer to an entropy failure.
+pub fn mint_token() -> ApiResult<String> {
+    Ok(format!("inv_{}", crate::auth::random_hex_32()?))
 }
 
 /// Lowercase-hex SHA-256 of a presented token — the only form that ever
@@ -220,7 +225,7 @@ mod tests {
     }
 
     fn make(conn: &Connection, expires_at: i64, max_uses: Option<i64>) -> (String, Invite) {
-        let token = mint_token();
+        let token = mint_token().unwrap();
         let invite = create(
             conn,
             &format!("invite_{}", uuid::Uuid::new_v4()),
@@ -236,10 +241,10 @@ mod tests {
 
     #[test]
     fn a_minted_token_is_unguessable_shaped_and_hashes_stably() {
-        let token = mint_token();
+        let token = mint_token().unwrap();
         assert!(token.starts_with("inv_"));
         assert_eq!(token.len(), 4 + 64);
-        assert_ne!(token, mint_token(), "two mints must differ");
+        assert_ne!(token, mint_token().unwrap(), "two mints must differ");
         assert_eq!(token_hash(&token), token_hash(&token));
         assert_eq!(token_hash(&token).len(), 64);
         assert_ne!(
@@ -273,7 +278,7 @@ mod tests {
     fn an_unissued_token_is_not_found_not_refused() {
         let db = test_db();
         db.call_blocking(|conn| {
-            let outcome = consume(conn, &token_hash(&mint_token()))?;
+            let outcome = consume(conn, &token_hash(&mint_token().unwrap()))?;
             assert!(matches!(outcome, ConsumeOutcome::NotFound));
             Ok(())
         })

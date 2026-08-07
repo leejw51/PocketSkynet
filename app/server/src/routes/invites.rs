@@ -131,7 +131,7 @@ async fn create(
         }
     }
 
-    let token = invites::mint_token();
+    let token = invites::mint_token()?;
     let hash = invites::token_hash(&token);
     let id = format!("invite_{}_{}", now_ms(), uuid::Uuid::new_v4());
     let expires_at = now_ms() + hours * 60 * 60 * 1000;
@@ -708,7 +708,7 @@ mod tests {
         let alice_token = register(&state, &alice, "alice");
         let router = build(state);
 
-        for guess in ["inv_not_hex", &crate::db::invites::mint_token()] {
+        for guess in ["inv_not_hex", &crate::db::invites::mint_token().unwrap()] {
             let refused = send(
                 &router,
                 "POST",
