@@ -1138,7 +1138,13 @@ pub async fn save_attachment(store: Store, file_id: String, filename: String) {
                 });
             })
             .await;
-        store.dispatch(Action::TransferEnded(transfer_id));
+        // "Done" means verified — bytes that arrived but failed the digest
+        // check must not get the green treatment.
+        end_transfer(
+            &store,
+            transfer_id,
+            matches!(result, Ok((crate::api::downloads::Outcome::Verified, _))),
+        );
 
         match result {
             Ok((crate::api::downloads::Outcome::Verified, _)) => {
@@ -1216,7 +1222,13 @@ pub async fn verify_downloaded_file(store: Store, expected_sha256: String, picke
         });
     };
     let actual = crate::api::uploads::checksum(&blob, size, &mut on_progress).await;
-    store.dispatch(Action::TransferEnded(transfer_id));
+    // Green only for a digest that *matches* — a checksum that completed and
+    // disagrees is precisely the failure this feature exists to catch.
+    end_transfer(
+        &store,
+        transfer_id,
+        matches!(&actual, Ok(d) if d.eq_ignore_ascii_case(&expected_sha256)),
+    );
 
     match actual {
         Ok(digest) if digest.eq_ignore_ascii_case(&expected_sha256) => {
@@ -1225,6 +1237,30 @@ pub async fn verify_downloaded_file(store: Store, expected_sha256: String, picke
         Ok(_) => toast::error(&store, t(lang, Key::attach_verify_failed), None),
         Err(e) => toast::error(&store, e.user_message(), None),
     }
+}
+
+/// Take a transfer's row down — gently when it earned it.
+///
+/// Success gets a beat of [`TransferStage::Done`] first, so the bar is seen
+/// full and green before the card plays its exit (`app.css`,
+/// `.fn-transfer[data-done]`); the removal is deferred past that animation.
+/// Failure and cancellation skip straight to removal: the toast carries the
+/// bad news, and a green flash in front of it would be the UI contradicting
+/// itself. Deferred on a spawned task so no caller waits on choreography.
+fn end_transfer(store: &Store, id: u64, succeeded: bool) {
+    if !succeeded {
+        store.dispatch(Action::TransferEnded(id));
+        return;
+    }
+    store.dispatch(Action::TransferDone(id));
+    let store = store.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        // Covers the CSS: ~450ms of green, then the 380ms exit, plus slack.
+        // Too short truncates the exit; the cost of too long is an inert card
+        // on screen, which is why this is not a second longer.
+        gloo_timers::future::TimeoutFuture::new(900).await;
+        store.dispatch(Action::TransferEnded(id));
+    });
 }
 
 /// Takes the `web_sys::File` **handle**, not its bytes, and that is the whole
@@ -1284,7 +1320,7 @@ pub async fn attach_file(store: Store, room_id: RoomId, picked: web_sys::File, c
     // The bar comes down on every path, including the failures. A progress row
     // that outlives its transfer is worse than none: it says something is still
     // happening when nothing is.
-    store.dispatch(Action::TransferEnded(transfer_id));
+    end_transfer(&store, transfer_id, result.is_ok());
 
     let file = match result.and_then(|v| {
         serde_json::from_value::<crate::api::types::FileMeta>(v)

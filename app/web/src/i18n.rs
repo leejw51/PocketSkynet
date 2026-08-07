@@ -385,6 +385,7 @@ strings! {
     (transfer_stalled_hint, "— cancel and attach it again to resume", "— 취소 후 다시 첨부하면 이어서 진행됩니다", "— キャンセルして再度添付すると再開します", "— 取消後再次附加即可繼續", "— zrušte a přiložte znovu pro pokračování", "— cancela y adjúntalo de nuevo para reanudar", "— 取消后重新附加即可继续", "— abbrechen und erneut anhängen, um fortzusetzen"),
     (transfer_checksum, "Checking", "확인 중", "確認中", "檢查中", "Kontrola", "Comprobando", "检查中", "Prüfen"),
     (transfer_uploading, "Uploading", "업로드 중", "アップロード中", "上傳中", "Nahrávání", "Subiendo", "上传中", "Hochladen"),
+    (transfer_done, "Done", "완료", "完了", "完成", "Hotovo", "Listo", "完成", "Fertig"),
     (transfer_verifying, "Verifying", "검증 중", "検証中", "驗證中", "Ověřování", "Verificando", "验证中", "Überprüfen"),
     (attach_read_failed, "Could not read that file.", "파일을 읽을 수 없습니다.", "そのファイルを読み込めませんでした。", "無法讀取該檔案。", "Soubor se nepodařilo přečíst.", "No se pudo leer ese archivo.", "无法读取该文件。", "Diese Datei konnte nicht gelesen werden."),
     (attach_uploaded, "{name} attached", "{name} 첨부됨", "{name} を添付しました", "已附加 {name}", "{name} přiloženo", "{name} adjuntado", "已附加 {name}", "{name} angehängt"),

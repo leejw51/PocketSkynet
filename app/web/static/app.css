@@ -10223,14 +10223,28 @@ span.fn-conn { cursor: default; }
     color-mix(in srgb, var(--fn-primary) 55%, transparent),
     var(--fn-primary)
   );
+  /* The leading edge carries a soft glow of its own colour, so the bar reads
+     as a light moving through the track rather than a region changing size. */
+  box-shadow: 0 0 10px color-mix(in srgb, var(--fn-primary) 45%, transparent);
   /* Width, not a transform: the fill carries a glow on its leading edge and
-     scaling would stretch that into a smear across the whole bar. */
-  transition: inline-size var(--fn-dur) linear;
+     scaling would stretch that into a smear across the whole bar.
+
+     The duration deliberately outlasts the report interval. Chunks can land
+     every few tens of milliseconds, and a bar that snaps to each one strobes;
+     easing each report out over ~400ms makes consecutive updates blend into
+     one continuous glide. easeOutExpo, so the bar leaps toward the new value
+     and settles — momentum, not lag. */
+  transition:
+    inline-size 420ms var(--fn-ease-expo),
+    background 260ms var(--fn-ease),
+    box-shadow 260ms var(--fn-ease);
 }
 
-/* The local pass. Dimmer and flat — nothing is crossing a network yet. */
+/* The local pass. Dimmer, flat, and unlit — nothing is crossing a network
+   yet, and the glow is reserved for bytes that are. */
 .fn-transfer__fill[data-stage="checksum"] {
   background: color-mix(in srgb, var(--fn-text) 45%, transparent);
+  box-shadow: none;
 }
 
 /* A moving sheen, so a slow chunk still looks alive. Only while the transfer
@@ -10255,6 +10269,37 @@ span.fn-conn { cursor: default; }
 @keyframes fn-transfer-sheen {
   from { transform: translateX(-100%); }
   to   { transform: translateX(100%); }
+}
+
+/* --- The good ending -----------------------------------------------------
+   `TransferDone` holds the row for a beat before removal, and this is that
+   beat: the bar settles full and turns the presence green, the glow blooms
+   once, and then the whole card takes its leave — down and out, the reverse
+   of how it arrived. The exit is *delayed*, not slowed: the green must be
+   readable as a state before it starts moving, or it reads as a glitch on
+   the way out. `forwards` holds the card invisible for the frames between
+   the animation ending and Rust actually unmounting it. */
+.fn-transfer[data-done="true"]::before {
+  background: var(--fn-online);
+}
+.fn-transfer__fill[data-stage="done"] {
+  background: var(--fn-online);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--fn-online) 60%, transparent);
+}
+.fn-transfer__fill[data-stage="done"]::after { display: none; }
+.fn-transfer[data-done="true"] .fn-transfer__stage,
+.fn-transfer[data-done="true"] .fn-transfer__pct {
+  color: var(--fn-online);
+}
+.fn-transfer[data-done="true"] {
+  animation: fn-transfer-out 380ms var(--fn-ease-exit) 450ms forwards;
+}
+@keyframes fn-transfer-out {
+  to {
+    opacity: 0;
+    translate: 0 8px;
+    scale: 0.97;
+  }
 }
 
 .fn-transfer__size {
@@ -10283,6 +10328,10 @@ span.fn-conn { cursor: default; }
   .fn-transfer__fill { transition: none; }
   .fn-transfer__fill::after { display: none; }
   .fn-transfer__cancel { transition: none; }
+  /* The done *state* stays — colour is information, motion is decoration.
+     With the exit animation gone the row holds its green until Rust removes
+     it, and an abrupt removal is exactly what reduced motion asks for. */
+  .fn-transfer[data-done="true"] { animation: none; }
 }
 
 /* A video in the stream is a thumbnail until it is asked for

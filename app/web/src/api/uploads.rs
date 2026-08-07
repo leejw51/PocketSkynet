@@ -6,13 +6,25 @@
 //! A `web_sys::File` is a *handle*, not bytes — the browser keeps the data on
 //! disk. `Blob::slice` makes another handle to part of it, still without
 //! reading anything, and only `array_buffer()` on a slice actually pulls bytes
-//! in. So the loop below holds one chunk at a time and the wasm heap never sees
-//! the file.
+//! in. So the checksum pass holds one chunk at a time, and the upload pass
+//! holds **nothing**: each chunk's body is the `Blob` slice itself, which the
+//! browser's network process reads directly.
 //!
 //! The old path did the opposite in one line: `blob.array_buffer()` over the
 //! whole file, then `Uint8Array::from(&vec)` to send it — the file twice, in an
 //! address space that is 4 GB in total. A 700 MB attachment was already
 //! hopeless; the 25 MB cap was hiding it.
+//!
+//! # The chunk body must be a `Blob`, not an `ArrayBuffer`
+//!
+//! Not a style preference — a measured 4x. A `fetch` whose body is an
+//! `ArrayBuffer` makes the renderer copy the whole buffer to the network
+//! process *on the main thread*: ~250 ms per 8 MB chunk, during which the UI
+//! is frozen, capping uploads near 30 MB/s however fast the link is. A `Blob`
+//! body is a handle the network process reads by itself — same loop measured
+//! at over 100 MB/s with the main thread idle. (Localhost, Chromium; the
+//! per-chunk stall is the same order everywhere, so on a fast LAN it is the
+//! difference between the link's speed and a third of it.)
 //!
 //! # Two passes, on purpose
 //!
@@ -75,7 +87,9 @@ pub enum Target {
 ///
 /// Checked on the device so a file that was never going to work fails
 /// immediately rather than after however long it takes to hash and send it.
-pub const MAX_UPLOAD_BYTES: f64 = 4.0 * 1024.0 * 1024.0 * 1024.0;
+/// 4 GiB minus one byte, for the same reason as the server: it is the largest
+/// count a `u32` can hold, and exactly 4 GiB would be one byte past it.
+pub const MAX_UPLOAD_BYTES: f64 = 4.0 * 1024.0 * 1024.0 * 1024.0 - 1.0;
 
 /// Fallback when the server does not name one. The server always does; this
 /// exists so a malformed response degrades to a working upload rather than a
@@ -120,9 +134,11 @@ impl Client {
             return Err(ApiError::Network("The file is empty".to_owned()));
         }
         if size > MAX_UPLOAD_BYTES {
+            // `+ 1.0` because the ceiling is 4 GiB minus a byte, and "3 GB
+            // limit" would be a lie in the other direction.
             return Err(ApiError::Network(format!(
                 "The file is larger than the {:.0} GB limit",
-                MAX_UPLOAD_BYTES / (1024.0 * 1024.0 * 1024.0)
+                (MAX_UPLOAD_BYTES + 1.0) / (1024.0 * 1024.0 * 1024.0)
             )));
         }
         let filename = file.name();
@@ -158,9 +174,11 @@ impl Client {
 
         while offset < size {
             let end = (offset + chunk).min(size);
-            let bytes = read_slice(&blob, offset, end).await?;
+            // A handle, not bytes — see the module docs for why sending the
+            // slice itself (rather than reading it first) is load-bearing.
+            let part = slice_blob(&blob, offset, end)?;
 
-            match self.append(&session.id, offset, &bytes).await {
+            match self.append(&session.id, offset, &part).await {
                 Ok(next) => offset = next,
                 Err(e) => {
                     // Ask the server where it really is and carry on from
@@ -251,8 +269,9 @@ impl Client {
         self.send_json(Method::POST, "/api/uploads", &body).await
     }
 
-    /// Send one chunk. Returns the offset the server is now at.
-    async fn append(&self, id: &str, offset: f64, bytes: &js_sys::Uint8Array) -> ApiResult<f64> {
+    /// Send one chunk — as a `Blob` slice, never as bytes the wasm side has
+    /// read. Returns the offset the server is now at.
+    async fn append(&self, id: &str, offset: f64, part: &web_sys::Blob) -> ApiResult<f64> {
         #[derive(serde::Deserialize)]
         struct Ack {
             offset: f64,
@@ -261,10 +280,12 @@ impl Client {
         // a fraction today, but the server parses this as an integer and a
         // formatting change would be a 400 rather than a compile error.
         let path = format!("/api/uploads/{id}?offset={}", offset as u64);
+        // The explicit header wins over the Blob's own (empty) type, so the
+        // server sees the same request it always did.
         let req = self
             .build(Method::PATCH, &path)
             .header("Content-Type", "application/octet-stream")
-            .body(bytes)
+            .body(part)
             .map_err(|e| ApiError::Network(e.to_string()))?;
         let resp = req
             .send()
@@ -395,16 +416,23 @@ where
     Ok(hasher.finish())
 }
 
-/// Read `[start, end)` of a blob.
+/// `[start, end)` of a blob, as another handle — nothing is read.
 ///
 /// `slice_with_f64_and_f64` rather than the `i32` overload: an `i32` offset
 /// overflows at 2 GB, which would silently corrupt exactly the uploads this
 /// work exists to support — the second half of a 3 GB file would be read from a
 /// negative offset.
+fn slice_blob(blob: &web_sys::Blob, start: f64, end: f64) -> ApiResult<web_sys::Blob> {
+    blob.slice_with_f64_and_f64(start, end)
+        .map_err(|_| ApiError::Network("Could not read the file".to_owned()))
+}
+
+/// Read `[start, end)` of a blob into wasm-visible bytes.
+///
+/// For the checksum pass only — hashing genuinely needs the bytes. The upload
+/// pass must never come back to this; it sends handles (see the module docs).
 async fn read_slice(blob: &web_sys::Blob, start: f64, end: f64) -> ApiResult<js_sys::Uint8Array> {
-    let part = blob
-        .slice_with_f64_and_f64(start, end)
-        .map_err(|_| ApiError::Network("Could not read the file".to_owned()))?;
+    let part = slice_blob(blob, start, end)?;
     let buffer = JsFuture::from(part.array_buffer())
         .await
         .map_err(|_| ApiError::Network("Could not read the file".to_owned()))?;
@@ -499,8 +527,11 @@ mod tests {
 
     #[test]
     fn the_client_ceiling_matches_the_servers() {
-        // 4 GB exactly. If these drift, a file is refused by whichever is
-        // smaller and the other's error message is a lie.
-        assert_eq!(MAX_UPLOAD_BYTES, 4_294_967_296.0);
+        // u32::MAX — one byte under 4 GiB, exactly what the server allows. If
+        // these drift, a file is refused by whichever is smaller and the
+        // other's error message is a lie.
+        assert_eq!(MAX_UPLOAD_BYTES, 4_294_967_295.0);
+        // And the message still calls it a 4 GB limit, not a 3 GB one.
+        assert_eq!((MAX_UPLOAD_BYTES + 1.0) / (1024.0 * 1024.0 * 1024.0), 4.0);
     }
 }
