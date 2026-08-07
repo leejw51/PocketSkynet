@@ -1391,6 +1391,7 @@ fn room_menu(
                 confirm_label: verb.clone(),
                 action: action.clone(),
                 alternative: None,
+                challenge: None,
             })));
             open.set(false);
         });

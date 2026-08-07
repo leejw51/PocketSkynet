@@ -148,6 +148,7 @@ pub fn shell(p: &ShellProps) -> Html {
                 confirm_label: t(lang, Key::sign_out).into(),
                 action: ConfirmAction::SignOut,
                 alternative: None,
+                challenge: None,
             })));
         })
     };

@@ -297,6 +297,21 @@ pub struct ConfirmProps {
     pub alternative_label: Option<String>,
     #[prop_or_default]
     pub on_alternative: Option<Callback<()>>,
+    /// A phrase that must be typed before the destructive verb is enabled.
+    /// See [`crate::state::Confirm::challenge`] for when that is warranted.
+    #[prop_or_default]
+    pub challenge: Option<String>,
+}
+
+/// Does what was typed satisfy the challenge?
+///
+/// Trimmed and case-folded: the gate is there to make the action deliberate,
+/// not to test typing. Someone whose keyboard capitalised the first letter, or
+/// who picked up a trailing space, has still spelled the words out — and a
+/// button that stays dead with the right phrase visibly in the box reads as
+/// broken, which teaches people to distrust the next one.
+fn challenge_met(phrase: &str, typed: &str) -> bool {
+    typed.trim().to_lowercase() == phrase.trim().to_lowercase()
 }
 
 /// A destructive confirmation.
@@ -307,6 +322,13 @@ pub struct ConfirmProps {
 #[function_component(ConfirmDialog)]
 pub fn confirm_dialog(p: &ConfirmProps) -> Html {
     let lang = crate::state::use_store().language;
+    let typed = use_state(String::new);
+    // No challenge is "already satisfied" — every existing dialog takes this
+    // branch and is unaffected.
+    let unlocked = p
+        .challenge
+        .as_ref()
+        .is_none_or(|phrase| challenge_met(phrase, &typed));
     let cancel = {
         let on_cancel = p.on_cancel.clone();
         Callback::from(move |_: MouseEvent| on_cancel.emit(()))
@@ -357,6 +379,7 @@ pub fn confirm_dialog(p: &ConfirmProps) -> Html {
                             // shape — square next to its rounded neighbour.
                             class="topcoat-button--cta topcoat-button--cta-danger"
                             busy={p.busy}
+                            disabled={!unlocked}
                             onclick={confirm}
                         />
                     </>
@@ -366,6 +389,52 @@ pub fn confirm_dialog(p: &ConfirmProps) -> Html {
             if let Some(q) = &p.quote {
                 <blockquote class="fn-modal__quote">{ q }</blockquote>
             }
+            if let Some(phrase) = &p.challenge {
+                <div class="fn-field">
+                    <label class="fn-field__label" for="fn-confirm-challenge">
+                        { t(lang, Key::type_to_confirm).replace("{phrase}", phrase) }
+                    </label>
+                    <input
+                        id="fn-confirm-challenge"
+                        class="topcoat-text-input"
+                        type="text"
+                        // The phrase must come from the user, so nothing may
+                        // offer to supply it: no history, no autocorrect
+                        // rewriting it into something that then fails to match,
+                        // and no capitalisation the comparison has to forgive.
+                        autocomplete="off"
+                        autocapitalize="none"
+                        autocorrect="off"
+                        spellcheck="false"
+                        // Safe to focus, unlike a destructive button: a reflex
+                        // Enter here types nothing and submits nothing.
+                        data-autofocus="true"
+                        disabled={p.busy}
+                        value={(*typed).clone()}
+                        oninput={{
+                            let typed = typed.clone();
+                            Callback::from(move |e: InputEvent| {
+                                if let Some(el) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                    typed.set(el.value());
+                                }
+                            })
+                        }}
+                        onkeydown={{
+                            let on_confirm = p.on_confirm.clone();
+                            let busy = p.busy;
+                            Callback::from(move |e: KeyboardEvent| {
+                                // Enter submits, but only once the phrase is
+                                // right — otherwise this is the reflex Enter
+                                // the whole gate exists to stop.
+                                if e.key() == "Enter" && unlocked && !busy {
+                                    e.prevent_default();
+                                    on_confirm.emit(());
+                                }
+                            })
+                        }}
+                    />
+                </div>
+            }
             if let Some(e) = &p.error {
                 <p class="fn-field__error" role="alert">{ e }</p>
             }
@@ -373,5 +442,43 @@ pub fn confirm_dialog(p: &ConfirmProps) -> Html {
                 <p class="fn-muted"><Spinner />{ " " }{ t(lang, Key::working) }</p>
             }
         </Modal>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_phrase_has_to_be_spelled_out() {
+        assert!(challenge_met("remove all", "remove all"));
+        // Nothing shorter, and nothing that merely contains it: the gate is
+        // there so the words have to be produced, not approached.
+        assert!(!challenge_met("remove all", ""));
+        assert!(!challenge_met("remove all", "remove"));
+        assert!(!challenge_met("remove all", "remove al"));
+        assert!(!challenge_met("remove all", "please remove all rooms"));
+        assert!(!challenge_met("remove all", "delete all"));
+    }
+
+    #[test]
+    fn case_and_stray_space_are_forgiven_because_they_are_not_the_point() {
+        // A phone that capitalised the first letter, or a paste that brought a
+        // space, has still spelled the words out. A button that stays dead
+        // with the right phrase visibly in the box teaches people that the
+        // interface is broken — and the next gate gets less attention, not
+        // more.
+        assert!(challenge_met("remove all", "Remove All"));
+        assert!(challenge_met("remove all", "  remove all  "));
+        assert!(challenge_met("remove all", "REMOVE ALL"));
+    }
+
+    #[test]
+    fn a_localised_phrase_is_compared_the_same_way() {
+        // The Korean phrase has no case to fold, which must not make it
+        // stricter or looser than the English one.
+        assert!(challenge_met("전체 삭제", "전체 삭제"));
+        assert!(challenge_met("전체 삭제", " 전체 삭제 "));
+        assert!(!challenge_met("전체 삭제", "전체"));
     }
 }

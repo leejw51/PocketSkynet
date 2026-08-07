@@ -978,6 +978,14 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
                 ))));
                 return;
             }
+            // Likewise stage one of the bulk removal: it asks the second
+            // question rather than doing anything.
+            if let ConfirmAction::AskRemoveAll = &action {
+                store.dispatch(Action::OpenModal(Modal::Confirm(remove_all_confirm(
+                    &store,
+                ))));
+                return;
+            }
             busy.set(true);
             error.set(None);
             let store = store.clone();
@@ -998,10 +1006,16 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
                     | ConfirmAction::HideRoom(id) => store.room(id).map(|r| r.room.name.clone()),
                     _ => None,
                 };
+                // How many rooms the bulk removal actually destroyed, for the
+                // toast. Zero for every other action.
+                let mut purged = 0usize;
                 let result: Result<(), String> = match &action {
                     // Handled before the spawn — listed so adding a case here
                     // later cannot silently fall through to "nothing happened".
-                    ConfirmAction::ExitAsAdmin(_) => Ok(()),
+                    ConfirmAction::ExitAsAdmin(_) | ConfirmAction::AskRemoveAll => Ok(()),
+                    ConfirmAction::RemoveAllRooms => {
+                        remove_all_rooms(&store).await.map(|n| purged = n)
+                    }
                     ConfirmAction::LeaveRoom(id) => {
                         client.leave_room(id).await.map_err(|e| e.user_message())
                     }
@@ -1086,6 +1100,21 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
                                 actions::refresh_rooms(store.clone()).await;
                                 on_navigate.emit(Route::Rooms);
                             }
+                            // The streak is spent either way: the question has
+                            // been asked and answered, and the next removal
+                            // starts counting again from nothing.
+                            ConfirmAction::RemoveAllRooms => {
+                                crate::components::room_list::reset_swipe_streak();
+                                let lang = store.language;
+                                store.dispatch(Action::Toast(
+                                    crate::state::ToastKind::Neutral,
+                                    t(lang, Key::rooms_removed_toast)
+                                        .replace("{count}", &purged.to_string()),
+                                    Some(t(lang, Key::room_destroyed_toast_body).into()),
+                                ));
+                                actions::refresh_rooms(store.clone()).await;
+                                on_navigate.emit(Route::Rooms);
+                            }
                             ConfirmAction::EraseLocalData | ConfirmAction::SignOut => {
                                 actions::sign_out(&store);
                                 on_navigate.emit(Route::Login);
@@ -1127,6 +1156,7 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
             title={p.confirm.title.clone()}
             body={p.confirm.body.clone()}
             confirm_label={p.confirm.confirm_label.clone()}
+            challenge={p.confirm.challenge.clone()}
             alternative_label={alternative.map(|a| a.label)}
             {on_alternative}
             busy={*busy}
@@ -1190,6 +1220,61 @@ fn admin_exit_dialog(
             ConfirmAction::LeaveRoom(id.clone()),
         )
     }
+}
+
+/// The second question the bulk removal asks — the one with the typed phrase.
+///
+/// Both stages state the same count, because the count *is* the object here:
+/// no single room's name can stand in for it, and "remove all" without a
+/// number is a confirmation you cannot check before you give it.
+fn remove_all_confirm(store: &Store) -> crate::state::Confirm {
+    remove_all_dialog(store.language, store.removable_rooms().len())
+}
+
+/// Stage two as a function of what stage one counted.
+///
+/// Split from the store lookup for the same reason [`admin_exit_dialog`] is:
+/// the copy and the gate are the behaviour worth pinning, and neither needs a
+/// mounted app to check.
+fn remove_all_dialog(lang: crate::i18n::Lang, count: usize) -> crate::state::Confirm {
+    crate::state::Confirm::new(
+        t(lang, Key::remove_all_title).replace("{count}", &count.to_string()),
+        t(lang, Key::remove_all_body).replace("{count}", &count.to_string()),
+        t(lang, Key::remove_all_confirm).to_owned(),
+        ConfirmAction::RemoveAllRooms,
+    )
+    .requiring(t(lang, Key::remove_all_phrase).to_owned())
+}
+
+/// Destroy every room from [`removable_rooms`], and report honestly.
+///
+/// Sequential, not concurrent: each of these is a purge that reaches the
+/// server's disk (`purge.rs`), and a dozen at once would have them contending
+/// over the same content-addressed files — where the reference check for one
+/// room races the unlink for another. One at a time is also the order the user
+/// would have done it in by hand.
+///
+/// A failure part-way is reported with the count that did succeed, and does
+/// not roll back: there is nothing to roll back to. The rooms already gone are
+/// gone, and a dialog claiming otherwise would be the one thing that is
+/// certainly untrue.
+async fn remove_all_rooms(store: &Store) -> Result<usize, String> {
+    let ids = store.removable_rooms();
+    let client = store.client.clone();
+    let mut done = 0usize;
+    for id in &ids {
+        match client.delete_room(id).await {
+            Ok(_) => done += 1,
+            Err(e) => {
+                let lang = store.language;
+                return Err(t(lang, Key::remove_all_partial)
+                    .replace("{done}", &done.to_string())
+                    .replace("{total}", &ids.len().to_string())
+                    .replace("{error}", &e.user_message()));
+            }
+        }
+    }
+    Ok(done)
 }
 
 // --- browser plumbing ----------------------------------------------------
@@ -1283,5 +1368,54 @@ mod tests {
             c.confirm_label,
             admin_exit_dialog(Lang::En, "engineering", true, &room()).confirm_label
         );
+    }
+
+    #[test]
+    fn removing_everything_cannot_be_done_by_tapping() {
+        let c = remove_all_dialog(Lang::En, 7);
+
+        // The gate is the whole point of this dialog: every other confirmation
+        // here names one room, and a mis-tap costs you that room. This one has
+        // no such anchor, so it must not be reachable by tapping alone.
+        assert_eq!(
+            c.challenge.as_deref(),
+            Some("remove all"),
+            "the phrase must be demanded, not merely suggested"
+        );
+        assert_eq!(c.action, ConfirmAction::RemoveAllRooms);
+        assert_eq!(c.alternative, None, "no milder branch off this one");
+    }
+
+    #[test]
+    fn the_count_is_stated_because_no_room_name_can_stand_in_for_it() {
+        let c = remove_all_dialog(Lang::En, 7);
+        assert!(c.title.contains('7'), "{}", c.title);
+        assert!(c.body.contains('7'), "{}", c.body);
+
+        // And it is the real count, not a fixed word.
+        assert!(remove_all_dialog(Lang::En, 2).title.contains('2'));
+    }
+
+    #[test]
+    fn the_bulk_body_says_the_files_go_and_says_what_is_spared() {
+        // Same standard as the single-room dialog: this is the only place a
+        // user is told the purge reaches the disk. It also has to say what it
+        // will *not* touch, or "all" reads as "including my DMs".
+        let body = remove_all_dialog(Lang::En, 4).body;
+        assert!(body.contains("attachments"), "{body}");
+        assert!(body.contains("pictures"), "{body}");
+        assert!(body.contains("disk"), "{body}");
+        assert!(body.contains("Direct messages"), "{body}");
+    }
+
+    #[test]
+    fn the_typed_phrase_is_in_the_readers_language() {
+        // A Korean reader must not have to type English to answer a Korean
+        // question — and the label has to show the phrase the gate compares
+        // against, or the dialog is a lock with no key.
+        let ko = remove_all_dialog(Lang::Ko, 3);
+        let en = remove_all_dialog(Lang::En, 3);
+        assert_ne!(ko.challenge, en.challenge);
+        assert!(ko.challenge.is_some_and(|p| !p.is_empty()));
     }
 }

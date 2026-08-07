@@ -689,6 +689,13 @@ mod swipe {
         /// at the moment of *intent* would grow on confirmations the user
         /// backed out of.
         static FROM_SWIPE: Cell<bool> = const { Cell::new(false) };
+
+        /// Whether this streak has already been asked the "remove the rest?"
+        /// question. Deliberately not persisted, unlike the streak itself:
+        /// what it guards against is being nagged inside one sitting, and a
+        /// user who reloads and goes back to removing rooms is starting a
+        /// sitting where the question is worth asking again.
+        static ASKED: Cell<bool> = const { Cell::new(false) };
     }
 
     /// Which axis a drag has committed to, once it has moved far enough to
@@ -861,6 +868,7 @@ mod swipe {
             confirm_label: t(lang, Key::hide_room).into(),
             action: ConfirmAction::HideRoom(r.id().clone()),
             alternative: None,
+            challenge: None,
         }
     }
 
@@ -906,6 +914,7 @@ mod swipe {
     /// gesture; this breaks it.
     pub fn reset_streak() {
         FROM_SWIPE.with(|c| c.set(false));
+        ASKED.with(|c| c.set(false));
         set_streak(0);
     }
 
@@ -914,13 +923,44 @@ mod swipe {
     pub fn settle(store: &Store) {
         if !FROM_SWIPE.with(|c| c.replace(false)) {
             set_streak(0);
+            ASKED.with(|c| c.set(false));
             return;
         }
         let n = streak().saturating_add(1);
         set_streak(n);
+
+        // Three in a row is the moment the room list stops looking like
+        // somebody tidying and starts looking like somebody leaving, so it is
+        // the moment to ask the larger question rather than watch them answer
+        // the small one another nine times.
+        //
+        // Once per streak. A question re-asked on the fourth removal and the
+        // fifth is not a safeguard — it is a thing people learn to click
+        // through, which is exactly the reflex the typed phrase in stage two
+        // is there to defeat.
+        // Order matters: `ASKED` is claimed by the check that reads it, so the
+        // conditions that cost nothing come first. Reversed, a streak run up
+        // with nothing left to remove would burn the question without ever
+        // having asked it.
+        let removable = store.removable_rooms().len();
+        if n >= EXPRESS_AFTER && removable > 0 && !ASKED.with(|c| c.replace(true)) {
+            store.dispatch(Action::OpenModal(Modal::Confirm(Confirm::new(
+                t(store.language, Key::remove_rest_title).to_owned(),
+                t(store.language, Key::remove_rest_body).replace("{count}", &removable.to_string()),
+                t(store.language, Key::remove_rest_confirm).to_owned(),
+                ConfirmAction::AskRemoveAll,
+            ))));
+            return;
+        }
+
         // Announced once, at the moment it becomes true, and never again. A
         // shortcut you are reminded of every time is not a shortcut.
-        if n == EXPRESS_AFTER && !taught() {
+        //
+        // `>=`, not `==`: the removal that hits three spends its moment on the
+        // question above, and a tip toast sliding in under a modal about
+        // destroying every room is noise at the worst time. It waits for the
+        // next removal and gets the screen to itself.
+        if n >= EXPRESS_AFTER && !taught() {
             set_taught();
             store.dispatch(Action::Toast(
                 crate::state::ToastKind::Info,
@@ -1343,6 +1383,7 @@ fn drawer(
                         ConfirmAction::LeaveRoom(r.id().clone())
                     },
                     alternative: None,
+                    challenge: None,
                 }) }
             }
         </div>

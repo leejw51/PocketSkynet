@@ -137,6 +137,7 @@ pub fn manage_admins(p: &AdminsProps) -> Html {
                                             action: ConfirmAction::RemoveAdmin(
                                                 room_id.clone(), who.clone()),
                                             alternative: None,
+                                            challenge: None,
                                         })));
                                     } else {
                                         mutate.emit((who.clone(), false));
