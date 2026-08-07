@@ -144,6 +144,11 @@ icons! {
     type_size => html! { <><path d="m3.5 18 4.5-11 4.5 11"/><path d="M5.4 14.4h5.2"/><path d="m14.5 18 3-7 3 7"/><path d="M15.9 15.6h3.2"/></> };
     // A capital T on a baseline: the typeface picker.
     type_face => html! { <><path d="M5 6.5V4.5h14v2"/><path d="M12 4.5V19"/><path d="M9 19h6"/></> };
+    // A speedometer: the files dashboard. An arc with a needle leaning into
+    // the high side — throughput and disk pressure in one glyph, and nothing
+    // like `refresh` (a closed circle) or `moon_sun` (a spoked one), its
+    // neighbours in the top bar.
+    gauge => html! { <><path d="M4.5 16.5a8.5 8.5 0 1 1 15 0"/><path d="M12 16.5 16.2 10"/><path d="M12 16.5h.01"/></> };
     // A painter's palette: the skin picker. Deliberately not a second
     // brightness glyph — `moon_sun` next door already owns that idea, and two
     // rows in the same list whose icons both mean "how it looks" is how a

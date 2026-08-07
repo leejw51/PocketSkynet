@@ -96,6 +96,258 @@ pub struct AdminRoom {
     pub created_at: Option<String>,
 }
 
+// ------------------------------------------------------------- dashboard ---
+
+/// The storage headline numbers (`GET /api/admin/storage`, `totals`).
+///
+/// Two byte counts on purpose: storage is content-addressed server-side, so
+/// two rows can share one blob. `logical_bytes` is what people uploaded,
+/// `disk_bytes` what the disk pays — the gap between them *is* the dedupe.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageTotals {
+    #[serde(default)]
+    pub files: i64,
+    #[serde(default)]
+    pub blobs: i64,
+    #[serde(default)]
+    pub logical_bytes: i64,
+    #[serde(default)]
+    pub disk_bytes: i64,
+    #[serde(default)]
+    pub rooms_with_files: i64,
+}
+
+/// The categories the server classifies into, in the order every chart,
+/// legend and filter shows them. Mirrors the server's `CATEGORIES` — one
+/// contract in two places, pinned by the dashboard rendering the server's
+/// fixed-order slices against this list.
+pub const CATEGORY_ORDER: [&str; 6] = ["image", "video", "audio", "document", "archive", "other"];
+
+/// One slice of the by-kind breakdown. The server sends every category in a
+/// fixed order, zeros included, so the chart never reshuffles.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategorySlice {
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub files: i64,
+    #[serde(default)]
+    pub bytes: i64,
+}
+
+/// One room's share of the disk.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomUsage {
+    #[serde(default)]
+    pub room_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub files: i64,
+    #[serde(default)]
+    pub bytes: i64,
+}
+
+/// One attachment, as the operator's listing sees it: metadata only. There is
+/// deliberately no URL here and no way to build one that works — the bytes
+/// stay behind the room-membership check, admin or not.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminFile {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub filename: String,
+    #[serde(default)]
+    pub extension: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub size_bytes: i64,
+    #[serde(default)]
+    pub room_id: String,
+    #[serde(default)]
+    pub room_name: String,
+    #[serde(default)]
+    pub uploader: String,
+    #[serde(default)]
+    pub uploader_name: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+/// One day of upload volume, UTC. Days with no uploads are absent; the chart
+/// fills the gaps, because a padded wire format is just a bigger wire format.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthPoint {
+    #[serde(default)]
+    pub day: String,
+    #[serde(default)]
+    pub files: i64,
+    #[serde(default)]
+    pub bytes: i64,
+}
+
+/// One direction of transfer traffic, as integer counters. Rates are computed
+/// client-side (`bytes / millis`), which keeps the wire free of floats and
+/// the arithmetic host-testable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowStats {
+    #[serde(default)]
+    pub transfers: i64,
+    #[serde(default)]
+    pub bytes: i64,
+    #[serde(default)]
+    pub millis: i64,
+    #[serde(default)]
+    pub recent_bytes: i64,
+    #[serde(default)]
+    pub recent_millis: i64,
+}
+
+/// The in-process transfer counters — since server start, gone at restart.
+/// The dashboard says so out loud rather than pretending they are history.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    #[serde(default)]
+    pub since_ms: i64,
+    #[serde(default)]
+    pub recent_window_ms: i64,
+    #[serde(default)]
+    pub uploads: FlowStats,
+    #[serde(default)]
+    pub downloads: FlowStats,
+}
+
+/// Everything `GET /api/admin/storage` reports, ready for one screen.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminStorage {
+    #[serde(default)]
+    pub totals: StorageTotals,
+    #[serde(default)]
+    pub categories: Vec<CategorySlice>,
+    #[serde(default)]
+    pub rooms: Vec<RoomUsage>,
+    #[serde(default)]
+    pub largest: Vec<AdminFile>,
+    #[serde(default)]
+    pub growth: Vec<GrowthPoint>,
+    #[serde(default)]
+    pub activity: Activity,
+}
+
+/// The rooms, by what they are (`GET /api/admin/stats`, `rooms`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomComposition {
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub channels: i64,
+    #[serde(default)]
+    pub direct_messages: i64,
+    #[serde(default)]
+    pub encrypted: i64,
+    #[serde(default)]
+    pub plaintext: i64,
+}
+
+/// The accounts, by standing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeopleStats {
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub suspended: i64,
+    #[serde(default)]
+    pub in_rooms: i64,
+}
+
+/// The conversation volume — counts, never a word of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageStats {
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub thread_replies: i64,
+    #[serde(default)]
+    pub reactions: i64,
+}
+
+/// One day of message volume, UTC — same contract as [`GrowthPoint`]:
+/// silent days are absent and the chart restores them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageDay {
+    #[serde(default)]
+    pub day: String,
+    #[serde(default)]
+    pub messages: i64,
+}
+
+/// One room's share of the conversation. Names and counts — the same fields
+/// the admin room listing shows, and nothing a conversation could leak
+/// through.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusyRoom {
+    #[serde(default)]
+    pub room_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub members: i64,
+    #[serde(default)]
+    pub messages: i64,
+    #[serde(default)]
+    pub has_encryption: bool,
+}
+
+/// Heads connected right now — two integers, deliberately not a roster:
+/// *who* is online is knowledge scoped to shared rooms, admin or not.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresenceCounts {
+    #[serde(default)]
+    pub online: i64,
+    #[serde(default)]
+    pub away: i64,
+}
+
+/// Everything `GET /api/admin/stats` reports — the Skynet Dashboard's
+/// whole-server half.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminStats {
+    #[serde(default)]
+    pub uptime_seconds: i64,
+    #[serde(default)]
+    pub presence: PresenceCounts,
+    #[serde(default)]
+    pub rooms: RoomComposition,
+    #[serde(default)]
+    pub people: PeopleStats,
+    #[serde(default)]
+    pub messages: MessageStats,
+    #[serde(default)]
+    pub activity: Vec<MessageDay>,
+    #[serde(default)]
+    pub busiest: Vec<BusyRoom>,
+}
+
 #[derive(Serialize)]
 struct SuspendReq<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,6 +376,27 @@ impl Client {
 
     pub async fn admin_rooms(&self) -> ApiResult<Vec<AdminRoom>> {
         self.send(Method::GET, "/api/admin/rooms").await
+    }
+
+    /// The files dashboard's aggregates: storage totals, the by-kind
+    /// breakdown, per-room usage, the largest attachments, a month of upload
+    /// volume, and the in-process transfer counters.
+    pub async fn admin_storage(&self) -> ApiResult<AdminStorage> {
+        self.send(Method::GET, "/api/admin/storage").await
+    }
+
+    /// The deployment in counts: rooms by kind and encryption, accounts,
+    /// message volume and its daily series, the loudest rooms, live
+    /// presence head-counts, and uptime.
+    pub async fn admin_stats(&self) -> ApiResult<AdminStats> {
+        self.send(Method::GET, "/api/admin/stats").await
+    }
+
+    /// Every attachment's metadata, newest first. Sorting and filtering are
+    /// the dashboard's job — the response is capped, not paged, the same
+    /// scale decision the other admin listings state.
+    pub async fn admin_files(&self) -> ApiResult<Vec<AdminFile>> {
+        self.send(Method::GET, "/api/admin/files").await
     }
 
     /// Suspend an account. Takes effect on the target's *existing* tokens, not

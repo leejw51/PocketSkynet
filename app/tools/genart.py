@@ -902,6 +902,28 @@ MANIFEST: list[dict[str, str]] = [
         ),
     },
     {
+        # The Skynet Dashboard's header emblem (components/dashboard.rs,
+        # /dashboard). The machine as archivist: what it keeps, kept in
+        # order. Every skin redraws it — a 44px emblem sits beside the page
+        # title, and a chrome fallback inside the cute skin would read as a
+        # rendering bug, the profile-gallery lesson at smaller scale.
+        "name": "dashboard-emblem",
+        "themeless": True,
+        "cinematic": True,
+        "max_edge": 512,
+        "prompt": (
+            "Ultra realistic cinematic emblem, tight square crop: an "
+            "industrial chrome data-archive core — a vertical stack of "
+            "gleaming metal storage platters clamped in a riveted frame, one "
+            "platter drawn halfway out and edge-lit with thin cyan circuit "
+            "traces, a single small calm cyan optic lens at the hub of the "
+            "frame, Terminator-film industrial machine design, dark "
+            "background, dramatic rim lighting, symmetrical head-on framing, "
+            "reads clearly as an icon at small sizes, photorealistic 8k, no "
+            "text, no letters, no watermark."
+        ),
+    },
+    {
         # The AI Banker's face for the executing agent era: not the friendly
         # flat-vector teller (that was the advice-only banker) but a chrome
         # endoskeleton in a banker's collar — it moves money now, and the
@@ -1230,6 +1252,14 @@ CUTE_PROMPTS: dict[str, str] = {
         "visor, red bead antenna, symmetrical head-on framing, reads clearly "
         "as an icon at small sizes. " + CUTE_STYLE
     ),
+    "dashboard-emblem": (
+        "Emblem, tight square crop: a plump rounded stack of three glossy "
+        "white-and-cobalt data discs held in a soft cradle frame, the middle "
+        "disc pulled halfway out and glowing warm gold, and a small cute "
+        "blue-and-white robot head peeking over the top of the stack with "
+        "its wide warm gold visor. Symmetrical head-on framing, reads "
+        "clearly as an icon at small sizes. " + CUTE_STYLE
+    ),
     "banker-core": (
         "Bust portrait of a small cute robot banker, head-on: glossy cobalt "
         "helmet over white ceramic plating, wide warm gold visor, wearing a "
@@ -1504,6 +1534,15 @@ HUMAN_PROMPTS: dict[str, str] = {
         "glowing core, thin light lines along the walls, volumetric haze, very "
         "dark toward the left and right edges so a large number can sit on top "
         "of it. Cool, quiet and secure. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+    ),
+    "dashboard-emblem": (
+        "Emblem, tight square crop: the head and shoulders of a calm young "
+        "woman archivist with a low dark bun, seen head-on in front of a "
+        "tall backlit archive shelf of softly glowing indigo record spines, "
+        "one spine drawn halfway out beside her under cyan screen-light. "
+        "Ordinary human skin and natural human eyes, nothing mechanical "
+        "about her. Symmetrical framing, reads clearly as an icon at small "
+        "sizes. " + HUMAN_FACES + " " + HUMAN_STYLE
     ),
     "bank-emblem": (
         "Emblem, tight square crop: the head of a calm young man with short "

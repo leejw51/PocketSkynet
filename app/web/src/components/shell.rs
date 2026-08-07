@@ -444,6 +444,17 @@ pub fn shell(p: &ShellProps) -> Html {
                         >
                             { icons::shield(18) }
                         </button>
+                        // The files dashboard, beside the console it belongs
+                        // to — same courtesy gate, same server-side truth.
+                        <button
+                            type="button"
+                            class="topcoat-icon-button--quiet fn-topbar__wide"
+                            aria-label={t(lang, Key::dash_title)}
+                            title={t(lang, Key::dash_title)}
+                            onclick={go(Route::Dashboard, p.on_navigate.clone())}
+                        >
+                            { icons::gauge(18) }
+                        </button>
                     }
                     <button
                         type="button"
@@ -549,7 +560,14 @@ pub fn shell(p: &ShellProps) -> Html {
 /// rather than on `Route`, because it is a fact about this five-slot bar and
 /// not about the routes themselves — the two-pane tier shows all of these as
 /// top-bar buttons and has no More at all.
-const IN_MORE: [&str; 5] = ["invites", "knowledge", "publish", "bank", "settings"];
+const IN_MORE: [&str; 6] = [
+    "invites",
+    "knowledge",
+    "publish",
+    "bank",
+    "dashboard",
+    "settings",
+];
 
 /// One bottom-nav item.
 ///
