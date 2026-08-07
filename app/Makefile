@@ -7,6 +7,8 @@
 #   make stop     Stop a running server
 #   make restart  Stop it, rebuild, and start it again
 #   make refresh  Rebuild just the web UI — no server restart needed
+#   make custom   Run this worktree's own server — port and data dir derived
+#                 from the worktree name, so parallel checkouts never collide
 #   make build    Release build: core, server, and the WASM client
 #   make gui      Run the desktop app
 #   make package  Bundle the desktop app as an installer
@@ -90,7 +92,8 @@ CARGO_PROFILE_FLAG :=
 TRUNK_PROFILE_FLAG :=
 endif
 
-.PHONY: help start https http http3 stop restart refresh build gui package test \
+.PHONY: help start https http http3 stop restart refresh custom custom-stop custom-restart \
+        build gui package test \
         web server tools dev \
         unittest integrationtest test-integration-rust test-integration-python test-wasm \
         package-installer verify fmt format fmt-check fmt-tools lint clean distclean assets assets-force assets-cute assets-human db-reset
@@ -106,6 +109,9 @@ help: ## Show this help
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  Variables: PORT=$(PORT) HOST=$(HOST) DATA_DIR=$(DATA_DIR) PROFILE=$(PROFILE)"
+	@echo ""
+	@echo "  Override per run:  make start PORT=9200 DATA_DIR=/path/to/data"
+	@echo "  Per git worktree:  make custom   (port and data dir derived from the worktree name)"
 	@echo ""
 
 ## ---------------------------------------------------------------- build ----
@@ -183,6 +189,46 @@ stop: ## Stop a running server
 restart: ## Stop a running server, rebuild, and start it again
 	@$(MAKE) --no-print-directory stop
 	@$(MAKE) --no-print-directory start
+
+## --------------------------------------------------------------- custom ----
+
+# One server per git worktree, side by side. Several agents can each take a
+# worktree and run their own instance without coordinating ports or data
+# directories — both are derived from the worktree's directory name:
+#
+#   git worktree add ../PocketSkynet-agent1 -b agent1
+#   cd ../PocketSkynet-agent1/app && make custom
+#
+# The same name always derives the same port (9100–9999), so a restart lands
+# where it was, and each instance keeps its database and TLS certificate in
+# its own ~/.pocketskynet-<worktree>. Two names *can* hash to the same port;
+# `make custom PORT=… DATA_DIR=…` overrides either derivation when they do.
+WT_NAME := $(shell basename "$$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+WT_PORT := $(shell echo $$(( 9100 + $$(printf '%s' "$(WT_NAME)" | cksum | cut -d' ' -f1) % 900 )))
+
+# An explicit PORT/DATA_DIR on the command line beats the derivation; the
+# plain `?=` defaults above must not, so the choice keys on origin.
+ifeq ($(origin PORT),command line)
+CUSTOM_PORT := $(PORT)
+else
+CUSTOM_PORT := $(WT_PORT)
+endif
+ifeq ($(origin DATA_DIR),command line)
+CUSTOM_DATA := $(DATA_DIR)
+else
+CUSTOM_DATA := $(HOME)/.pocketskynet-$(WT_NAME)
+endif
+
+custom: ## Run this worktree's own server — port and data dir derived from the worktree name
+	@echo "==> worktree '$(WT_NAME)': PORT=$(CUSTOM_PORT) DATA_DIR=$(CUSTOM_DATA)"
+	@$(MAKE) --no-print-directory start PORT=$(CUSTOM_PORT) DATA_DIR=$(CUSTOM_DATA)
+
+custom-stop: ## Stop this worktree's server
+	@$(MAKE) --no-print-directory stop PORT=$(CUSTOM_PORT)
+
+custom-restart: ## Stop this worktree's server, rebuild, and start it again
+	@$(MAKE) --no-print-directory custom-stop
+	@$(MAKE) --no-print-directory custom
 
 dev: tools ## Hot-reloading development mode
 	@mkdir -p $(DATA_DIR)
