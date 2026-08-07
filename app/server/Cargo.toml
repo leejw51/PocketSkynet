@@ -20,6 +20,11 @@ anyhow = "1"
 mdns-sd = "0.13"
 hex.workspace = true
 base64.workspace = true
+# Scratch-directory names in test helpers, and nothing else. Every secret this
+# server issues — nonces, tickets, invite and webhook tokens, encryption salts,
+# the JWT signing key — comes from `pocketskynet_core::random` instead, so this
+# entry is not a second entropy source to audit. If a use of it ever appears
+# outside a `tempdir()`, that is the thing to look at.
 rand.workspace = true
 sha2.workspace = true
 
