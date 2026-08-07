@@ -39,6 +39,7 @@ mod privy;
 mod progression;
 mod realtime;
 mod route;
+mod rooms;
 mod rpc;
 mod secrets;
 mod session;

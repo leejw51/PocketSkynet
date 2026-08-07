@@ -75,13 +75,25 @@ fn channel_kind() -> String {
     RoomKind::CHANNEL.to_owned()
 }
 
-/// The three room kinds, as the wire spells them.
+/// The room kinds, as the wire spells them.
+///
+/// Six of them now: the three a person makes, and the three the server
+/// provisions for every account. The built-in three are kinds rather than a
+/// flag beside `kind` for the reason `server/src/db/models.rs` spells out at
+/// length — `kind` already answers "which verbs apply and which list is this
+/// filed under", and a parallel boolean would answer half of it.
 pub struct RoomKind;
 
 impl RoomKind {
     pub const CHANNEL: &'static str = "channel";
     pub const DM: &'static str = "dm";
     pub const GROUP_DM: &'static str = "group_dm";
+    /// The owner's private notebook — one member, forever.
+    pub const NOTE: &'static str = "note";
+    /// The owner and their own AI agent.
+    pub const JARVIS: &'static str = "jarvis";
+    /// The owner and this server's administrators.
+    pub const LOBBY: &'static str = "lobby";
 }
 
 impl Room {
@@ -90,6 +102,12 @@ impl Room {
     /// so a third kind of DM later cannot leave one of them behind.
     pub fn is_direct(&self) -> bool {
         self.kind == RoomKind::DM || self.kind == RoomKind::GROUP_DM
+    }
+
+    /// Whether the server provisioned this room rather than a person creating
+    /// it. See [`crate::rooms::StaticRoom`] for what each one is.
+    pub fn is_static(&self) -> bool {
+        crate::rooms::StaticRoom::from_kind(&self.kind).is_some()
     }
 }
 
