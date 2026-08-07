@@ -1,6 +1,6 @@
 # PocketSkynet — Advanced Communication for Humans and AI
 
-*Date: 2026-08-06. Direction: not a Slack clone — a communication platform
+*Date: 2026-08-07. Direction: not a Slack clone — a communication platform
 where humans and AI agents are equal participants. Supersedes the stale parts
 of [PARITY.md](PARITY.md).*
 
@@ -8,6 +8,10 @@ of [PARITY.md](PARITY.md).*
 exist as protocol, storage *and* interface, with a server-admin role beside
 them, and presence now says who is actually there. §0 records what that means
 concretely.
+
+**And deleting a room now deletes it.** Not a roadmap item — a promise the
+product was already making and not keeping, found while auditing §3's history
+protection. §0b.
 
 ## 0. What shipped in step 1
 
@@ -118,6 +122,55 @@ about to type gets read now or tomorrow morning. Channel rows have none: a room
 is not somewhere anybody *is*, and a dot there would either invent a status for
 a group or quietly pick one member to speak for it.
 
+## 0b. What shipped out of band — a deletion that reaches the disk
+
+`DELETE /api/rooms/{id}` deleted rows. The cascade in `schema.sql` took the
+messages, keys, members and attachment *rows*, and left every byte where it
+was. Both file stores are content-addressed — a file is named by the SHA-256 of
+its content and served to anyone holding the URL, with no membership check —
+so a room deleted only in the database stayed readable by exactly the people
+the deletion was meant to cut off. A content-addressed URL is a capability, and
+deleting the room removed the thing it could have been revoked with.
+
+That is not a missing feature; it is the difference between what "delete" says
+and what it did. Hence out of order, and hence in this document at all.
+
+- **gather → delete → unlink** (`server/src/purge.rs`). Collect the room's
+  attachments, media and in-flight upload temp files while the rows still name
+  them; delete the room; unlink whatever nothing surviving still references.
+  The reference check runs *after* the delete, so the room's own rows cannot
+  vote to keep their own bytes.
+- **Shared bytes survive.** Content-addressing means the same file may be
+  another room's attachment, somebody's avatar, or a taught note. A purge must
+  not reach through the room it was asked about into one it was not.
+- **`message_media` closes the encrypted case.** Hosted media has no owning row
+  — the only reference is a URL inside a message. The server can read that out
+  of plaintext; in an encrypted room it holds ciphertext and never can, so the
+  client declares the filenames its message shows. The same bargain mentions
+  make: the declaration says "this room shows these bytes", which the URL
+  already said to anyone holding it, while the message itself stays sealed.
+  Malformed declarations are a 400, never a silent drop — a dropped declaration
+  is a file that outlives the room that showed it.
+- **The residue is stated, not hidden.** A picture named only by an *encrypted*
+  message in another room, sent before `message_media` existed, is invisible to
+  the reference check and will be unlinked. Destroying a room is a request to
+  be forgotten, and the alternative is answering it with "no, because
+  ciphertext somewhere might mention those bytes".
+- **Failures are counted, never fatal.** The response carries `purged`
+  (`attachments` / `media` / `uploads` / `failed`). By unlink time the room is
+  already gone, so a 500 would tell the caller the one thing that is certainly
+  untrue.
+
+On screen, destroying became reachable only through a dialog already answered
+once. An admin who confirms *Leave* is asked *Destroy {room} as well?*; the
+last admin — whose leave the server refuses anyway — is told to promote
+somebody first instead of being offered a button that only ever errors. And
+three removals in a row prompts once for the rest, behind a second dialog whose
+confirm button stays dead until the phrase *remove all* is typed. Every other
+confirmation in the app names one room, so a mis-tap costs you that room; the
+bulk one has no such anchor. It destroys the group rooms you administer and
+leaves DMs and other people's rooms alone. DESIGN.md §15, API.md §6.5.5.
+
 ## Where it stands today
 
 PocketSkynet is a self-hosted, wallet-authenticated messenger (Rust/axum +
@@ -198,7 +251,10 @@ Lighter than enterprise compliance, but still needed for a real team:
   table is a table whose first row has to come from somewhere.
 - **Invite links / codes** — still open. Invites are by wallet address only. A
   link or QR that onboards a new member is table stakes.
-- ~~**History protection**~~ — **done.** Purging a room is admin-only.
+- ~~**History protection**~~ — **done.** Purging a room is admin-only, and
+  purging now means the disk as well as the database: the files a room held are
+  unlinked unless something surviving still references them (§0b). Auditing
+  this item is what turned up the gap.
 - ~~**Presence**~~ — **done.** Online / away / offline, derived from live
   connections rather than stored, scoped to shared rooms and filtered by blocks
   both ways. §0a.
@@ -253,6 +309,10 @@ Lighter than enterprise compliance, but still needed for a real team:
    because it cost no schema: the hub already knew who was connected, and every
    piece of the authorisation it needed — shared rooms, and blocks in both
    directions — was already written for typing.
+
+Not on this list, and shipped anyway: the room purge (§0b). It earned the queue
+jump by not being a feature — the product already told people a deleted room was
+deleted, and the files said otherwise.
 
 The wallet identity, E2EE, on-chain payment rails, and shared knowledge base
 are the platform's edge — every step above builds on them rather than
