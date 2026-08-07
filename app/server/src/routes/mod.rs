@@ -152,17 +152,36 @@ fn api_router(state: &AppState) -> Router<AppState> {
     // upload makes a request per chunk by design, so metering it at 100/min
     // throttles a large file into failing — the meter that matters for an
     // upload is bytes, and that is bounded elsewhere.
-    let uploads = uploads::router().layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        crate::ratelimit::upload,
-    ));
+    //
+    // The metrics layer sits inside the rate limit, so a 429 is never counted
+    // as traffic — only requests that actually moved bytes reach it.
+    let uploads = uploads::router()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::metrics::track_uploads,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::ratelimit::upload,
+        ));
 
     // Media serving likewise — a playing <video> is a stream of Range
     // requests, and metering those against the general budget made one film
     // exhaust its viewer's entire allowance and 429 everything after it.
-    let media = files::media_router().merge(images::media_router()).layer(
-        axum::middleware::from_fn_with_state(state.clone(), crate::ratelimit::media),
-    );
+    //
+    // Download metering wraps the *files* media router only: attachments are
+    // what the dashboard reports on, and inline chat images are noise beside
+    // them.
+    let media = files::media_router()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::metrics::track_downloads,
+        ))
+        .merge(images::media_router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::ratelimit::media,
+        ));
 
     // The webhook post route has no wallet behind it, so the general budget
     // would let one CI runner spend a whole office's allowance (they share an
@@ -186,7 +205,13 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(messages::router())
         .merge(mentions::router())
         .merge(presence::router())
-        .merge(files::router())
+        // The same upload meter as the chunked router: this one carries the
+        // single-shot `POST /rooms/{id}/files`, which is a whole file in one
+        // request. The middleware ignores everything else this router serves.
+        .merge(files::router().layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::metrics::track_uploads,
+        )))
         .merge(gallery::router())
         .merge(images::router())
         .merge(search::router())

@@ -872,6 +872,58 @@ strings! {
     (admin_message_many, "{n} messages", "메시지 {n}개", "メッセージ{n}件", "{n} 則訊息", "{n} zpráv", "{n} mensajes", "{n} 条消息", "{n} Nachrichten"),
     (admin_totals, "{users} people · {channels} channels · {dms} direct · {messages} messages", "사용자 {users}명 · 채널 {channels}개 · 다이렉트 {dms}개 · 메시지 {messages}개", "ユーザー{users}人 · チャンネル{channels}個 · ダイレクト{dms}個 · メッセージ{messages}件", "{users} 個用戶 · {channels} 個頻道 · {dms} 個私訊 · {messages} 則訊息", "{users} lidí · {channels} kanálů · {dms} přímých · {messages} zpráv", "{users} personas · {channels} canales · {dms} directos · {messages} mensajes", "{users} 位用户 · {channels} 个频道 · {dms} 个私信 · {messages} 条消息", "{users} Personen · {channels} Kanäle · {dms} direkt · {messages} Nachrichten"),
 
+    // --- Files dashboard (admin) ---------------------------------------------
+    // Column order, as everywhere: en, ko, ja, yue, cs, es, zh, de.
+    (dash_title, "Files dashboard", "파일 대시보드", "ファイルダッシュボード", "檔案儀表板", "Přehled souborů", "Panel de archivos", "文件仪表盘", "Datei-Dashboard"),
+    (dash_subtitle, "Every attachment on this server — metadata only. Opening a file still requires being in its room.", "이 서버의 모든 첨부 파일 — 메타데이터만 표시됩니다. 파일을 열려면 여전히 해당 방의 멤버여야 합니다.", "このサーバー上のすべての添付ファイル — メタデータのみ。ファイルを開くには、その部屋のメンバーである必要があります。", "呢部伺服器上所有附件 — 只顯示元數據。要開檔案仍然要係嗰個房嘅成員。", "Všechny přílohy na tomto serveru — pouze metadata. K otevření souboru je stále potřeba být v jeho místnosti.", "Todos los adjuntos de este servidor — solo metadatos. Para abrir un archivo sigue haciendo falta estar en su sala.", "此服务器上的所有附件 — 仅显示元数据。要打开文件，仍需是该聊天室的成员。", "Alle Anhänge auf diesem Server — nur Metadaten. Zum Öffnen einer Datei muss man weiterhin Mitglied ihres Raums sein."),
+    (dash_error, "Couldn't load the dashboard", "대시보드를 불러오지 못했습니다", "ダッシュボードを読み込めませんでした", "載入唔到儀表板", "Přehled se nepodařilo načíst", "No se pudo cargar el panel", "无法加载仪表盘", "Dashboard konnte nicht geladen werden"),
+    (dash_empty_title, "No files yet", "아직 파일이 없습니다", "まだファイルがありません", "仲未有檔案", "Zatím žádné soubory", "Aún no hay archivos", "还没有文件", "Noch keine Dateien"),
+    (dash_empty_desc, "When someone attaches a file to a room, it shows up here.", "누군가 방에 파일을 첨부하면 여기에 표시됩니다.", "誰かが部屋にファイルを添付すると、ここに表示されます。", "有人喺房入面附加檔案，就會喺呢度顯示。", "Když někdo do místnosti přiloží soubor, objeví se zde.", "Cuando alguien adjunte un archivo a una sala, aparecerá aquí.", "当有人在聊天室中附加文件时，会显示在这里。", "Wenn jemand eine Datei an einen Raum anhängt, erscheint sie hier."),
+    (dash_disk_used, "Disk used", "디스크 사용량", "ディスク使用量", "已用磁碟", "Využitý disk", "Disco usado", "磁盘用量", "Belegter Speicher"),
+    // `{files}` arrives pre-counted (`dash_file_one`/`dash_file_many`), so
+    // the sentence never says "1 files" in any language.
+    (dash_disk_foot, "{files} · {blobs} on disk after dedupe", "{files} · 중복 제거 후 {blobs}개", "{files} · 重複排除後{blobs}件", "{files} · 去重後 {blobs} 個", "{files} · po deduplikaci {blobs}", "{files} · {blobs} en disco tras deduplicar", "{files} · 去重后 {blobs} 个", "{files} · nach Dedupe {blobs} auf der Platte"),
+    (dash_rooms_with_files, "Rooms holding files", "파일이 있는 방", "ファイルのある部屋", "有檔案嘅房", "Místnosti se soubory", "Salas con archivos", "有文件的聊天室", "Räume mit Dateien"),
+    (dash_rooms_foot, "{bytes} uploaded in total", "총 업로드 {bytes}", "合計アップロード {bytes}", "總共上載 {bytes}", "celkem nahráno {bytes}", "{bytes} subidos en total", "共上传 {bytes}", "insgesamt {bytes} hochgeladen"),
+    (dash_received, "Received since start", "시작 후 수신", "起動後の受信", "啟動後接收", "Přijato od startu", "Recibido desde el inicio", "启动以来接收", "Empfangen seit Start"),
+    (dash_served, "Served since start", "시작 후 전송", "起動後の送信", "啟動後送出", "Odesláno od startu", "Servido desde el inicio", "启动以来发送", "Ausgeliefert seit Start"),
+    (dash_avg_rate, "average {rate}", "평균 {rate}", "平均 {rate}", "平均 {rate}", "průměr {rate}", "promedio {rate}", "平均 {rate}", "Durchschnitt {rate}"),
+    (dash_breakdown, "What's stored", "저장된 것", "保存されているもの", "存咗啲乜", "Co je uloženo", "Qué hay guardado", "存储内容", "Was gespeichert ist"),
+    (dash_growth, "Uploads by day", "일별 업로드", "日別アップロード", "每日上載", "Nahrávání po dnech", "Subidas por día", "每日上传", "Uploads pro Tag"),
+    (dash_growth_total, "{bytes} in {files} over 30 days", "30일 · {files} · {bytes}", "30日間 · {files} · {bytes}", "30 日 · {files} · {bytes}", "{bytes} · {files} · za 30 dní", "{bytes} en {files} en 30 días", "30 天 · {files} · {bytes}", "{bytes} in {files} über 30 Tage"),
+    (dash_growth_empty, "No uploads in the last 30 days.", "최근 30일간 업로드가 없습니다.", "過去30日間アップロードはありません。", "最近 30 日冇上載。", "Za posledních 30 dní žádná nahrání.", "Sin subidas en los últimos 30 días.", "最近 30 天没有上传。", "Keine Uploads in den letzten 30 Tagen."),
+    (dash_growth_label, "Upload volume per day over the last {days} days, {bytes} in total", "최근 {days}일간 일별 업로드 용량, 총 {bytes}", "過去{days}日間の日別アップロード量、合計{bytes}", "最近 {days} 日每日上載量，總共 {bytes}", "Denní objem nahrávání za posledních {days} dní, celkem {bytes}", "Volumen de subida por día en los últimos {days} días, {bytes} en total", "最近 {days} 天每日上传量，共 {bytes}", "Tägliches Upload-Volumen der letzten {days} Tage, insgesamt {bytes}"),
+    (dash_growth_peak, "peak {bytes}", "최대 {bytes}", "最大 {bytes}", "最高 {bytes}", "maximum {bytes}", "pico {bytes}", "峰值 {bytes}", "Spitze {bytes}"),
+    (dash_rooms_card, "Heaviest rooms", "용량이 큰 방", "容量の大きい部屋", "最重嘅房", "Nejtěžší místnosti", "Salas más pesadas", "占用最多的聊天室", "Schwerste Räume"),
+    (dash_largest, "Largest files", "가장 큰 파일", "最大のファイル", "最大嘅檔案", "Největší soubory", "Archivos más grandes", "最大的文件", "Größte Dateien"),
+    (dash_activity, "Transfer activity", "전송 활동", "転送アクティビティ", "傳輸活動", "Přenosová aktivita", "Actividad de transferencia", "传输活动", "Übertragungsaktivität"),
+    (dash_uploads, "Uploads", "업로드", "アップロード", "上載", "Nahrávání", "Subidas", "上传", "Uploads"),
+    (dash_downloads, "Downloads", "다운로드", "ダウンロード", "下載", "Stahování", "Descargas", "下载", "Downloads"),
+    (dash_transfers, "Transfers", "전송 횟수", "転送回数", "傳輸次數", "Přenosy", "Transferencias", "传输次数", "Übertragungen"),
+    (dash_rate_avg, "Average", "평균", "平均", "平均", "Průměr", "Promedio", "平均", "Durchschnitt"),
+    (dash_rate_recent, "Last 5 min", "최근 5분", "直近5分", "最近 5 分鐘", "Posledních 5 min", "Últimos 5 min", "最近 5 分钟", "Letzte 5 Min."),
+    (dash_counters_note, "Counted in memory since the server started — a restart begins again at zero.", "서버 시작 후 메모리에서 집계됩니다 — 재시작하면 0부터 다시 셉니다.", "サーバー起動後にメモリ上で集計されます — 再起動するとゼロから数え直します。", "由伺服器啟動開始喺記憶體度計 — 重啟就由零開始再計。", "Počítáno v paměti od startu serveru — restart začíná znovu od nuly.", "Contado en memoria desde que arrancó el servidor — un reinicio empieza de nuevo desde cero.", "自服务器启动起在内存中统计 — 重启后从零重新计数。", "Seit dem Serverstart im Speicher gezählt — ein Neustart beginnt wieder bei null."),
+    (dash_all_files, "Every file", "전체 파일", "すべてのファイル", "全部檔案", "Všechny soubory", "Todos los archivos", "全部文件", "Alle Dateien"),
+    (dash_filter, "Filter by name, room, or uploader", "이름, 방, 업로더로 필터", "名前・部屋・アップローダーで絞り込み", "按名稱、房間或上載者篩選", "Filtrovat podle názvu, místnosti nebo autora", "Filtrar por nombre, sala o autor", "按名称、聊天室或上传者筛选", "Nach Name, Raum oder Uploader filtern"),
+    (dash_kind, "Kind", "종류", "種類", "類型", "Druh", "Tipo", "类型", "Art"),
+    (dash_all_kinds, "All", "전체", "すべて", "全部", "Vše", "Todos", "全部", "Alle"),
+    (dash_no_match, "No files match", "일치하는 파일이 없습니다", "一致するファイルがありません", "冇符合嘅檔案", "Žádné soubory neodpovídají", "Ningún archivo coincide", "没有匹配的文件", "Keine Dateien passen"),
+    (dash_no_match_hint, "Try a shorter search, or clear the kind filter.", "검색어를 줄이거나 종류 필터를 지워 보세요.", "検索語を短くするか、種類フィルターを解除してください。", "試下縮短搜尋，或者清除類型篩選。", "Zkuste kratší hledání nebo zrušte filtr druhu.", "Prueba una búsqueda más corta o quita el filtro de tipo.", "试试更短的搜索词，或清除类型筛选。", "Kürzer suchen oder den Art-Filter aufheben."),
+    (dash_table_count, "Showing {shown} of {total}", "{total}개 중 {shown}개 표시", "{total}件中{shown}件を表示", "顯示 {total} 個之中嘅 {shown} 個", "Zobrazeno {shown} z {total}", "Mostrando {shown} de {total}", "显示 {total} 个中的 {shown} 个", "{shown} von {total} angezeigt"),
+    (dash_col_name, "Name", "이름", "名前", "名稱", "Název", "Nombre", "名称", "Name"),
+    (dash_col_size, "Size", "크기", "サイズ", "大細", "Velikost", "Tamaño", "大小", "Größe"),
+    (dash_col_room, "Room", "방", "部屋", "房間", "Místnost", "Sala", "聊天室", "Raum"),
+    (dash_col_uploader, "Uploader", "업로더", "アップローダー", "上載者", "Nahrál(a)", "Autor", "上传者", "Uploader"),
+    (dash_col_date, "Uploaded", "업로드 시각", "アップロード日時", "上載時間", "Nahráno", "Subido", "上传时间", "Hochgeladen"),
+    (dash_file_one, "{n} file", "파일 {n}개", "ファイル{n}件", "{n} 個檔案", "{n} soubor", "{n} archivo", "{n} 个文件", "{n} Datei"),
+    (dash_file_many, "{n} files", "파일 {n}개", "ファイル{n}件", "{n} 個檔案", "{n} souborů", "{n} archivos", "{n} 个文件", "{n} Dateien"),
+    (dash_cat_image, "Images", "이미지", "画像", "圖片", "Obrázky", "Imágenes", "图片", "Bilder"),
+    (dash_cat_video, "Videos", "동영상", "動画", "影片", "Videa", "Vídeos", "视频", "Videos"),
+    (dash_cat_audio, "Audio", "오디오", "音声", "音訊", "Zvuk", "Audio", "音频", "Audio"),
+    (dash_cat_document, "Documents", "문서", "文書", "文件", "Dokumenty", "Documentos", "文档", "Dokumente"),
+    (dash_cat_archive, "Archives", "압축 파일", "アーカイブ", "壓縮檔", "Archivy", "Archivos comprimidos", "压缩包", "Archive"),
+    (dash_cat_other, "Other", "기타", "その他", "其他", "Ostatní", "Otros", "其他", "Sonstige"),
+
     (filter_notes, "Filter taught notes…", "가르친 내용 필터…", "教えた内容をフィルタ…", "篩選教過嘅嘢…", "Filtrovat naučené poznámky…", "Filtrar lo enseñado…", "筛选已教内容…", "Beigebrachte Notizen filtern…"),
     (no_matching_notes, "No notes match that filter", "필터와 일치하는 내용이 없습니다", "フィルタに一致するものがありません", "冇符合篩選嘅嘢", "Žádné poznámky neodpovídají filtru", "Ninguna nota coincide con ese filtro", "没有符合筛选的内容", "Keine Notizen passen zu diesem Filter"),
     (couldnt_load_notes, "Couldn't fetch the taught notes", "가르친 내용을 불러오지 못했습니다", "教えた内容を取得できませんでした", "攞唔到教過嘅嘢", "Nepodařilo se načíst naučené poznámky", "No se pudieron obtener las notas enseñadas", "无法获取已教内容", "Beigebrachte Notizen konnten nicht geladen werden"),
@@ -1270,6 +1322,17 @@ mod tests {
             (Lang::De, Key::webhooks_menu),
             (Lang::Es, Key::webhook_badge),
             (Lang::Cs, Key::webhook_badge),
+            // The dashboard's borrowings. German took "Upload" and "Download"
+            // whole — "Hochladevorgänge" is what a form reads, not a person —
+            // and "Name", "Uploader", "Videos" and "Audio" are the ordinary
+            // German words already. Spanish likewise says "Audio".
+            (Lang::De, Key::dash_uploads),
+            (Lang::De, Key::dash_downloads),
+            (Lang::De, Key::dash_cat_video),
+            (Lang::De, Key::dash_cat_audio),
+            (Lang::Es, Key::dash_cat_audio),
+            (Lang::De, Key::dash_col_name),
+            (Lang::De, Key::dash_col_uploader),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

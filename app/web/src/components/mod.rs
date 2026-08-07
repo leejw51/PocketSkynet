@@ -9,6 +9,7 @@ pub mod burst;
 pub mod chat;
 pub mod common;
 pub mod composer;
+pub mod dashboard;
 pub mod dialogs;
 pub mod gallery;
 pub mod icons;

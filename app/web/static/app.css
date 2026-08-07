@@ -10501,3 +10501,262 @@ span.fn-conn { cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .fn-gallery__badge { transition: none; }
 }
+
+/* ==========================================================================
+   FILES DASHBOARD — the operator's view of the disk (/dashboard,
+   components/dashboard.rs, docs/API.md §6.14). Admin-only in effect; the
+   gate is server-side and this styling assumes nothing about it.
+
+   Additive, like §18: new class names only, tokens only. The charts keep to
+   one recessive ink on purpose — identity lives in the row labels and the
+   direct values, so nothing here is said by colour alone (DESIGN.md §17),
+   and the single accent stays reserved for actions (DESIGN.md §1).
+   ========================================================================== */
+
+.fn-dash {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  max-width: 1080px;
+  margin-inline: auto;
+  align-content: start;
+}
+
+.fn-dash__head h1 {
+  font-size: var(--fn-t-xl);
+  letter-spacing: -0.01em;
+}
+.fn-dash__sub {
+  margin-top: 4px;
+  font-size: var(--fn-t-sm);
+  color: var(--fn-fg-muted);
+  max-width: 64ch;
+}
+
+/* --- stat tiles ----------------------------------------------------------- */
+
+.fn-dash__tiles {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.fn-dash__tile {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--fn-surface);
+  border: 1px solid var(--fn-border);
+  box-shadow: var(--fn-elev-1);
+}
+.fn-dash__tile-label {
+  font-size: var(--fn-t-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fn-fg-faint);
+}
+.fn-dash__tile-value {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+.fn-dash__tile-foot {
+  font-size: var(--fn-t-xs);
+  color: var(--fn-fg-muted);
+}
+
+/* --- cards ---------------------------------------------------------------- */
+
+.fn-dash__grid {
+  display: grid;
+  gap: 16px;
+}
+@media (min-width: 900px) {
+  .fn-dash__grid { grid-template-columns: 1fr 1fr; }
+}
+.fn-dash__card {
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--fn-surface);
+  border: 1px solid var(--fn-border);
+  box-shadow: var(--fn-elev-1);
+  min-width: 0;
+}
+.fn-dash__card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.fn-dash__card-head h3 { font-size: var(--fn-t-md); font-weight: 700; }
+.fn-dash__card-aside { font-size: var(--fn-t-xs); color: var(--fn-fg-muted); }
+
+.fn-dash__quiet {
+  margin-top: 10px;
+  font-size: var(--fn-t-xs);
+  color: var(--fn-fg-faint);
+}
+
+/* --- bar list ------------------------------------------------------------- */
+/* One row = label · count · value on a line, with the bar as a thin track
+   underneath. The value column is text, always — the bar only gives the
+   numbers a shape, which is what lets a single ink carry the whole list. */
+
+.fn-dash__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: baseline;
+  padding-block: 6px;
+}
+.fn-dash__row-label { font-size: var(--fn-t-sm); font-weight: 600; min-width: 0; }
+.fn-dash__row-detail { font-size: var(--fn-t-xs); color: var(--fn-fg-faint); }
+.fn-dash__row-value { font-size: var(--fn-t-sm); font-weight: 600; }
+.fn-dash__track {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--fn-surface-3);
+  overflow: hidden;
+}
+.fn-dash__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--fn-fg) 34%, transparent);
+  min-width: 2px;
+}
+
+/* --- growth chart --------------------------------------------------------- */
+
+.fn-dash__chart {
+  display: block;
+  width: 100%;
+  height: 120px;
+}
+.fn-dash__col { fill: color-mix(in srgb, var(--fn-fg) 34%, transparent); }
+.fn-dash__col:hover { fill: color-mix(in srgb, var(--fn-fg) 55%, transparent); }
+.fn-dash__axis {
+  stroke: var(--fn-border);
+  stroke-width: 1;
+  /* The viewBox is stretched, so an unscaled hairline needs this. */
+  vector-effect: non-scaling-stroke;
+}
+.fn-dash__chart-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: var(--fn-t-xs);
+  color: var(--fn-fg-faint);
+}
+
+/* --- activity ------------------------------------------------------------- */
+
+.fn-dash__flows {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.fn-dash__flow { display: grid; gap: 6px; align-content: start; }
+.fn-dash__flow h4 {
+  font-size: var(--fn-t-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fn-fg-faint);
+}
+.fn-dash__flow-big { font-size: 22px; font-weight: 800; line-height: 1.15; }
+.fn-dash__flow-stats {
+  display: grid;
+  gap: 2px;
+  font-size: var(--fn-t-sm);
+}
+.fn-dash__flow-stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fn-dash__flow-stats dt { color: var(--fn-fg-muted); }
+.fn-dash__flow-stats dd { font-weight: 600; }
+
+/* --- the table ------------------------------------------------------------ */
+
+.fn-dash__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.fn-dash__filter { flex: 1 1 220px; min-width: 0; }
+.fn-dash__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fn-dash__chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--fn-border-strong);
+  background: var(--fn-surface);
+  color: var(--fn-fg-muted);
+  font: inherit;
+  font-size: var(--fn-t-sm);
+  cursor: pointer;
+}
+.fn-dash__chip:hover { background: var(--fn-surface-3); }
+/* Pressed = filled with ink, not with the accent: this is a filter, not a
+   call to action, and orange on it would claim otherwise (DESIGN.md §2.2). */
+.fn-dash__chip[aria-pressed="true"] {
+  background: var(--fn-fg);
+  border-color: var(--fn-fg);
+  color: var(--fn-bg);
+  font-weight: 700;
+}
+
+/* Wide content scrolls inside its own container, never the page. */
+.fn-dash__tablewrap { overflow-x: auto; }
+.fn-dash__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fn-t-sm);
+}
+.fn-dash__table th {
+  text-align: left;
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--fn-border-strong);
+  white-space: nowrap;
+}
+.fn-dash__table td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--fn-border);
+  vertical-align: baseline;
+  max-width: 26ch;
+}
+.fn-dash__table td.fn-dash__cell-name { max-width: 34ch; font-weight: 600; }
+.fn-dash__table td .fn-truncate { display: block; }
+.fn-dash__cell-date { white-space: nowrap; font-family: var(--fn-font-mono); font-size: var(--fn-t-xs); }
+.fn-dash__sort {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--fn-t-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fn-fg-muted);
+  cursor: pointer;
+}
+.fn-dash__sort:hover { color: var(--fn-fg); }
+th[aria-sort="ascending"] .fn-dash__sort,
+th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
+.fn-dash__kind {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--fn-surface-3);
+  font-size: var(--fn-t-xs);
+  font-weight: 700;
+  color: var(--fn-fg-muted);
+  white-space: nowrap;
+}

@@ -10,8 +10,10 @@
 //! # What an admin can do, and what they deliberately cannot
 //!
 //! Can: see who is on the server and what rooms exist, suspend and reinstate
-//! accounts, remove somebody from every room at once, delete any room, and
-//! manage any room as though they were one of its admins.
+//! accounts, remove somebody from every room at once, delete any room, manage
+//! any room as though they were one of its admins, and read the storage
+//! report — how much disk the attachments hold, in which rooms, moving at
+//! what rate ([`storage`], [`list_files`]).
 //!
 //! Cannot: read a conversation they are not in. There is no endpoint here that
 //! returns message content, and that is a design decision rather than an
@@ -51,6 +53,8 @@ pub fn router() -> Router<AppState> {
         .route("/admin/users/{walletAddress}", delete(evict))
         .route("/admin/rooms", get(list_rooms))
         .route("/admin/rooms/{roomId}", delete(delete_room))
+        .route("/admin/storage", get(storage))
+        .route("/admin/files", get(list_files))
 }
 
 /// `GET /api/admin/session` — whether *the caller* is an admin.
@@ -330,6 +334,74 @@ async fn delete_room(
     Ok(super::message("Room deleted"))
 }
 
+/// How many rooms the storage report ranks. Not paging — the point of the
+/// card is "which rooms are heavy", and past a dozen the answer is "none in
+/// particular".
+const ROOM_USAGE_LIMIT: i64 = 12;
+
+/// How many attachments the "largest" list names.
+const LARGEST_LIMIT: i64 = 8;
+
+/// How far back the growth series reaches. A month of daily buckets is enough
+/// to see a trend and cheap enough to compute on every load.
+const GROWTH_DAYS: i64 = 30;
+
+/// `GET /api/admin/storage` — everything the files dashboard aggregates.
+///
+/// One response rather than five endpoints, because the dashboard renders them
+/// as one screen and they are all answered by one trip into the database.
+/// `activity` is the exception: it comes from `state.metrics`, the in-process
+/// transfer counters (`metrics.rs`) — since server start, gone at restart,
+/// exactly as presence treats its own truth.
+///
+/// Aggregates and metadata only. The bytes themselves stay behind the
+/// membership check on `GET /api/files/{id}/raw` — a server admin gets no
+/// exemption there, for the same reason no admin endpoint returns message
+/// content: an attachment *is* part of a conversation, and this dashboard
+/// must not become the side door the module docs above rule out.
+async fn storage(State(state): State<AppState>, _admin: ServerAdmin) -> ApiResult<Response> {
+    let (totals, categories, rooms, largest, growth) = state
+        .db
+        .call(|conn| {
+            Ok((
+                admin::storage_totals(conn)?,
+                admin::category_breakdown(conn)?,
+                admin::room_usage(conn, ROOM_USAGE_LIMIT)?,
+                admin::largest_files(conn, LARGEST_LIMIT)?,
+                admin::growth(conn, GROWTH_DAYS)?,
+            ))
+        })
+        .await?;
+    Ok(Json(serde_json::json!({
+        "totals": totals,
+        "categories": categories,
+        "rooms": rooms,
+        "largest": largest,
+        "growth": growth,
+        "activity": state.metrics.snapshot(),
+    }))
+    .into_response())
+}
+
+/// `GET /api/admin/files` — every attachment's metadata, newest first.
+///
+/// Sortable and filterable client-side; the cap is the same scale decision as
+/// `/admin/users`. Note what a row does *not* carry: no download URL, no
+/// stored name, no caption. An operator sees that a file exists and how big it
+/// is; reading it still requires being in its room.
+async fn list_files(
+    State(state): State<AppState>,
+    _admin: ServerAdmin,
+    Query(query): Query<ListQuery>,
+) -> ApiResult<Response> {
+    let limit = limit_of(&query);
+    let out = state
+        .db
+        .call(move |conn| admin::list_files(conn, limit))
+        .await?;
+    Ok(Json(out).into_response())
+}
+
 /// Tell a wallet's live connections that their credential is no longer good.
 ///
 /// Best-effort by design: the authoritative check is at the extractor, on the
@@ -368,6 +440,8 @@ mod tests {
             "/api/admin/overview",
             "/api/admin/users",
             "/api/admin/rooms",
+            "/api/admin/storage",
+            "/api/admin/files",
         ] {
             let response = send(&router, "GET", path, Some(&token), None).await;
             assert_eq!(
@@ -690,6 +764,107 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_storage_report_sees_the_shelf_but_never_the_books() {
+        arm_server_admin();
+        let state = state("admin-storage");
+        let boss_token = register(&state, &boss(), "boss");
+        let alice = wallet("alice");
+        let alice_token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms",
+            Some(&alice_token),
+            Some(serde_json::json!({ "name": "Design" })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let uploaded = crate::test_support::send_raw(
+            &router,
+            "POST",
+            &format!("/api/rooms/{room}/files?filename=report.pdf"),
+            Some(&alice_token),
+            b"nine byte".to_vec(),
+            "application/octet-stream",
+        )
+        .await;
+        assert_eq!(uploaded.status, StatusCode::CREATED, "{:?}", uploaded.body);
+        let file_id = uploaded.json()["id"].as_str().unwrap().to_owned();
+
+        // The uploader downloading their own file is the traffic the activity
+        // card should see.
+        let raw = send(
+            &router,
+            "GET",
+            &format!("/api/files/{file_id}/raw"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+        assert_eq!(raw.status, StatusCode::OK);
+
+        let storage = send(
+            &router,
+            "GET",
+            "/api/admin/storage",
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(storage.status, StatusCode::OK, "{:?}", storage.body);
+        let report = storage.json();
+        assert_eq!(report["totals"]["files"], 1);
+        assert_eq!(report["totals"]["blobs"], 1);
+        assert_eq!(report["totals"]["diskBytes"], 9);
+        assert_eq!(report["rooms"][0]["name"], "Design");
+        assert_eq!(report["largest"][0]["filename"], "report.pdf");
+        let documents = report["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["category"] == "document")
+            .unwrap()
+            .clone();
+        assert_eq!(documents["files"], 1);
+        assert_eq!(report["growth"].as_array().unwrap().len(), 1);
+        // The in-process counters saw the single-shot upload land and the
+        // download stream to its end.
+        assert_eq!(report["activity"]["uploads"]["transfers"], 1);
+        assert_eq!(report["activity"]["downloads"]["transfers"], 1);
+        assert_eq!(report["activity"]["downloads"]["bytes"], 9);
+
+        // The listing is metadata: names, sizes, places — no URL, no stored
+        // name, nothing that fetches bytes.
+        let files = send(&router, "GET", "/api/admin/files", Some(&boss_token), None).await;
+        let row = files.json()[0].clone();
+        assert_eq!(row["filename"], "report.pdf");
+        assert_eq!(row["roomName"], "Design");
+        assert_eq!(row["uploaderName"], "alice");
+        assert_eq!(row["category"], "document");
+        assert!(row.get("url").is_none());
+        assert!(row.get("storedName").is_none());
+
+        // And the stance the whole dashboard rests on: the admin, not being a
+        // member, cannot read the file itself — a uniform 404, exactly what a
+        // stranger gets. Metadata is the ceiling.
+        let refused = send(
+            &router,
+            "GET",
+            &format!("/api/files/{file_id}/raw"),
+            Some(&boss_token),
+            None,
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

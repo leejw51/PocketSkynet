@@ -39,6 +39,11 @@ pub enum Route {
     /// `/operator` — the operator's file: clearance, standing orders, the
     /// trophy wall, and this server's ladder.
     Operator,
+    /// `/dashboard` — the server files dashboard. Admin-only in effect: the
+    /// route parses for anybody (a URL is not an access control), but every
+    /// fetch behind it requires the server to name this wallet an admin, so
+    /// all a non-admin can reach is the refusal screen.
+    Dashboard,
     /// `/settings` — settings and profile.
     Settings,
     /// `/invite/:token` — an invite-link landing page (ROADMAP §7 M1). The
@@ -78,6 +83,7 @@ impl Route {
             ["publish"] => Route::Publish,
             ["bank"] => Route::Bank,
             ["operator"] => Route::Operator,
+            ["dashboard"] => Route::Dashboard,
             ["settings"] => Route::Settings,
             // A malformed room id is a 404, not a room screen that will 400 on
             // its first fetch: the id charset is validated by the newtype.
@@ -106,6 +112,7 @@ impl Route {
             Route::Publish => "/publish".into(),
             Route::Bank => "/bank".into(),
             Route::Operator => "/operator".into(),
+            Route::Dashboard => "/dashboard".into(),
             Route::Settings => "/settings".into(),
             Route::Invite(token) => format!("/invite/{token}"),
             // A 404 has no canonical path; going "back" to it is meaningless.
@@ -143,6 +150,7 @@ impl Route {
             | Route::Knowledge
             | Route::Publish
             | Route::Operator
+            | Route::Dashboard
             | Route::Bank => "settings",
             _ => "rooms",
         }
@@ -160,6 +168,7 @@ impl Route {
             Route::Publish => "publish",
             Route::Bank => "bank",
             Route::Operator => "operator",
+            Route::Dashboard => "dashboard",
             Route::Settings => "settings",
             _ => "",
         }
@@ -179,6 +188,7 @@ impl Route {
             Route::Publish => "Publish · PocketSkynet",
             Route::Bank => "Bank · PocketSkynet",
             Route::Operator => "Operator · PocketSkynet",
+            Route::Dashboard => "Files dashboard · PocketSkynet",
             Route::Settings => "Settings · PocketSkynet",
             Route::NotFound => "Page not found · PocketSkynet",
         }
@@ -216,6 +226,7 @@ mod tests {
         assert_eq!(Route::parse("/knowledge"), Route::Knowledge);
         assert_eq!(Route::parse("/publish"), Route::Publish);
         assert_eq!(Route::parse("/bank"), Route::Bank);
+        assert_eq!(Route::parse("/dashboard"), Route::Dashboard);
         assert_eq!(Route::parse("/settings"), Route::Settings);
     }
 
@@ -268,6 +279,7 @@ mod tests {
             Route::Knowledge,
             Route::Publish,
             Route::Bank,
+            Route::Dashboard,
             Route::Settings,
         ];
         for r in routes {
@@ -311,6 +323,7 @@ mod tests {
         assert!(Route::Knowledge.needs_auth());
         assert!(Route::Publish.needs_auth());
         assert!(Route::Bank.needs_auth());
+        assert!(Route::Dashboard.needs_auth());
         assert!(Route::Settings.needs_auth());
     }
 
@@ -334,5 +347,6 @@ mod tests {
         assert_eq!(Route::Knowledge.pane_view(), "settings");
         assert_eq!(Route::Publish.pane_view(), "settings");
         assert_eq!(Route::Bank.pane_view(), "settings");
+        assert_eq!(Route::Dashboard.pane_view(), "settings");
     }
 }

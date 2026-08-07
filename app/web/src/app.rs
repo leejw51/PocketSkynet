@@ -13,9 +13,9 @@ use yew::prelude::*;
 use crate::actions;
 use crate::api::Client;
 use crate::components::{
-    bank, boot, burst, chat, dialogs, gallery, invitations, invite_landing, knowledge, lightbox,
-    login, members, operator, publish, room_list, settings, shell, shout, spotlight, toast,
-    transfers,
+    bank, boot, burst, chat, dashboard, dialogs, gallery, invitations, invite_landing, knowledge,
+    lightbox, login, members, operator, publish, room_list, settings, shell, shout, spotlight,
+    toast, transfers,
 };
 use crate::format;
 use crate::i18n::{t, Key};
@@ -772,6 +772,7 @@ fn root() -> Html {
         },
         Route::Bank => html! { <bank::Bank /> },
         Route::Operator => html! { <operator::OperatorPage store={store.clone()} /> },
+        Route::Dashboard => html! { <dashboard::Dashboard /> },
         Route::Settings => html! {
             <settings::Settings on_navigate={on_navigate.clone()} />
         },

@@ -15,6 +15,7 @@ pub mod error;
 pub mod http3;
 pub mod hub;
 pub mod jsonl;
+pub mod metrics;
 pub mod payment;
 pub mod purge;
 pub mod ratelimit;
@@ -61,6 +62,10 @@ pub struct AppState {
     pub suspensions: Arc<RwLock<HashSet<String>>>,
     /// Process start, for `GET /api/health`'s uptime.
     pub started: Instant,
+    /// Transfer counters for the admin files dashboard. In memory, since
+    /// start, gone at restart — see `metrics.rs` for why that is the design
+    /// rather than a shortcut.
+    pub metrics: Arc<crate::metrics::TransferMetrics>,
 }
 
 impl AppState {
@@ -135,6 +140,7 @@ impl AppState {
             // the few milliseconds before startup finishes reading it.
             suspensions: Arc::new(RwLock::new(HashSet::new())),
             started: Instant::now(),
+            metrics: Arc::new(crate::metrics::TransferMetrics::new()),
         })
     }
 }
@@ -1297,6 +1303,7 @@ mod test_support {
             limiter: Arc::new(RateLimiter::new(false)),
             suspensions: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             started: Instant::now(),
+            metrics: Arc::new(crate::metrics::TransferMetrics::new()),
         }
     }
 

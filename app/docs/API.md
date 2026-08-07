@@ -2299,7 +2299,7 @@ people actually triage by.
 
 ---
 
-### 6.14 Server administration (7)
+### 6.14 Server administration (9)
 
 Every route here requires the caller's wallet to appear in
 `VITE_FRUITNATION_ADMIN` (§1.9) — **except** `/api/admin/session`, which is
@@ -2317,6 +2317,8 @@ the wrong place.
 | `DELETE` | `/api/admin/users/:addr` | Remove from every room **and** suspend |
 | `GET` | `/api/admin/rooms` | Every room — **metadata only** |
 | `DELETE` | `/api/admin/rooms/:id` | Delete any room |
+| `GET` | `/api/admin/storage` | The files dashboard's aggregates (below) |
+| `GET` | `/api/admin/files` | Every attachment — **metadata only**, newest first, `?limit=` capped at 2 000 |
 
 **Suspension is the closest thing this server has to session revocation.** A
 JWT is valid until it expires and carries no id to revoke, so the only place
@@ -2340,6 +2342,50 @@ encrypted and could not be read even with a route for it; giving the other half
 a side door would make a room's privacy depend on which checkbox was ticked
 when it was made. An admin who needs to be in a room can be invited, which
 everybody already there can see.
+
+**The storage report** (`GET /api/admin/storage`) is everything the files
+dashboard renders, in one response:
+
+```json
+{
+  "totals": { "files": 12, "blobs": 11, "logicalBytes": 104857600,
+              "diskBytes": 96468992, "roomsWithFiles": 3 },
+  "categories": [ { "category": "image", "files": 4, "bytes": 1048576 }, … ],
+  "rooms":      [ { "roomId": "room_…", "name": "Design", "kind": "channel",
+                    "files": 5, "bytes": 52428800 }, … ],
+  "largest":    [ AdminFile, … ],
+  "growth":     [ { "day": "2026-08-07", "files": 2, "bytes": 1048576 }, … ],
+  "activity":   { "sinceMs": 1786400000000, "recentWindowMs": 300000,
+                  "uploads":   { "transfers": 3, "bytes": 9437184, "millis": 812,
+                                 "recentBytes": 0, "recentMillis": 0 },
+                  "downloads": { "transfers": 7, "bytes": 4194304, "millis": 401,
+                                 "recentBytes": 0, "recentMillis": 0 } }
+}
+```
+
+- `totals` counts rows **and** distinct blobs: storage is content-addressed
+  (§14.2), so two rows can share one blob — `logicalBytes` is what people
+  uploaded, `diskBytes` what the disk pays, and the gap is the dedupe.
+- `categories` is always all six (`image` · `video` · `audio` · `document` ·
+  `archive` · `other`, judged from the stored extension), in that order, zeros
+  included, so a chart legend never reshuffles. `rooms` is the twelve heaviest,
+  `largest` the eight biggest attachments, `growth` a UTC day-bucketed month of
+  upload volume derived from `files.created_at` — days with no uploads produce
+  no row.
+- `activity` comes from **in-process counters, not a table** — the same shape
+  presence chose (§6.15): counted since the server started, gone at a restart,
+  and the response says so via `sinceMs`. `uploads.transfers` counts *finished*
+  files (a chunked upload is one transfer, not five hundred); bytes and
+  milliseconds are measured on the wire, with rates left to the client as
+  `bytes / millis`. Download time is the wire as the server observed it,
+  client backpressure included.
+
+Each `AdminFile` row (`largest`, and the `/api/admin/files` listing) is
+`{ id, filename, extension, category, sizeBytes, roomId, roomName, uploader,
+uploaderName, createdAt }` — and deliberately **no** download URL, no stored
+name, no caption. The bytes stay behind the room-membership check on
+`GET /api/files/:id/raw` (§14.4), from which a server admin gets no exemption:
+an attachment is part of a conversation, and the dashboard is metadata only.
 
 An admin also passes the **room-level** admin check on any room (rename, kick,
 promote, delete, purge). That is what makes a room whose last admin has left
