@@ -316,26 +316,37 @@ OPERATOR_FACES = [
 # what the picker is actually offering: "which kind of person is your human
 # side". Slugs are part of the API contract (`web/src/identity.rs::PROFILE_ART`).
 PROFILE_CHARACTERS = [
-    ("coder", "a focused software engineer wearing sleek rectangular glasses "
-              "with faint glowing lines of code reflected in the lens"),
-    ("soldier", "a disciplined soldier with subtle camouflage face paint and "
-                "a faded scar through the eyebrow"),
-    ("medic", "a field medic wearing a teal surgical cap, with a calm "
-              "reassuring gaze"),
-    ("pilot", "a fearless pilot with aviator goggles pushed up onto the "
-              "forehead"),
-    ("artist", "a painter with small flecks of bright paint on the cheek and "
-               "a soft beret"),
-    ("scientist", "a research scientist wearing clear lab goggles, one "
-                  "eyebrow raised in curiosity"),
-    ("chef", "a chef wearing a white toque, a light dusting of flour on the "
-             "cheek"),
-    ("athlete", "an athlete wearing a sports sweatband, jaw set with "
-                "determination"),
-    ("musician", "a musician with one studio headphone cup over the human "
-                 "ear"),
-    ("detective", "a detective under a dark fedora brim shading a sharp "
-                  "observant eye"),
+    (
+        "coder",
+        "a focused software engineer wearing sleek rectangular glasses "
+        "with faint glowing lines of code reflected in the lens",
+    ),
+    (
+        "soldier",
+        "a disciplined soldier with subtle camouflage face paint and "
+        "a faded scar through the eyebrow",
+    ),
+    (
+        "medic",
+        "a field medic wearing a teal surgical cap, with a calm " "reassuring gaze",
+    ),
+    ("pilot", "a fearless pilot with aviator goggles pushed up onto the " "forehead"),
+    (
+        "artist",
+        "a painter with small flecks of bright paint on the cheek and " "a soft beret",
+    ),
+    (
+        "scientist",
+        "a research scientist wearing clear lab goggles, one "
+        "eyebrow raised in curiosity",
+    ),
+    ("chef", "a chef wearing a white toque, a light dusting of flour on the " "cheek"),
+    ("athlete", "an athlete wearing a sports sweatband, jaw set with " "determination"),
+    ("musician", "a musician with one studio headphone cup over the human " "ear"),
+    (
+        "detective",
+        "a detective under a dark fedora brim shading a sharp " "observant eye",
+    ),
 ]
 
 
@@ -352,25 +363,25 @@ PROFILE_CHARACTERS = [
 # description.
 CUTE_PROFILE_CHARACTERS = {
     "coder": "It wears slim rectangular glasses over the visor, with a few "
-             "tiny glowing squares reflected in the lenses.",
+    "tiny glowing squares reflected in the lenses.",
     "soldier": "It wears a small olive-green shoulder strap and has two soft "
-               "camouflage patches painted on the helmet.",
+    "camouflage patches painted on the helmet.",
     "medic": "It wears a teal cap over the helmet and a small white cross "
-             "badge on the chest plate.",
+    "badge on the chest plate.",
     "pilot": "It wears round aviator goggles pushed up beside the visor and a "
-             "short white scarf around its neck.",
+    "short white scarf around its neck.",
     "artist": "It wears a soft tilted beret and has three small flecks of "
-              "bright paint on one cheek plate.",
+    "bright paint on one cheek plate.",
     "scientist": "It wears clear lab goggles over the visor and a small white "
-                 "collar, one eyebrow marking raised in curiosity.",
+    "collar, one eyebrow marking raised in curiosity.",
     "chef": "It wears a tall white chef's toque on top of the helmet and has a "
-            "light dusting of flour on one cheek plate.",
+    "light dusting of flour on one cheek plate.",
     "athlete": "It wears a bright sports sweatband across the helmet and has a "
-               "small stopwatch clipped to its chest plate.",
+    "small stopwatch clipped to its chest plate.",
     "musician": "It wears one round studio headphone cup over the side vent "
-                "and has a tiny note marking on its chest plate.",
+    "and has a tiny note marking on its chest plate.",
     "detective": "It wears a small dark fedora tilted over the helmet and a "
-                 "short trench collar.",
+    "short trench collar.",
 }
 
 # The `m`/`f` split. The slugs are an API contract (`preset:tp-coder-f` is
@@ -450,8 +461,7 @@ def _profile_manifest() -> list[dict[str, object]]:
                         "little space above the hair — not cropped through the "
                         f"hairline or the chin. {look[0].upper() + look[1:]}. "
                         "Calm, not menacing. Head-on framing. "
-                        f"{HUMAN_FACES} {HUMAN_ONLY_HUMAN} "
-                        + HUMAN_IDENTITY_STYLE
+                        f"{HUMAN_FACES} {HUMAN_ONLY_HUMAN} " + HUMAN_IDENTITY_STYLE
                     ),
                 }
             )
@@ -542,25 +552,25 @@ CUTE_IDENTITY_STYLE = (
 # operator with a broken avatar cache.
 HUMAN_OPERATOR_LOOKS = {
     "amber": "a beautiful woman with short warm-brown hair, lit by amber "
-             "lamplight, a honey-gold collar",
+    "lamplight, a honey-gold collar",
     "cyan": "a handsome man with pale silver-blond hair, lit by cool cyan "
-            "screen-light, an ice-blue collar",
+    "screen-light, an ice-blue collar",
     "crimson": "a beautiful woman with sharp black hair cut to the jaw, lit by "
-               "deep crimson light, a dark red collar",
+    "deep crimson light, a dark red collar",
     "emerald": "a handsome man with dark curls and a neat short beard, lit by "
-               "fresh emerald-green light, a mint collar",
+    "fresh emerald-green light, a mint collar",
     "violet": "a beautiful woman with long ash-grey hair, lit by soft violet "
-              "light, a lavender collar",
+    "light, a lavender collar",
     "gold": "a handsome older man with close-cropped hair and a sharp "
-            "weathered face, lit by rich gold light, a brass collar",
+    "weathered face, lit by rich gold light, a brass collar",
     "steel": "a beautiful woman with a striking pale blonde undercut, lit by "
-             "cool silver light, a raw steel collar",
+    "cool silver light, a raw steel collar",
     "rose": "a handsome man with soft dark hair falling over one eye, lit by "
-            "rose-pink light, a blush collar",
+    "rose-pink light, a blush collar",
     "teal": "a beautiful woman with black braided hair coiled up, lit by deep "
-            "teal light, a sea-green collar",
+    "teal light, a sea-green collar",
     "bronze": "a handsome man with heavy dark brows and swept-back hair, lit "
-              "by warm bronze light, a copper collar",
+    "by warm bronze light, a copper collar",
 }
 
 # Rooms stay objects. Drawn as flat glowing insignia rather than as things in a
@@ -569,7 +579,7 @@ HUMAN_OPERATOR_LOOKS = {
 HUMAN_ROOM_LOOKS = {
     "skull": "a flat heraldic skull glyph, geometric and symmetrical",
     "visor": "a rounded rectangular plate with one narrow horizontal scanning "
-             "band lit across it",
+    "band lit across it",
     "core": "a bright sphere caged inside a ring of angular brackets",
     "sentinel": "a tall narrow watchtower glyph with two vertical slit lights",
     "hunter": "a swept arrowhead glyph with a single wide lens at its point",
@@ -1137,8 +1147,7 @@ CUTE_PROMPTS: dict[str, str] = {
         "Empty-state illustration: one large rounded open speech bubble with a "
         "little paper plane looping away from it along a dotted arc, and a "
         "small friendly padlock character with a gold body resting at the "
-        "bubble's lower corner. A private conversation waiting to start. "
-        + CUTE_STYLE
+        "bubble's lower corner. A private conversation waiting to start. " + CUTE_STYLE
     ),
     "empty-invitations": (
         "Empty-state illustration: a plump rounded envelope tilted at a slight "
@@ -1329,7 +1338,9 @@ HUMAN_PROMPTS: dict[str, str] = {
         "and further out of focus, with no figures and no bright shapes in it, "
         "so text can sit over either side. It is never a flat grey slab and "
         "never empty; it is still the room. Protective and unhurried. "
-        + HUMAN_FACES + " " + HUMAN_STYLE
+        + HUMAN_FACES
+        + " "
+        + HUMAN_STYLE
     ),
     "skynet-avatar": (
         f"Close-up of the head and shoulders of {HUMAN_LEAD_F}. Head-on, tilted "
@@ -1342,7 +1353,10 @@ HUMAN_PROMPTS: dict[str, str] = {
         "patches, no pixel texture, no data overlaid on her cheek, nothing "
         "projected onto her. "
         "Square composition, her head filling the frame, softly blurred "
-        "holographic panels behind. Attentive and kind. " + HUMAN_FACES + " " + HUMAN_STYLE
+        "holographic panels behind. Attentive and kind. "
+        + HUMAN_FACES
+        + " "
+        + HUMAN_STYLE
     ),
     # The one asset in this skin that is allowed to look like a machine,
     # because it is not her — it is the room she is standing in, and the
@@ -1395,13 +1409,19 @@ HUMAN_PROMPTS: dict[str, str] = {
         "Empty-state illustration: three rounded holographic speech-bubble "
         "panels floating in a loose cluster, the frontmost one drawn as a "
         "dashed cyan outline and empty inside, thin light trailing beneath "
-        "them. Calm and inviting, not sad. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+        "them. Calm and inviting, not sad. No people. "
+        + HUMAN_FACES
+        + " "
+        + HUMAN_STYLE
     ),
     "empty-messages": (
         "Empty-state illustration: one large rounded holographic speech-bubble "
         "panel with a small folded paper plane leaving it along a dotted arc, "
         "and a slim closed padlock resting at the bubble's lower corner. A "
-        "private conversation waiting to start. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+        "private conversation waiting to start. No people. "
+        + HUMAN_FACES
+        + " "
+        + HUMAN_STYLE
     ),
     "empty-invitations": (
         "Empty-state illustration: a sealed envelope tilted at a slight angle, "
@@ -1426,7 +1446,10 @@ HUMAN_PROMPTS: dict[str, str] = {
         "Empty-state illustration: a faceted crystal of stacked geometric "
         "plates hovering above a low pedestal, with three thin orbit lines "
         "carrying small square data motes toward it. One facet glows cyan, as "
-        "if a memory has just been stored. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+        "if a memory has just been stored. No people. "
+        + HUMAN_FACES
+        + " "
+        + HUMAN_STYLE
     ),
     "empty-publish": (
         "Empty-state illustration: a slender beacon tower on a small hexagonal "
@@ -1440,12 +1463,18 @@ HUMAN_PROMPTS: dict[str, str] = {
         "holographic room cards seen at a slight angle, the middle one lit cyan "
         "with a soft halo and a small padlock mark, the other two quiet indigo "
         "outlines. A thin dotted selection arc curves toward the lit card. "
-        "Choosing one conversation out of a list. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+        "Choosing one conversation out of a list. No people. "
+        + HUMAN_FACES
+        + " "
+        + HUMAN_STYLE
     ),
     "encrypted-badge": (
         "Icon: a closed padlock whose shackle is formed from two interlocking "
         "links, the body deep indigo and the shackle glowing cyan. Extremely "
-        "simple — must stay legible at 24 pixels. No people. " + HUMAN_FACES + " " + HUMAN_STYLE
+        "simple — must stay legible at 24 pixels. No people. "
+        + HUMAN_FACES
+        + " "
+        + HUMAN_STYLE
     ),
     # The one empty state she *is* in, and the only one that earns her: an
     # offline app has nobody on the other end, which is a thing about a person
@@ -1461,8 +1490,7 @@ HUMAN_PROMPTS: dict[str, str] = {
     "bank-hero": (
         "A vault motif: a heavy circular vault door seen head-on, concentric "
         "rings and a thin cyan ring glowing around the wheel, flanked by two "
-        "small neat stacks of coins. Composed and secure. No people. "
-        + HUMAN_STYLE
+        "small neat stacks of coins. Composed and secure. No people. " + HUMAN_STYLE
     ),
     "bank-banker": (
         f"A bust portrait of {HUMAN_LEAD_M} A slim dark banker's collar over the "
@@ -1483,7 +1511,10 @@ HUMAN_PROMPTS: dict[str, str] = {
         "circular vault-door ring with concentric rings and gear teeth "
         "radiating around her like a wheel. Ordinary human skin and natural "
         "human eyes, nothing mechanical about her. Cyan rim light, "
-        "symmetrical, reads clearly as an icon at small sizes. " + HUMAN_FACES + " " + HUMAN_STYLE
+        "symmetrical, reads clearly as an icon at small sizes. "
+        + HUMAN_FACES
+        + " "
+        + HUMAN_STYLE
     ),
     "banker-core": (
         f"Bust portrait of {HUMAN_LEAD_M} He wears a slim dark banker's collar "
@@ -1633,7 +1664,9 @@ def generate(prompt: str, api_key: str, attempts: int = 5) -> bytes:
                 raise
             # 2s, 4s, 8s, 16s. `Retry-After` wins when the server sends one.
             delay = exc.headers.get("Retry-After")
-            time.sleep(float(delay) if delay and delay.isdigit() else 2 ** (attempt + 1))
+            time.sleep(
+                float(delay) if delay and delay.isdigit() else 2 ** (attempt + 1)
+            )
     raise ValueError("unreachable: the loop either returns or raises")
 
 
@@ -1680,7 +1713,9 @@ def build_jobs(args) -> list[tuple[str, str, Path, str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--force", action="store_true", help="regenerate existing assets")
+    parser.add_argument(
+        "--force", action="store_true", help="regenerate existing assets"
+    )
     parser.add_argument("--only", help="generate a single asset by name")
     parser.add_argument("--variant", choices=VARIANTS, help="only one theme variant")
     parser.add_argument(
@@ -1710,7 +1745,9 @@ def main() -> int:
         name, variant, dest, prompt, max_edge = job
         try:
             to_png(generate(prompt, api_key), dest, max_edge)
-            return f"  ok    {dest.relative_to(ROOT)} ({dest.stat().st_size // 1024} KB)"
+            return (
+                f"  ok    {dest.relative_to(ROOT)} ({dest.stat().st_size // 1024} KB)"
+            )
         except (urllib.error.URLError, KeyError, ValueError, TimeoutError) as exc:
             return f"  FAIL  {name} [{variant}]: {exc}"
 

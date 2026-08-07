@@ -290,9 +290,8 @@ async fn handle_request(
     // WebSocket cannot ride HTTP/3 (see the module docs). Say so plainly
     // instead of letting the client wait for an upgrade that never comes.
     if is_websocket_upgrade(&request) {
-        // Same flow-control hygiene as the 413 below: never answer early and
-        // walk away from an unread body.
-        recv.stop_sending(h3::error::Code::H3_REQUEST_REJECTED);
+        // Respond first, refuse the body second — same ordering as the 413
+        // below, and for the same reason.
         let response = Response::builder()
             .status(StatusCode::NOT_IMPLEMENTED)
             .header(http::header::CONTENT_TYPE, "application/json")
@@ -304,6 +303,7 @@ async fn handle_request(
         ))
         .await?;
         send.finish().await?;
+        recv.stop_sending(h3::error::Code::H3_REQUEST_REJECTED);
         return Ok(());
     }
 
@@ -314,19 +314,27 @@ async fn handle_request(
     let mut body = Vec::new();
     while let Some(mut chunk) = recv.recv_data().await? {
         if body.len() + chunk.remaining() > MAX_BODY {
-            // Tell the peer to stop sending before answering. Without this
-            // the unread remainder of the body sits in the connection's
-            // flow-control window forever — the stream is dead but its
-            // credit is not returned, and once enough credit leaks, every
-            // later request on the connection hangs with no error anywhere.
-            // A refused body must be *refused*, not merely ignored.
-            recv.stop_sending(h3::error::Code::H3_REQUEST_REJECTED);
+            // Two duties here, and their order is load-bearing.
+            //
+            // The refusal itself is non-negotiable: a stream abandoned
+            // unread keeps its flow-control credit, and once enough credit
+            // leaks, every later request on the connection hangs with no
+            // error anywhere. A refused body must be *refused* with
+            // STOP_SENDING, not merely ignored.
+            //
+            // But the response has to be queued *first*. STOP_SENDING makes
+            // the peer reset its half of the stream, and when that reset
+            // raced back before the 413 was queued, the h3 state machine
+            // cancelled the whole stream — the client then saw its request
+            // stream end with no response headers at all and tore down the
+            // connection as a protocol error. Respond, finish, then refuse.
             let response = Response::builder()
                 .status(StatusCode::PAYLOAD_TOO_LARGE)
                 .body(())
                 .expect("a constant response builds");
             send.send_response(response).await?;
             send.finish().await?;
+            recv.stop_sending(h3::error::Code::H3_REQUEST_REJECTED);
             return Ok(());
         }
         while chunk.has_remaining() {
