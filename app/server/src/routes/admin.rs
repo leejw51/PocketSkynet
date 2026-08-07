@@ -306,18 +306,15 @@ async fn delete_room(
         })
         .await?;
 
-    state
-        .db
-        .call({
-            let room_id = room_id.clone();
-            move |conn| rooms::delete_room(conn, &room_id)
-        })
-        .await?;
+    // The same total destruction the room's own admins get: rows, and the
+    // bytes underneath them. A room reachable only from here is exactly the
+    // room nobody is left to clean up by hand.
+    let purged = crate::purge::destroy_room(&state, &room_id, Some(&admin.0)).await?;
 
     let _ = state.log.append_audit(
         "room_deleted_by_admin",
         Some(&admin.0),
-        serde_json::json!({ "roomId": room.as_str() }),
+        serde_json::json!({ "roomId": room.as_str(), "purged": purged }),
     );
 
     for address in members {

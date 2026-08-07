@@ -211,6 +211,25 @@ pub fn stale(conn: &Connection, cutoff: i64, limit: i64) -> ApiResult<Vec<Sessio
     Ok(rows)
 }
 
+/// Every session aimed at one room, for the purge that destroys it.
+///
+/// Nothing cascades here — the table has no foreign key, by the design note in
+/// `schema.sql` — so an upload still in flight when its room is destroyed would
+/// otherwise sit in `data/uploads/` until the age sweep noticed, holding bytes
+/// somebody has just asked to have forgotten. Whole rows, like [`stale`] and
+/// for the same reason: the temp file's name is only in the row.
+pub fn for_room(conn: &Connection, room_id: &str) -> ApiResult<Vec<Session>> {
+    let mut stmt = conn
+        .prepare("SELECT * FROM upload_sessions WHERE room_id = ?1")
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let rows = stmt
+        .query_map(params![room_id], Session::from_row)
+        .map_err(|e| ApiError::Internal(e.into()))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    Ok(rows)
+}
+
 /// How many sessions this wallet has open, so one client cannot hold the disk
 /// hostage with a thousand abandoned uploads.
 pub fn open_count(conn: &Connection, owner: &str) -> ApiResult<i64> {

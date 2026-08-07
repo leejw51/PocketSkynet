@@ -599,12 +599,17 @@ pub async fn send_message(
     let encrypted = room.as_ref().is_some_and(|r| r.has_encryption);
 
     let build = |version: i64| -> Result<crate::api::messages::MessageBody, String> {
-        // Threading and mentions are attached *after* the body is built, so
-        // they survive the encrypted and plaintext paths identically — and so
-        // a retry under a new key version cannot drop them.
+        // Threading, mentions and hosted media are attached *after* the body
+        // is built, so they survive the encrypted and plaintext paths
+        // identically — and so a retry under a new key version cannot drop
+        // them. The media list is read from the plaintext here because this is
+        // the last place it exists: one line later it is ciphertext, and the
+        // server would have no way to know the room shows those pictures when
+        // the time comes to destroy it.
         let attach = |b: crate::api::messages::MessageBody| {
             b.in_thread(extras.parent.clone())
                 .naming(extras.mentions.clone())
+                .showing(crate::media::hosted_names(&text))
         };
         if !encrypted {
             return Ok(attach(crypto::plaintext_body(&text)));

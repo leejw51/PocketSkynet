@@ -30,6 +30,7 @@
 pub mod admin;
 pub mod files;
 pub mod keys;
+pub mod media;
 pub mod mentions;
 pub mod messages;
 pub mod models;

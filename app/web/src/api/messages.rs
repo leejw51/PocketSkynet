@@ -38,6 +38,15 @@ pub struct MessageBody {
     /// message stays a plain request.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mentions: Vec<WalletAddress>,
+    /// The server-hosted files this message shows, as `{sha256}.{ext}` names.
+    ///
+    /// Declared for the same reason mentions are, and it matters most for the
+    /// same case: in an encrypted room the server holds ciphertext, so this is
+    /// the only thing tying a picture to the room it was posted in — and
+    /// therefore the only thing that lets destroying the room destroy the
+    /// picture instead of orphaning it on disk. Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<String>,
 }
 
 impl MessageBody {
@@ -57,6 +66,7 @@ impl MessageBody {
             key_version: 1,
             parent_message_id: None,
             mentions: Vec::new(),
+            media: Vec::new(),
         }
     }
 
@@ -67,6 +77,12 @@ impl MessageBody {
 
     pub fn naming(mut self, mentions: Vec<WalletAddress>) -> Self {
         self.mentions = mentions;
+        self
+    }
+
+    /// The hosted files the message shows (`crate::media::hosted_names`).
+    pub fn showing(mut self, media: Vec<String>) -> Self {
+        self.media = media;
         self
     }
 }
@@ -320,6 +336,7 @@ mod tests {
             key_version: 3,
             parent_message_id: None,
             mentions: Vec::new(),
+            media: Vec::new(),
         };
         let json: serde_json::Value = serde_json::to_value(&b).unwrap();
         assert_eq!(json["isEncrypted"], true);
@@ -342,6 +359,7 @@ mod tests {
             key_version: 1,
             parent_message_id: None,
             mentions: Vec::new(),
+            media: Vec::new(),
         };
         let json = serde_json::to_string(&b).unwrap();
         assert!(!json.contains("\"iv\""));

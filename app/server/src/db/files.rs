@@ -15,8 +15,13 @@
 //!   possibly in another room, owned by someone else — may name the same bytes.
 //!   Reference-counting across a cascade delete would need a transaction that
 //!   spans the filesystem, which SQLite cannot give us. Orphans are therefore
-//!   accepted, and are the price of the dedupe above. See `orphan_candidates`
-//!   for the sweep a future GC would use; nothing calls it yet.
+//!   accepted, and are the price of the dedupe above.
+//!
+//! Accepted for a *row* delete, that is. Destroying a whole room is the one
+//! caller that must not accept them — "delete the room and everything in it"
+//! is a promise about the disk, not about a table — so `crate::purge` takes
+//! [`stored_names_for_room`] before the cascade and [`orphan_candidates`]
+//! after it, and unlinks exactly what no surviving row still names.
 
 use rusqlite::{params, Connection, Row};
 use serde::Serialize;
@@ -190,9 +195,18 @@ pub fn delete(conn: &mut Connection, id: &str) -> ApiResult<bool> {
     Ok(n > 0)
 }
 
+/// The bytes one room's attachments are stored in, deduped.
+///
+/// Read *before* the room is deleted — afterwards the rows are gone and the
+/// names with them, which is the whole reason the purge is a two-step.
+pub fn stored_names_for_room(conn: &Connection, room_id: &str) -> ApiResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT stored_name FROM files WHERE room_id = ?1")?;
+    let rows = stmt.query_map(params![room_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Stored names no live row references any more — what a garbage collector
-/// would unlink. Nothing calls this; it exists so the orphan policy in the
-/// module docs is testable rather than merely asserted.
+/// would unlink, and what `crate::purge` unlinks after a room is destroyed.
 pub fn orphan_candidates(conn: &Connection, on_disk: &[String]) -> ApiResult<Vec<String>> {
     let mut out = Vec::new();
     let mut stmt = conn.prepare("SELECT 1 FROM files WHERE stored_name = ?1 LIMIT 1")?;

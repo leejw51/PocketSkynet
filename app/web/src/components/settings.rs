@@ -415,6 +415,8 @@ pub fn settings(p: &SettingsProps) -> Html {
                                     body: t(lang, Key::forget_phrase_body).into(),
                                     confirm_label: t(lang, Key::forget).into(),
                                     action: ConfirmAction::ForgetWallet,
+                                    alternative: None,
+                                    challenge: None,
                                 }, store.clone())}
                             >{ t(lang, Key::forget) }</button>
                         }
@@ -430,6 +432,8 @@ pub fn settings(p: &SettingsProps) -> Html {
                                 body: t(lang, Key::sign_out_body).into(),
                                 confirm_label: t(lang, Key::sign_out).into(),
                                 action: ConfirmAction::SignOut,
+                                alternative: None,
+                                challenge: None,
                             }, store.clone())}
                         >{ t(lang, Key::sign_out) }</button>
                     </div>
@@ -447,6 +451,8 @@ pub fn settings(p: &SettingsProps) -> Html {
                                 body: t(lang, Key::erase_local_body).into(),
                                 confirm_label: t(lang, Key::erase).into(),
                                 action: ConfirmAction::EraseLocalData,
+                                alternative: None,
+                                challenge: None,
                             }, store.clone())}
                         >{ t(lang, Key::erase) }</button>
                     </div>

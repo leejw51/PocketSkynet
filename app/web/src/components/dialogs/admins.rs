@@ -136,6 +136,8 @@ pub fn manage_admins(p: &AdminsProps) -> Html {
                                             confirm_label: t(lang, Key::give_up_admin).into(),
                                             action: ConfirmAction::RemoveAdmin(
                                                 room_id.clone(), who.clone()),
+                                            alternative: None,
+                                            challenge: None,
                                         })));
                                     } else {
                                         mutate.emit((who.clone(), false));

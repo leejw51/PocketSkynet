@@ -322,6 +322,43 @@ pub fn mention_addresses(raw: Option<Vec<String>>) -> ApiResult<Vec<String>> {
         .collect()
 }
 
+/// `media` — the hosted files a message declares it shows.
+///
+/// Each entry is a `{sha256}.{ext}` name under `data/images/`, never a URL and
+/// never a path: the room purge joins these onto a directory, so the grammar
+/// check in [`crate::db::media::is_media_name`] is the traversal guard as well
+/// as a format check. An entry that fails it is refused rather than dropped —
+/// a client that meant to declare a picture and was silently ignored would
+/// leave those bytes behind when the room is destroyed, which is the one
+/// promise this list exists to keep.
+pub fn media_names(raw: Option<Vec<String>>) -> ApiResult<Vec<String>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    if raw.len() > crate::db::media::MAX_MEDIA {
+        return Err(ApiError::field(
+            "media",
+            &format!(
+                "A message can show at most {} files",
+                crate::db::media::MAX_MEDIA
+            ),
+        ));
+    }
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    for entry in raw {
+        if !crate::db::media::is_media_name(&entry) {
+            return Err(ApiError::field(
+                "media",
+                "Each entry must be a hosted media filename, as returned by POST /api/images",
+            ));
+        }
+        if !out.contains(&entry) {
+            out.push(entry);
+        }
+    }
+    Ok(out)
+}
+
 /// `filename` — 1–200 characters, display only, and **never** a path.
 ///
 /// The bytes are stored under a content hash, so this string never reaches the
@@ -728,6 +765,26 @@ mod tests {
         assert!(room_key_hex("encryptionIV", Some("zz"), 32).is_err());
         assert!(ephemeral_public_key(Some("04AbCd")).is_ok());
         assert!(ephemeral_public_key(Some("04xyz")).is_err());
+    }
+
+    #[test]
+    fn a_media_list_is_capped_deduped_and_absent_means_empty() {
+        let name = |b: u8| format!("{}.png", format!("{b:02x}").repeat(32));
+
+        assert_eq!(media_names(None).unwrap(), Vec::<String>::new());
+        assert_eq!(
+            media_names(Some(vec![name(0xaa), name(0xaa), name(0xbb)])).unwrap(),
+            vec![name(0xaa), name(0xbb)],
+            "a name declared twice is one reference, not two"
+        );
+
+        // The cap is what stops the declaration being used as a bulk delete
+        // list for the purge to act on later (`db::media::MAX_MEDIA`).
+        let full: Vec<String> = (0..crate::db::media::MAX_MEDIA as u8).map(name).collect();
+        assert!(media_names(Some(full.clone())).is_ok());
+        let mut over = full;
+        over.push(name(0xff));
+        assert!(media_names(Some(over)).is_err(), "33rd file is refused");
     }
 
     #[test]

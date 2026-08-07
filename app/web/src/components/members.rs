@@ -195,6 +195,8 @@ fn person_row(
                                 body: t(lang, Key::unblock_body).into(),
                                 confirm_label: t(lang, Key::unblock).into(),
                                 action: ConfirmAction::UnblockUser(who.clone()),
+                                alternative: None,
+                                challenge: None,
                             }
                         } else {
                             Confirm {
@@ -202,6 +204,8 @@ fn person_row(
                                 body: t(lang, Key::block_body).into(),
                                 confirm_label: t(lang, Key::block).into(),
                                 action: ConfirmAction::BlockUser(who.clone()),
+                                alternative: None,
+                                challenge: None,
                             }
                         }))
                     }}
@@ -221,6 +225,8 @@ fn person_row(
                                 body: t(lang, Key::remove_member_body).into(),
                                 confirm_label: t(lang, Key::remove).into(),
                                 action: ConfirmAction::KickMember(room_id.clone(), who.clone()),
+                                alternative: None,
+                                challenge: None,
                             }))
                         }}
                     />

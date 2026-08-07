@@ -144,11 +144,81 @@ pub struct Confirm {
     pub body: String,
     pub confirm_label: String,
     pub action: ConfirmAction,
+    /// A second, milder way forward, shown between Cancel and the destructive
+    /// verb. Exists for one question — an admin leaving is asked whether to
+    /// destroy the room, and "just leave" has to stay reachable from that
+    /// dialog rather than sending them back to the menu to find it.
+    pub alternative: Option<ConfirmAlternative>,
+    /// A phrase the user must type out before the destructive verb works.
+    ///
+    /// Reserved for the one action that is not about a named object: every
+    /// other confirmation here says "destroy *engineering*", and a wrong tap
+    /// costs the room you were looking at. Removing every room at once has no
+    /// such anchor, so the dialog asks for something a tap cannot produce.
+    /// A button that is merely red is still one gesture away.
+    pub challenge: Option<String>,
+}
+
+impl Confirm {
+    /// The ordinary shape: one destructive verb, and Cancel.
+    pub fn new(title: String, body: String, confirm_label: String, action: ConfirmAction) -> Self {
+        Self {
+            title,
+            body,
+            confirm_label,
+            action,
+            alternative: None,
+            challenge: None,
+        }
+    }
+
+    /// …with a second way out beside it.
+    pub fn or(mut self, label: String, action: ConfirmAction) -> Self {
+        self.alternative = Some(ConfirmAlternative { label, action });
+        self
+    }
+
+    /// …gated behind typing `phrase` (see [`Confirm::challenge`]).
+    pub fn requiring(mut self, phrase: String) -> Self {
+        self.challenge = Some(phrase);
+        self
+    }
+}
+
+/// The non-destructive branch of a two-way confirmation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfirmAlternative {
+    pub label: String,
+    pub action: ConfirmAction,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfirmAction {
     LeaveRoom(RoomId),
+    /// An admin leaving, stage one. Runs no request: it replaces itself with a
+    /// second confirmation offering to destroy the room instead of walking out
+    /// of it. An admin is the only person who *can* destroy a room, and the
+    /// moment they are leaving is the moment to ask — nobody comes back to a
+    /// menu later to tidy up a room they have already left, and for the last
+    /// admin there is no "later" at all: the server refuses the leave.
+    ExitAsAdmin(RoomId),
+    /// Offer to clear out the rest, stage one. Runs no request: like
+    /// [`ConfirmAction::ExitAsAdmin`] it replaces itself with a second
+    /// confirmation, this one gated behind a typed phrase.
+    ///
+    /// Asked after three removals in a row, because that is when the room list
+    /// stops being a place someone is tidying and starts being a place they
+    /// are leaving. Asked *only* then: there is no menu item for this, and no
+    /// way to reach it except by having already removed three rooms one after
+    /// another and then said yes twice.
+    AskRemoveAll,
+    /// Destroy every room this wallet administers, in one go.
+    ///
+    /// Only rooms it administers — a room somebody else owns is not this
+    /// user's to destroy, and is left untouched rather than left quietly. And
+    /// only group rooms: a direct message is not a "group", it is half of a
+    /// conversation, and the bulk verb should not be able to reach one.
+    RemoveAllRooms,
     DeleteRoom(RoomId),
     HideRoom(RoomId),
     DeleteAllMessages(RoomId),
@@ -386,6 +456,28 @@ impl AppState {
             .clone()
             .unwrap_or_else(crate::format::page_origin);
         crate::format::join_url(&base, path)
+    }
+
+    /// Every room this wallet could destroy in one sweep, in list order.
+    ///
+    /// Administered *and* not a direct message. Both halves are the point: a
+    /// room someone else owns is not this user's to destroy, and a DM is not a
+    /// group — it is half of a conversation with one other person, and a bulk
+    /// verb aimed at "all my rooms" should not quietly take it. Either can
+    /// still be destroyed one at a time from its own menu, where the dialog
+    /// names the room it is about to erase.
+    ///
+    /// Both stages of the confirmation count with this function, so the number
+    /// the user is shown is the number that will be acted on.
+    pub fn removable_rooms(&self) -> Vec<RoomId> {
+        let Some(me) = self.me() else {
+            return Vec::new();
+        };
+        self.rooms
+            .iter()
+            .filter(|r| !r.is_direct() && r.is_admin(me))
+            .map(|r| r.id().clone())
+            .collect()
     }
 
     pub fn me(&self) -> Option<&WalletAddress> {

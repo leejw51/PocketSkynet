@@ -117,7 +117,10 @@ fn extension_for(content_type: &str) -> Option<&'static str> {
         .map(|(_, ext)| *ext)
 }
 
-fn mime_for(extension: &str) -> Option<&'static str> {
+/// Also the authority on what a *stored* name may end in: `db::media` asks
+/// here rather than keeping a second copy of the allow-list, so a media type
+/// this server cannot serve can never become a reference it would try to purge.
+pub(crate) fn mime_for(extension: &str) -> Option<&'static str> {
     ALLOWED
         .iter()
         .find(|(_, ext)| *ext == extension)

@@ -1365,6 +1365,40 @@ Footer order is always `[secondary] [primary]`, primary last, ≥96px wide.
 object and the consequence: title as a question, body as the irreversible fact, buttons
 labelled with the verb ("Delete room", not "OK").
 
+**The admin exit is the one two-stage confirmation.** An admin who confirms *Leave* is asked
+again: *Destroy {room} as well?* — footer `[Cancel] [Just leave] [Destroy room]`. It is asked
+at that moment because that is the moment it is answerable: an admin is the only person who
+can destroy a room, nobody returns to a menu later to tidy up a room they have already left,
+and for the **last** admin there is no later at all — the server refuses that leave, so their
+dialog drops *Just leave* and says to promote somebody first. The first dialog's body warns
+that a second question is coming, so *Leave* never has consequences that arrive unannounced.
+The second dialog states the whole cost, disk included: messages, keys, attachments and
+pictures, gone for every member (API.md §6.5.5). Destroying is never reachable from the swipe
+drawer directly — only from a dialog already answered once.
+
+**Clearing the rest is offered, never listed.** Three swipe removals in a row and the app asks
+the larger question once: *Remove the rest as well?* — the count named, `[Cancel] [Remove all]`.
+Asked at that point because three in a row is where a room list stops looking like somebody
+tidying and starts looking like somebody leaving, and asking beats watching them answer the
+small question another nine times. Asked **once per streak**: a question repeated on the fourth
+removal and the fifth is not a safeguard, it is a thing people learn to click through. There is
+no menu item for it anywhere — the only way to reach it is to have already removed three rooms
+one after another.
+
+Saying yes opens the second dialog, and that one **cannot be answered by tapping**: the
+destructive button stays disabled until the phrase *remove all* is typed (localised, compared
+case- and whitespace-insensitively — the gate is there to make the act deliberate, not to test
+typing). Every other confirmation in this app names one room, so a mis-tap costs you the room
+you were looking at; this one has no such anchor, and a button that is merely red is still one
+gesture away. The body states the count, the disk cost, and what is **spared** — direct messages
+and rooms you don't administer are left alone, or "all" reads as "including my DMs".
+
+The scope is deliberately narrower than the word: it destroys the group rooms this wallet
+administers and nothing else. A room somebody else owns is not yours to destroy, and a DM is
+half of a conversation rather than a group. Either can still be destroyed one at a time from
+its own `⋮` menu, where the dialog names it. Failures do not roll back — there is nothing to
+roll back to — so a partial run reports how many of how many went before it stopped.
+
 ### Empty, loading, error
 
 - **Empty** `.fn-empty`: 84px `.fn-empty__art` (fruit emoji on an orange wash, gentle 5.5s
