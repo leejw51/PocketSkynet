@@ -582,3 +582,48 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
 -- The sweep reads by age; the resume path reads by owner.
 CREATE INDEX IF NOT EXISTS idx_uploads_updated ON upload_sessions (updated_at);
 CREATE INDEX IF NOT EXISTS idx_uploads_owner ON upload_sessions (owner, updated_at DESC);
+
+-- Skynet Password: one person's key/value secrets, sealed client-side
+-- (`core/src/secrets.rs`, docs/CRYPTO.md §14).
+--
+-- Both halves are ciphertext. Storing the key in plaintext would have made the
+-- list sortable and searchable server-side, and it is refused for the reason
+-- that module spells out: the key *names* the secret, so a plaintext column
+-- here would be a per-wallet index of which banks, which doors and which
+-- relatives a person has secrets about — a target profile that survives every
+-- password staying sealed. The server therefore orders by `updated_at` and the
+-- client filters over what it decrypts.
+--
+-- `id` is minted by the **client**, not here. It is part of the MAC input over
+-- each field, and a server-assigned id could not be: the ciphertext has to
+-- exist before the row does. That inverts the usual trust direction in a way
+-- worth stating — a client can choose its own row ids — but the id is scoped by
+-- `owner_address`, so the worst a client can do is collide with itself, which
+-- the PRIMARY KEY turns into a refused insert.
+--
+-- `enc_ver` is 1 and there is no version 2 yet. It exists so that a second
+-- scheme can be introduced without having to guess which rows predate it.
+--
+-- No foreign key to `users`: an account is a wallet address the server has seen
+-- before, and there is no delete path for one. The rows are scoped by
+-- `owner_address` in every query instead, which is the check that matters.
+CREATE TABLE IF NOT EXISTS password_entries (
+    id               TEXT    PRIMARY KEY,   -- client-minted, `sec_` + 32 hex
+    owner_address    TEXT    NOT NULL,
+    key_ciphertext   TEXT    NOT NULL,      -- base64, AES-256-CBC
+    key_iv           TEXT    NOT NULL,      -- 32 hex
+    key_hmac         TEXT    NOT NULL,      -- 64 hex
+    value_ciphertext TEXT    NOT NULL,
+    value_iv         TEXT    NOT NULL,
+    value_hmac       TEXT    NOT NULL,
+    enc_ver          INTEGER NOT NULL DEFAULT 1,
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL
+) STRICT;
+
+-- The only read path: one owner's entries, most recently changed first. Safe
+-- to declare here rather than in `db::migrate` — every column it names is in
+-- the CREATE TABLE directly above, so there is no ordering hazard of the kind
+-- the note beside `rooms.dm_key` describes.
+CREATE INDEX IF NOT EXISTS idx_password_entries_owner
+    ON password_entries (owner_address, updated_at DESC);

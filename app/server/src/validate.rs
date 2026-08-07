@@ -608,6 +608,51 @@ pub fn wrapped_key(raw: Option<&str>) -> ApiResult<String> {
     Ok(raw.to_owned())
 }
 
+/// Longest sealed-field ciphertext the password store accepts, in characters.
+///
+/// `core::secrets::MAX_SECRET_BYTES` is 4096 bytes of plaintext, which PKCS#7
+/// pads to at most 4112 and base64 expands to 5484 characters. 8192 leaves
+/// room for a future scheme with a larger frame without inviting somebody to
+/// use this table as a file store — the body limit above is 100 KB, and two
+/// fields at this cap fit inside it with room to spare.
+pub const MAX_SEALED_CIPHERTEXT: usize = 8192;
+
+/// A Skynet Password entry id: `[A-Za-z0-9_-]`, 10–100 characters.
+///
+/// The same charset as a message id, for the same reason plus one more: the id
+/// is part of the MAC input the *client* computes over each sealed field
+/// (`core/src/secrets.rs`), and that framing is `|`-delimited with no length
+/// prefix. A `|` here would make it ambiguous, so the check has to happen on
+/// both sides of the wire and this is the server's half.
+pub fn secret_entry_id(raw: &str) -> ApiResult<String> {
+    let trimmed = raw.trim();
+    if !pocketskynet_core::secrets::is_valid_entry_id(trimmed) {
+        return Err(ApiError::field(
+            "id",
+            "Entry id must be 10-100 characters of [A-Za-z0-9_-]",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// One sealed field's ciphertext.
+///
+/// Opaque: only the owner can tell whether it decodes to anything, so the
+/// content is bounded and otherwise untouched. The empty string is refused —
+/// an empty *plaintext* is legitimate (a note with no password yet) but it
+/// still produces a full padding block, so an empty ciphertext could only be a
+/// client bug or a truncated request.
+pub fn sealed_ciphertext(field: &str, raw: Option<&str>) -> ApiResult<String> {
+    let raw = raw.ok_or_else(|| ApiError::field(field, "Ciphertext is required"))?;
+    if !(1..=MAX_SEALED_CIPHERTEXT).contains(&raw.len()) {
+        return Err(ApiError::field(
+            field,
+            &format!("Ciphertext must be 1-{MAX_SEALED_CIPHERTEXT} characters"),
+        ));
+    }
+    Ok(raw.to_owned())
+}
+
 /// An E2EE public key: uncompressed secp256k1, ≤130 hex chars, no `0x`.
 pub fn public_key(raw: Option<&str>) -> ApiResult<String> {
     let raw = raw.ok_or_else(|| ApiError::field("publicKey", "Public key must be hex"))?;

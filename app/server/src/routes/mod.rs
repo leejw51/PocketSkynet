@@ -21,6 +21,7 @@ pub mod mentions;
 pub mod messages;
 pub mod misc;
 pub mod operators;
+pub mod passwords;
 pub mod presence;
 pub mod realtime;
 pub mod rooms;
@@ -204,6 +205,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(keys::router())
         .merge(messages::router())
         .merge(mentions::router())
+        .merge(passwords::router())
         .merge(presence::router())
         // The same upload meter as the chunked router: this one carries the
         // single-shot `POST /rooms/{id}/files`, which is a whole file in one

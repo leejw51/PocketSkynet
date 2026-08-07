@@ -3246,6 +3246,10 @@ open past the hour re-fetches the listing when its tiles start failing.
 | 61 | GET | `/api/rooms/:roomId/webhooks` | ✓ | **admin** — the list carries the tokens |
 | 62 | DELETE | `/api/rooms/:roomId/webhooks/:webhookId` | ✓ | **admin**; revocation is immediate |
 | 63 | POST | `/api/webhooks/:token` | — | the token IS the auth (60/min, own budget) |
+| 64 | GET | `/api/passwords` | ✓ | own entries only (PocketSkynet extension, §18) |
+| 65 | POST | `/api/passwords` | ✓ | own entries only; client-minted id, 409 if taken |
+| 66 | PUT | `/api/passwords/:id` | ✓ | own entries only; 404 for anybody else's |
+| 67 | DELETE | `/api/passwords/:id` | ✓ | own entries only; 404 for anybody else's |
 | — | WS | `/ws` | ✓ (subprotocol or `?token=`) | subscribed to own rooms |
 
 ### 14.1 Route-precedence requirements
@@ -3503,3 +3507,83 @@ post arrive exactly as they see a person's. Returns the created `Message`.
 Rate limited at 60/min per IP under its own budget (§2), **instead of** the
 general limiter — the general budget is shared per IP, and a spinning CI
 runner must not 429 the humans behind the same NAT.
+
+---
+
+## 18. Skynet Password (PocketSkynet extension)
+
+An encrypted key/value secret store, one per wallet. The server holds
+ciphertext and can decrypt nothing: both the **key** (what the secret is for)
+and the **value** (the secret) are sealed client-side under a key derived from
+the session's E2EE private key. The scheme is `docs/CRYPTO.md` §14; the module
+that implements it is `core/src/secrets.rs`, whose docs carry the threat model.
+
+Every route requires authentication and is scoped to the calling wallet. There
+is no sharing, no admin view, and no server-side search — the key is ciphertext
+too, so filtering happens in the client after decryption.
+
+### 18.1 Shapes
+
+```jsonc
+// A sealed field. Both halves of an entry have this shape.
+{
+  "ciphertext": "…",   // base64, standard alphabet with padding, 1..8192 chars
+  "iv": "…",           // 32 hex chars
+  "hmac": "…"          // 64 hex chars
+}
+
+// An entry.
+{
+  "id": "sec_0011…ff",         // client-minted: `sec_` + 32 hex
+  "key": { … }, "value": { … },
+  "encVer": 1,
+  "createdAt": 1754630400000,  // epoch ms
+  "updatedAt": 1754630400000
+}
+```
+
+`id` is chosen by the **client**, not the server, because it is part of the MAC
+input over each sealed field and the ciphertext has to exist before the row
+does. It is validated as 10–100 characters of `[A-Za-z0-9_-]` — the message-id
+charset, which additionally guarantees it cannot contain the `|` the MAC
+framing uses as a separator.
+
+Mixed-case hex is accepted for `iv` and `hmac`, as it is for room-key wraps
+(§0 of CRYPTO.md): the MAC covers the exact string the client produced, so the
+server must not normalise it.
+
+### 18.2 Endpoints
+
+#### `GET /api/passwords` — Auth: **yes**
+
+Array of entries, `updatedAt` descending, capped at 500 (which is also the
+per-account limit, so a full store still arrives in one response). An empty
+store is `200 []`.
+
+#### `POST /api/passwords` — Auth: **yes**
+
+Body: `{ id, key, value, encVer? }`. Returns the created entry.
+
+- `409 {"message": "That entry already exists"}` if the id is taken — by
+  anybody. Never an upsert: a retried create must not overwrite an edit made
+  in between.
+- `400` once the account holds 500 entries.
+
+#### `PUT /api/passwords/{id}` — Auth: **yes**
+
+Body: `{ key, value, encVer? }`; the id comes from the path, so a body that
+disagreed could not rename a row out from under its MAC. Both halves are
+replaced together with freshly sealed ciphertext — nothing about the previous
+value crosses the wire, not a diff and not a length. Returns the updated entry.
+
+#### `DELETE /api/passwords/{id}` — Auth: **yes**
+
+`{"message": "Entry deleted"}`.
+
+#### Why an unowned entry is a 404, not a 403
+
+Elsewhere in this API an authenticated-but-unentitled caller gets 403, because
+the resource is one they could reasonably know exists. An entry id is a 128-bit
+secret nobody but its owner holds, so a 403 would confirm a guess. `PUT` and
+`DELETE` therefore answer 404 with an identical message whether the entry
+belongs to somebody else or never existed at all.
