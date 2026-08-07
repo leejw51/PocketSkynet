@@ -720,6 +720,9 @@ impl Drop for Advertiser {
     fn drop(&mut self) {
         if let Advertiser::System(child) = self {
             let _ = child.kill();
+            // Reap it, or the killed child sits as a zombie for the rest of
+            // this process's life.
+            let _ = child.wait();
         }
     }
 }
@@ -851,6 +854,7 @@ pub enum BindError {
 pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
     let addr = std::net::SocketAddr::new(cfg.host, cfg.port);
     let static_dir = cfg.static_dir.clone();
+    let advertise = cfg.advertise;
     let rate_limited = cfg.rate_limit;
 
     // Certificates are prepared before the socket exists: material the server
@@ -1007,7 +1011,11 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
         );
     }
 
-    let mdns = advertise_mdns(bound_addr, scheme);
+    let mdns = if advertise {
+        advertise_mdns(bound_addr, scheme)
+    } else {
+        None
+    };
 
     Ok(Bound {
         state: background_state,
@@ -1110,6 +1118,7 @@ mod banner_tests {
             sse_token_query: false,
             rate_limit: false,
             verify_payments: false,
+            advertise: false,
             trust_proxy: 0,
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
@@ -1170,6 +1179,7 @@ mod banner_tests {
             sse_token_query: false,
             rate_limit: false,
             verify_payments: false,
+            advertise: false,
             trust_proxy: 0,
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
@@ -1285,6 +1295,7 @@ mod test_support {
             // Tests run offline; the payment path's RPC half is exercised by
             // its own unit tests against a mock endpoint.
             verify_payments: false,
+            advertise: false,
             trust_proxy: 0,
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
