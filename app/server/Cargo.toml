@@ -90,6 +90,19 @@ reqwest = { version = "0.12", default-features = false, features = [
 # only: that is what every "compress" menu produces, and each extra codec is
 # attack surface on a paid-but-public upload path.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Thumbnails (thumbs.rs): the one place this server decodes an image rather
+# than treating it as opaque bytes. Pure Rust, so nothing native to install,
+# and decode limits are set before any pixel is allocated. Only the formats
+# the media allow-lists can serve are compiled in — every extra decoder is
+# parser attack surface on user-supplied bytes, and `avif` stays out because
+# its decoder is the heavy native dependency this feature was told to avoid.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+    "bmp",
+] }
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
 bytes = "1.12.1"

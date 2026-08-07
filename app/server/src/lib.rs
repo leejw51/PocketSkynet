@@ -20,6 +20,7 @@ pub mod purge;
 pub mod ratelimit;
 pub mod routes;
 pub mod search;
+pub mod thumbs;
 pub mod tls;
 pub mod validate;
 

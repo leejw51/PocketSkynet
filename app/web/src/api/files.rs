@@ -28,6 +28,66 @@ pub struct DownloadLink {
     pub sha256: String,
     pub size_bytes: f64,
     pub filename: String,
+    /// The thumbnail, carrying the same capability — present only when one
+    /// exists, so a bubble never renders an `<img>` it knows will 404.
+    /// `default` keeps an older server (which omits the field) deserializing.
+    #[serde(default)]
+    pub thumb_url: Option<String>,
+}
+
+/// One tile of a room's gallery — `GET /api/rooms/{roomId}/media`.
+///
+/// Two stores merged by time (see the server's `routes/gallery.rs`), so half
+/// the fields are per-source: an attachment has `id` and `filename`, hosted
+/// media has `name` and `message_id`. `url` and `thumb_url` are ready to use
+/// as handed over — attachment URLs already carry their `?dl=` capability, so
+/// the grid renders with no further API calls.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryItem {
+    /// `"image"` or `"video"`.
+    pub kind: String,
+    /// `"attachment"` or `"hosted"`.
+    pub source: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+    pub sender: String,
+    pub url: String,
+    #[serde(default)]
+    pub thumb_url: Option<String>,
+    pub created_at: String,
+    pub created_at_ms: f64,
+}
+
+impl GalleryItem {
+    pub fn is_video(&self) -> bool {
+        self.kind == "video"
+    }
+
+    /// A stable identity for keyed lists, across both sources.
+    pub fn key(&self) -> String {
+        match (&self.id, &self.message_id, &self.name) {
+            (Some(id), _, _) => id.clone(),
+            (None, Some(mid), Some(name)) => format!("{mid}:{name}"),
+            _ => format!("{}:{}", self.created_at_ms, self.url),
+        }
+    }
+}
+
+/// One page of a room's gallery.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryPage {
+    pub items: Vec<GalleryItem>,
+    pub has_more: bool,
 }
 
 impl Client {
@@ -84,6 +144,49 @@ impl Client {
     pub async fn delete_file(&self, id: &str) -> ApiResult<()> {
         self.send_ok_empty(Method::DELETE, &format!("/api/files/{}", encode(id)))
             .await
+    }
+
+    /// Post a captured poster frame for a **video** attachment the caller
+    /// uploaded. The server re-encodes it, so the only contract is "a
+    /// decodable image"; JPEG is what `capture.rs` produces.
+    pub async fn upload_thumbnail(&self, id: &str, jpeg: Vec<u8>) -> ApiResult<()> {
+        let path = format!("/api/files/{}/thumbnail", encode(id));
+        let req = self
+            .build(Method::POST, &path)
+            .header("Content-Type", "image/jpeg")
+            .body(js_sys::Uint8Array::from(jpeg.as_slice()))
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let status = resp.status();
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            let body = resp.text().await.unwrap_or_default();
+            Err(ApiError::from_response(status, &body))
+        }
+    }
+
+    /// One page of the room's photo gallery, newest first. `before` is the
+    /// smallest `created_at_ms` already shown — the "load more" cursor.
+    pub async fn room_media(
+        &self,
+        room_id: &str,
+        before: Option<f64>,
+        limit: Option<u32>,
+    ) -> ApiResult<GalleryPage> {
+        let mut path = format!("/api/rooms/{}/media", encode(room_id));
+        let mut sep = '?';
+        if let Some(limit) = limit {
+            path.push_str(&format!("{sep}limit={limit}"));
+            sep = '&';
+        }
+        if let Some(before) = before {
+            path.push_str(&format!("{sep}before={}", before as i64));
+        }
+        self.send(Method::GET, &path).await
     }
 
     /// Ask for a short-lived URL a browser can download directly, plus the

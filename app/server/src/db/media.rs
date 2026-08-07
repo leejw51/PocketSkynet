@@ -155,6 +155,51 @@ pub fn names_for_room(conn: &Connection, room_id: &str) -> ApiResult<Vec<String>
     Ok(out)
 }
 
+/// One hosted-media reference as the gallery reads it: the servable name,
+/// which message showed it, who sent that message, and when.
+pub struct ShownMedia {
+    pub name: String,
+    pub message_id: String,
+    pub sender: String,
+    pub created_ms: i64,
+}
+
+/// The hosted pictures and videos a room shows, newest first, older than
+/// `before` — the gallery's second source, beside the room's attachments.
+///
+/// Reads `message_media` only, **not** the plaintext scan `names_for_room`
+/// also makes. The scan exists for purge completeness on databases that
+/// predate the table; here it would read every message in the room on every
+/// gallery open, and the price of skipping it is only that media in rooms
+/// older than the table waits for its message to be edited (which re-records
+/// it). Each (message, name) pair is one item: the same picture shared twice
+/// is two shares, which is what a gallery of *what happened in the room*
+/// means.
+pub fn shown_for_room(
+    conn: &Connection,
+    room_id: &str,
+    before_ms: i64,
+    limit: i64,
+) -> ApiResult<Vec<ShownMedia>> {
+    let mut stmt = conn.prepare(
+        "SELECT mm.image_name, mm.message_id, m.sender_address, mm.created_at
+         FROM message_media mm
+         JOIN messages m ON m.id = mm.message_id
+         WHERE mm.room_id = ?1 AND mm.created_at < ?2
+         ORDER BY mm.created_at DESC, mm.rowid DESC
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![room_id, before_ms, limit], |row| {
+        Ok(ShownMedia {
+            name: row.get(0)?,
+            message_id: row.get(1)?,
+            sender: row.get(2)?,
+            created_ms: row.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Does anything that survived still point at these bytes?
 ///
 /// Four places can, and a purge that skipped any of them would break somebody
@@ -338,6 +383,43 @@ mod tests {
 
         forget(&conn, "m1").unwrap();
         assert!(names_for_room(&conn, "r1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_gallery_reads_what_a_room_shows_with_its_sender_and_time() {
+        let conn = world();
+        let first = format!("{}.png", digest(0xd1));
+        let second = format!("{}.mp4", digest(0xd2));
+        let elsewhere = format!("{}.gif", digest(0xd3));
+
+        message(&conn, "m1", "r1", "ciphertext", true);
+        message(&conn, "m2", "r1", "ciphertext", true);
+        message(&conn, "m3", "r2", "ciphertext", true);
+        record(&conn, "m1", "r1", std::slice::from_ref(&first)).unwrap();
+        record(&conn, "m2", "r1", std::slice::from_ref(&second)).unwrap();
+        record(&conn, "m3", "r2", std::slice::from_ref(&elsewhere)).unwrap();
+        // Spread the clock so the order is the timestamps', not insertion's.
+        conn.execute(
+            "UPDATE message_media SET created_at = CASE message_id
+                 WHEN 'm1' THEN 100 WHEN 'm2' THEN 200 ELSE 300 END",
+            [],
+        )
+        .unwrap();
+
+        let shown = shown_for_room(&conn, "r1", i64::MAX, 10).unwrap();
+        assert_eq!(shown.len(), 2, "the other room's media is not this room's");
+        assert_eq!(shown[0].name, second);
+        assert_eq!(shown[0].message_id, "m2");
+        assert_eq!(shown[0].sender, "alice");
+        assert_eq!(shown[0].created_ms, 200);
+        assert_eq!(shown[1].name, first);
+
+        // Exclusive cursor, and a deleted message's media leaves the gallery.
+        assert_eq!(shown_for_room(&conn, "r1", 200, 10).unwrap().len(), 1);
+        forget(&conn, "m2").unwrap();
+        let shown = shown_for_room(&conn, "r1", i64::MAX, 10).unwrap();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].name, first);
     }
 
     #[test]

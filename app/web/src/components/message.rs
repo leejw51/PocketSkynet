@@ -391,9 +391,19 @@ fn render_content(lang: Lang, text: &str, on_tag: &Callback<String>) -> Html {
             // rendered as the bare text `/api/images/<64 hex>.png`, which is
             // the one shape in a room that is unambiguously a picture and
             // was the only one shown as a string.
+            //
+            // The thumbnail route hangs off the media URL itself, so it works
+            // whether the token was written relative or absolute. Media hosted
+            // before thumbnails existed 404s there; both embeds treat that as
+            // "use the original", which was the old behaviour.
+            let thumb = format!("{}/thumbnail", media.url);
             out.push(match media.kind {
-                MediaKind::Image => html! { <ImageEmbed url={media.url.to_owned()} /> },
-                MediaKind::Video => html! { <VideoEmbed url={media.url.to_owned()} /> },
+                MediaKind::Image => {
+                    html! { <ImageEmbed url={media.url.to_owned()} thumb={thumb} /> }
+                }
+                MediaKind::Video => {
+                    html! { <VideoEmbed url={media.url.to_owned()} poster={thumb} /> }
+                }
             });
         } else if token.starts_with("https://") || token.starts_with("http://") {
             if let Some(id) = youtube_id(token) {
@@ -654,6 +664,9 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
     let lang = store.language;
     let meta = use_state(|| Option::<crate::api::FileMeta>::None);
     let blob = use_state(|| Option::<String>::None);
+    // The thumbnail URL, when the server holds one — carrying the same
+    // capability the full URL does, so it costs no extra mint.
+    let thumb = use_state(|| Option::<String>::None);
     let load = use_state(|| MediaLoad::Loading);
     // False until the viewer asks for the film. See the render below for why a
     // video is a still first.
@@ -664,6 +677,7 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
         let store = store.clone();
         let meta = meta.clone();
         let blob = blob.clone();
+        let thumb = thumb.clone();
         let load = load.clone();
         let id = p.id.to_string();
         use_effect_with(id.clone(), move |_| {
@@ -711,6 +725,7 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
                         // Content-Type; without it the element is handed
                         // octet-stream and plays nothing.
                         blob.set(Some(store.client.url(&format!("{}&inline=1", link.url))));
+                        thumb.set(link.thumb_url.map(|u| store.client.url(&u)));
                         load.set(MediaLoad::Loaded);
                     }
                     Err(_) => load.set(MediaLoad::Failed),
@@ -751,12 +766,17 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
     // which is the heavier of the two gestures pointing at the same wish — to
     // see the thing bigger — and the one that costs a tab. The new window is
     // still on the toolbar for anyone who wanted the window itself.
+    //
+    // When the bubble is showing the *thumbnail*, the lightbox must not: the
+    // whole point of the zoom is to read the full picture, so the shot names
+    // the full URL while the entrance still travels from the thumbnail's rect.
     let open_zoom = {
         let img = img.clone();
         let filename = file.filename.clone();
+        let full = thumb.is_some().then(|| (*blob).clone()).flatten();
         Callback::from(move |e: MouseEvent| {
             e.stop_propagation();
-            super::lightbox::zoom(&img, Some(filename.clone()));
+            zoom_past_thumbnail(&img, full.clone(), Some(filename.clone()));
         })
     };
 
@@ -790,9 +810,12 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
 
     let media = match (&*blob, file.is_previewable_video()) {
         // A video in the stream is a **still**, not a player, until it is
-        // asked for. `preload="metadata"` fetches the header and one frame —
-        // a few hundred kilobytes of a film that may be gigabytes — so a room
-        // full of videos costs a room full of thumbnails.
+        // asked for. The still is the server-held poster when there is one —
+        // a few tens of kilobytes — and only falls back to
+        // `preload="metadata"` (the header and one frame of a film that may
+        // be gigabytes) for videos uploaded before posters existed. A room
+        // full of videos now costs a room full of *thumbnails*, in the small
+        // sense of the word this comment always wanted.
         //
         // Clicking swaps in the real player: `controls`, `autoplay`, and
         // `preload="auto"`, which is the point at which the browser actually
@@ -809,12 +832,21 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
                     Callback::from(move |_: MouseEvent| playing.set(true))
                 }}
             >
-                <video
-                    class="fn-attach__media"
-                    src={url.clone()}
-                    muted=true
-                    preload="metadata"
-                />
+                if let Some(poster) = (*thumb).clone() {
+                    <img
+                        class="fn-attach__media"
+                        src={poster}
+                        alt={file.filename.clone()}
+                        loading="lazy"
+                    />
+                } else {
+                    <video
+                        class="fn-attach__media"
+                        src={url.clone()}
+                        muted=true
+                        preload="metadata"
+                    />
+                }
                 <span class="fn-attach__play-badge" aria-hidden="true">
                     { icons::play(22) }
                 </span>
@@ -829,6 +861,9 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
                 preload="auto"
             />
         },
+        // A picture renders from its thumbnail when the server holds one —
+        // the bubble is capped at 400px, so full bytes here were always
+        // decoration — and the tap zooms to the full URL (see `open_zoom`).
         (Some(url), false) => html! {
             <button
                 type="button"
@@ -840,7 +875,7 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
                 <img
                     ref={img}
                     class="fn-attach__media"
-                    src={url.clone()}
+                    src={(*thumb).clone().unwrap_or_else(|| url.clone())}
                     alt={file.filename.clone()}
                 />
             </button>
@@ -890,9 +925,53 @@ fn attachment_embed(p: &AttachmentEmbedProps) -> Html {
     }
 }
 
+/// Raise the lightbox for the **full** picture from an `<img>` that may be
+/// showing only its thumbnail.
+///
+/// With no `full` URL the element's own src is already the picture and
+/// [`lightbox::zoom`] does everything. With one, the shot names the full URL
+/// while the entrance still travels from the thumbnail's painted rect — same
+/// place, same shape (a thumbnail shares its original's aspect ratio), sharper
+/// pixels arriving as they load.
+///
+/// [`lightbox::zoom`]: super::lightbox::zoom
+pub(super) fn zoom_past_thumbnail(node: &NodeRef, full: Option<String>, caption: Option<String>) {
+    let Some(src) = full else {
+        super::lightbox::zoom(node, caption);
+        return;
+    };
+    let Some(img) = node.cast::<web_sys::HtmlImageElement>() else {
+        return;
+    };
+    let natural = (
+        f64::from(img.natural_width()),
+        f64::from(img.natural_height()),
+    );
+    let r = img.get_bounding_client_rect();
+    let area = super::lightbox::Rect {
+        x: r.left(),
+        y: r.top(),
+        w: r.width(),
+        h: r.height(),
+    };
+    super::lightbox::show(super::lightbox::Shot {
+        src,
+        alt: img.alt(),
+        caption,
+        origin: Some(super::lightbox::painted(area, natural.0, natural.1)),
+        // The full picture's pixel size is unknown until it loads; the
+        // lightbox borrows the thumbnail's shape, which is the same shape.
+        natural: None,
+    });
+}
+
 #[derive(Properties, PartialEq)]
 struct ImageEmbedProps {
     url: AttrValue,
+    /// A smaller copy to show in the bubble, when the server holds one.
+    /// The zoom always names the full `url`.
+    #[prop_or_default]
+    thumb: Option<AttrValue>,
 }
 
 /// An inline image: lazy, a spinner where the image will land, and a failure
@@ -906,6 +985,10 @@ struct ImageEmbedProps {
 fn image_embed(p: &ImageEmbedProps) -> Html {
     let lang = crate::state::use_store().language;
     let load = use_state(|| MediaLoad::Loading);
+    // The thumbnail is an optimisation, so its failure must not be one: media
+    // hosted before thumbnails existed 404s there, and the answer is the full
+    // picture — the pre-thumbnail behaviour — not a broken row.
+    let thumb_failed = use_state(|| false);
     let img = use_node_ref();
 
     if *load == MediaLoad::Failed {
@@ -918,22 +1001,38 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
         };
     }
 
+    let showing_thumb = p.thumb.is_some() && !*thumb_failed;
+    let src: AttrValue = if showing_thumb {
+        p.thumb.clone().unwrap_or_else(|| p.url.clone())
+    } else {
+        p.url.clone()
+    };
+
     let onload = {
         let load = load.clone();
         Callback::from(move |_: Event| load.set(MediaLoad::Loaded))
     };
     let onerror = {
         let load = load.clone();
-        Callback::from(move |_: Event| load.set(MediaLoad::Failed))
+        let thumb_failed = thumb_failed.clone();
+        let falls_back = showing_thumb;
+        Callback::from(move |_: Event| {
+            if falls_back {
+                thumb_failed.set(true);
+            } else {
+                load.set(MediaLoad::Failed);
+            }
+        })
     };
     // A button, not a bare `onclick` on the image: this is a control, and a
     // control that only a mouse can reach is not one. The whole picture is the
     // hit area, because on a phone that is the only hit area there is.
     let zoom = {
         let img = img.clone();
+        let full = showing_thumb.then(|| p.url.to_string());
         Callback::from(move |e: MouseEvent| {
             e.stop_propagation();
-            super::lightbox::zoom(&img, None);
+            zoom_past_thumbnail(&img, full.clone(), None);
         })
     };
 
@@ -955,7 +1054,7 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
             >
                 <img
                     ref={img}
-                    src={p.url.clone()}
+                    {src}
                     alt={t(lang, Key::image_alt)}
                     loading="lazy"
                     {onload}
@@ -969,6 +1068,10 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
 #[derive(Properties, PartialEq)]
 struct VideoEmbedProps {
     url: AttrValue,
+    /// A poster frame, when the server holds one. A 404 here is harmless —
+    /// the element falls back to the metadata frame it fetches anyway.
+    #[prop_or_default]
+    poster: Option<AttrValue>,
 }
 
 /// An inline video: the clip itself, with controls, where the URL would have
@@ -1013,6 +1116,7 @@ fn video_embed(p: &VideoEmbedProps) -> Html {
             }
             <video
                 src={p.url.clone()}
+                poster={p.poster.clone()}
                 controls=true
                 playsinline=true
                 preload="metadata"

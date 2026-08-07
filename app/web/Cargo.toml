@@ -100,6 +100,12 @@ features = [
     # FileReader is deliberately absent — one fewer API, and no event plumbing.
     "File",
     "FileList",
+    # Video thumbnails are captured in the browser (capture.rs): an offscreen
+    # <video> seeks a frame and a 2D canvas re-draws it. HtmlMediaElement is
+    # HtmlVideoElement's parent class, where currentTime/duration/readyState
+    # live; the canvas features above cover the drawing half.
+    "HtmlVideoElement",
+    "HtmlMediaElement",
     # An attachment download is authenticated, so it cannot be a bare href: the
     # bytes are fetched with the token and handed to the page as a blob URL.
     # That needs Response/Headers from the fetch side.

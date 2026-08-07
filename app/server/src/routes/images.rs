@@ -75,11 +75,21 @@ pub fn router() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES))
 }
 
-/// The serving route, split out for the media rate-limit budget — same
+/// The serving routes, split out for the media rate-limit budget — same
 /// reasoning as `files::media_router`: an AI-generated video hosted here is
 /// played by a `<video>` element, and playback is many requests by design.
+/// The thumbnail routes belong on the same budget — a gallery grid fetches
+/// one per tile — and GET and POST share the path, so the POST lives here
+/// too: axum will not merge one path from two routers.
 pub fn media_router() -> Router<AppState> {
-    Router::new().route("/images/{name}", get(serve))
+    Router::new()
+        .route("/images/{name}", get(serve))
+        .route(
+            "/images/{name}/thumbnail",
+            get(serve_thumb).post(accept_thumbnail),
+        )
+        // For the posted frame; harmless on the GETs.
+        .layer(DefaultBodyLimit::max(MAX_IMAGE_BYTES))
 }
 
 /// The media types the AI providers actually emit. A server that stores
@@ -190,6 +200,11 @@ async fn store(state: &AppState, ext: &str, body: &[u8]) -> ApiResult<String> {
             .map_err(|e| ApiError::Internal(e.into()))?;
     }
 
+    // A picture gets its thumbnail here, while the bytes are still in hand;
+    // a video gets one when a client posts a captured frame. Best-effort by
+    // design — see `thumbs::accompany` for why this can never fail an upload.
+    crate::thumbs::accompany(&dir, &name, body.to_vec()).await;
+
     Ok(format!("/api/images/{name}"))
 }
 
@@ -245,6 +260,11 @@ pub(crate) async fn finalize_upload(
             .await
             .map_err(|e| ApiError::Internal(e.into()))?;
     }
+
+    // The chunked path never held the bytes, so the thumbnail reads them back
+    // from disk — bounded by the image cap, which is also the largest thing
+    // this branch can be. Videos wait for a client-captured frame.
+    crate::thumbs::accompany_file(&dir, &name, MAX_IMAGE_BYTES as u64).await;
 
     Ok((
         StatusCode::OK,
@@ -411,6 +431,96 @@ async fn serve(State(state): State<AppState>, Path(name): Path<String>) -> ApiRe
     // The type is from the allow-list, not from whoever uploaded — but the
     // extension is what chose it, and `nosniff` is what stops a browser
     // second-guessing that on content it finds surprising.
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    Ok(response)
+}
+
+/// `POST /api/images/{name}/thumbnail` — attach a client-captured frame to a
+/// hosted **video**.
+///
+/// The server can thumbnail a picture itself but not a film — that would mean
+/// ffmpeg or a codec stack, a native dependency this project deliberately does
+/// not carry — so the client that already decoded the video for playback
+/// captures a frame and posts it here. Three rules keep that sound:
+///
+/// * **Videos only.** An image's thumbnail is generated at upload from the
+///   real bytes; accepting a client's version would let anyone repaint it.
+/// * **Never stored verbatim.** The posted bytes go through `thumbs::render`,
+///   so what lands on disk is this server's own JPEG of the frame's *pixels* —
+///   a crafted file either decodes or is refused, and survives only as pixels
+///   either way.
+/// * **First writer wins.** The sidecar is content-addressed to the original,
+///   and the uploader showing the video is naturally the first to post; a
+///   later, different frame is a no-op rather than an overwrite.
+async fn accept_thumbnail(
+    State(state): State<AppState>,
+    AuthUser(_caller): AuthUser,
+    Path(name): Path<String>,
+    body: Bytes,
+) -> ApiResult<Response> {
+    if !crate::db::media::is_media_name(&name) {
+        return Err(ApiError::not_found("Image not found"));
+    }
+    let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    if !crate::thumbs::is_video(ext) {
+        return Err(ApiError::bad_request(
+            "Only a video takes a posted thumbnail; images get theirs at upload",
+        ));
+    }
+    let dir = state.cfg.images_dir();
+    // The original must already be hosted: a sidecar with no original is a
+    // write this route would otherwise let anyone park under any hash.
+    if !dir.join(&name).exists() {
+        return Err(ApiError::not_found("Image not found"));
+    }
+    if body.is_empty() || body.len() > MAX_IMAGE_BYTES {
+        return Err(ApiError::bad_request("A thumbnail must be a small image"));
+    }
+    if crate::thumbs::exists(&dir, &name) {
+        return Ok(super::message("Thumbnail already stored"));
+    }
+    let Some(jpeg) = crate::thumbs::render_blocking(body.to_vec()).await else {
+        return Err(ApiError::bad_request("Not a decodable image"));
+    };
+    crate::thumbs::store(&dir, &name, &jpeg)
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    Ok(super::message("Thumbnail stored"))
+}
+
+/// `GET /api/images/{name}/thumb` — the thumbnail of a hosted image or video.
+///
+/// Public for the same reason [`serve`] is: the URL is derived from the same
+/// content hash that is already the capability, so it names nothing the
+/// original did not. A missing sidecar is a plain 404 the client treats as
+/// "use the original".
+async fn serve_thumb(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Response> {
+    // Same grammar as `serve`, same reason: the name is the traversal guard.
+    if !crate::db::media::is_media_name(&name) {
+        return Err(ApiError::not_found("Image not found"));
+    }
+    let dir = state.cfg.images_dir();
+    let path = crate::thumbs::sidecar_path(&dir, &name)
+        .ok_or_else(|| ApiError::not_found("Image not found"))?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|_| ApiError::not_found("Image not found"))?;
+
+    let mut response = (StatusCode::OK, bytes).into_response();
+    let headers = response.headers_mut();
+    // Always JPEG: `thumbs::render` writes nothing else.
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
+    // Immutable is *almost* sound — the name derives from the original's
+    // content — but a video's sidecar appears after the original and, being
+    // first-writer-wins, never changes once present. A day bounds the one
+    // transition; after that the cache may keep it forever.
+    headers.insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=86400"),
+    );
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     Ok(response)
 }
@@ -630,6 +740,218 @@ mod tests {
             .unwrap();
         let response = router.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Raw GET returning bytes, for asserting on served thumbnails.
+    async fn get_bytes(router: &axum::Router, uri: &str) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let response = router.clone().oneshot(req).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, headers, body.to_vec())
+    }
+
+    /// A photograph-sized PNG, so the thumbnail has something to shrink.
+    fn big_png() -> Vec<u8> {
+        let img = image::RgbImage::from_fn(1024, 768, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 99])
+        });
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn uploading_an_image_leaves_a_served_thumbnail_beside_it() {
+        let state = state("img-thumb");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        let (status, json) = post_image(&router, Some(&token), "image/png", &big_png()).await;
+        assert_eq!(status, StatusCode::OK);
+        let url = json["url"].as_str().unwrap().to_owned();
+        let name = url.strip_prefix("/api/images/").unwrap();
+
+        let (status, headers, bytes) =
+            get_bytes(&router, &format!("/api/images/{name}/thumbnail")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[CONTENT_TYPE], "image/jpeg");
+        assert_eq!(headers["x-content-type-options"], "nosniff");
+        let thumb = image::load_from_memory(&bytes).expect("a decodable JPEG");
+        assert!(thumb.width() <= crate::thumbs::THUMB_EDGE);
+        assert!(thumb.height() <= crate::thumbs::THUMB_EDGE);
+        assert!(
+            (bytes.len() as u64) < 200 * 1024,
+            "a thumbnail should cost far less than the original"
+        );
+    }
+
+    #[tokio::test]
+    async fn bytes_that_do_not_decode_still_upload_and_simply_have_no_thumbnail() {
+        // The rule the module docs state: generation never judges an upload.
+        let state = state("img-thumb-opaque");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        let junk = vec![0x42u8; 4096];
+        let (status, json) = post_image(&router, Some(&token), "image/png", &junk).await;
+        assert_eq!(status, StatusCode::OK, "the upload is untouched");
+        let url = json["url"].as_str().unwrap().to_owned();
+        let name = url.strip_prefix("/api/images/").unwrap();
+
+        let (status, _, _) = get_bytes(&router, &format!("/api/images/{name}/thumbnail")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_posted_video_frame_is_rendered_and_the_first_writer_wins() {
+        let state = state("img-thumb-video");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        // The server never decodes video, so any bytes host as one.
+        let clip = vec![0x21u8; 2048];
+        let (_, json) = post_image(&router, Some(&token), "video/mp4", &clip).await;
+        let url = json["url"].as_str().unwrap().to_owned();
+        let name = url.strip_prefix("/api/images/").unwrap().to_owned();
+
+        // No thumbnail until a client posts a captured frame.
+        let (status, _, _) = get_bytes(&router, &format!("/api/images/{name}/thumbnail")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let frame = big_png();
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/images/{name}/thumbnail"))
+            .header("content-type", "image/png")
+            .header("authorization", format!("Bearer {token}"));
+        let response = router
+            .clone()
+            .oneshot(req.body(Body::from(frame.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let (status, headers, first) =
+            get_bytes(&router, &format!("/api/images/{name}/thumbnail")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[CONTENT_TYPE], "image/jpeg");
+        // Rendered, never stored verbatim: the served bytes are a JPEG this
+        // server encoded, not the PNG that was posted.
+        assert_ne!(first, frame);
+        assert_eq!(
+            image::guess_format(&first).unwrap(),
+            image::ImageFormat::Jpeg
+        );
+
+        // A second, different frame is a no-op, not an overwrite.
+        req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/images/{name}/thumbnail"))
+            .header("content-type", "image/png")
+            .header("authorization", format!("Bearer {token}"));
+        let response = router
+            .clone()
+            .oneshot(req.body(Body::from(PNG.to_vec())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let (_, _, second) = get_bytes(&router, &format!("/api/images/{name}/thumbnail")).await;
+        assert_eq!(second, first);
+    }
+
+    #[tokio::test]
+    async fn a_posted_thumbnail_is_refused_for_images_junk_and_ghosts() {
+        let state = state("img-thumb-refusals");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        let (_, json) = post_image(&router, Some(&token), "image/png", PNG).await;
+        let image_name = json["url"].as_str().unwrap()["/api/images/".len()..].to_owned();
+        let (_, json) = post_image(&router, Some(&token), "video/mp4", &[0x21u8; 64]).await;
+        let video_name = json["url"].as_str().unwrap()["/api/images/".len()..].to_owned();
+
+        let post = |uri: String, body: Vec<u8>, with_token: bool| {
+            let router = router.clone();
+            let token = token.clone();
+            async move {
+                let mut req = Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "image/png");
+                if with_token {
+                    req = req.header("authorization", format!("Bearer {token}"));
+                }
+                router
+                    .oneshot(req.body(Body::from(body)).unwrap())
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+
+        // An image's thumbnail is the server's to make, not the caller's.
+        assert_eq!(
+            post(
+                format!("/api/images/{image_name}/thumbnail"),
+                PNG.to_vec(),
+                true
+            )
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+        // Bytes that do not decode as an image are refused, not stored.
+        assert_eq!(
+            post(
+                format!("/api/images/{video_name}/thumbnail"),
+                b"not an image".to_vec(),
+                true
+            )
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+        // A video that was never hosted takes nothing.
+        assert_eq!(
+            post(
+                format!("/api/images/{}.mp4/thumbnail", "d".repeat(64)),
+                PNG.to_vec(),
+                true
+            )
+            .await,
+            StatusCode::NOT_FOUND
+        );
+        // And none of it without a token.
+        assert_eq!(
+            post(
+                format!("/api/images/{video_name}/thumbnail"),
+                PNG.to_vec(),
+                false
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn thumbnail_urls_with_traversal_shaped_names_are_not_found() {
+        let router = build(state("img-thumb-traversal"));
+        for name in [
+            "/api/images/..%2F..%2Fjwt.secret.png/thumbnail",
+            "/api/images/notahash.png/thumbnail",
+            &format!("/api/images/{}.thumb.jpg/thumbnail", "a".repeat(64)),
+        ] {
+            let (status, _, _) = get_bytes(&router, name).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{name}");
+        }
     }
 
     /// The allow-list is the whole of the SSRF defence, so it gets a test of

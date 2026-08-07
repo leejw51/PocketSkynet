@@ -1338,6 +1338,17 @@ pub async fn attach_file(store: Store, room_id: RoomId, picked: web_sys::File, c
         t(lang, Key::attach_uploaded).replace("{name}", &file.filename),
     );
 
+    // A video gets its poster frame here, captured from the same handle that
+    // was just uploaded — the browser has the codec, the server deliberately
+    // does not (`capture.rs`). *Before* the message is posted, so the bubble's
+    // first render already finds the thumbnail; and entirely best-effort, so
+    // a codec the browser cannot seek costs nothing but the poster.
+    if crate::capture::is_video_file(&picked) {
+        if let Some(frame) = crate::capture::video_frame(&picked).await {
+            let _ = store.client.upload_thumbnail(&file.id, frame).await;
+        }
+    }
+
     // Post it into the room, which is the whole point: an attachment that only
     // exists in the Files drawer is invisible from the conversation, and the
     // first thing anyone reported was "I attached a video and nothing
