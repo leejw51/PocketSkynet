@@ -105,7 +105,44 @@ impl WalletAddress {
         let full = self.to_checksummed();
         format!("{}…{}", &full[..6], &full[38..])
     }
+
+    /// The sender address for an incoming webhook's posts:
+    /// `0x00000000` ‖ first 32 hex chars of `SHA-256(hook id)`.
+    ///
+    /// A webhook post needs a sender, and every consumer of `senderAddress` —
+    /// this type's own deserializer, avatar seeds, block lists, the mention
+    /// resolver — expects a wallet-shaped string. Rather than teach all of
+    /// them a second grammar, a webhook *gets* a wallet address: derived from
+    /// its id, so it is stable across posts, distinct per webhook, and held
+    /// by nobody — recovering a private key whose account is a chosen address
+    /// is a preimage attack on Keccak. It can therefore never sign a login
+    /// challenge, which is what "not impersonating a member" means here.
+    ///
+    /// The four zero bytes are the machine-readable attribution: clients
+    /// render anything under this prefix as a webhook, not a person (see
+    /// [`Self::is_webhook_sender`]). The derivation lives here in core so the
+    /// server that writes the address and the client that badges it cannot
+    /// drift apart.
+    pub fn webhook_sender(hook_id: &str) -> Self {
+        use sha2::{Digest, Sha256};
+        let digest = hex::encode(Sha256::digest(hook_id.as_bytes()));
+        Self(format!("{WEBHOOK_SENDER_PREFIX}{}", &digest[..32]))
+    }
+
+    /// Whether this address was minted by [`Self::webhook_sender`].
+    ///
+    /// A person *could* grind ~2³² keys for a vanity address under this
+    /// prefix, and would thereby earn themselves a robot badge on their own
+    /// messages — that is the entire prize. The direction that would matter,
+    /// a webhook landing on an address somebody actually holds, is not up for
+    /// grinding: a webhook's address is fixed by its id, not chosen.
+    pub fn is_webhook_sender(&self) -> bool {
+        self.0.starts_with(WEBHOOK_SENDER_PREFIX)
+    }
 }
+
+/// The reserved leading bytes of every webhook sender address.
+pub const WEBHOOK_SENDER_PREFIX: &str = "0x00000000";
 
 impl fmt::Display for WalletAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -373,5 +410,30 @@ mod tests {
         // The bounds themselves are inclusive on both ends.
         assert!(RoomId::new(&"a".repeat(10)).is_ok());
         assert!(RoomId::new(&"a".repeat(100)).is_ok());
+    }
+
+    #[test]
+    fn webhook_senders_are_valid_addresses_under_the_reserved_prefix() {
+        let hook = WalletAddress::webhook_sender("hook_1749652746620_ab12cd34");
+
+        // Wallet-shaped: everything that parses addresses must accept it, or
+        // one webhook post would fail deserialisation of a whole message list.
+        assert!(WalletAddress::new(hook.as_str()).is_ok());
+        assert!(hook.is_webhook_sender());
+        assert!(hook.as_str().starts_with(WEBHOOK_SENDER_PREFIX));
+
+        // Stable per id, distinct across ids.
+        assert_eq!(
+            hook,
+            WalletAddress::webhook_sender("hook_1749652746620_ab12cd34")
+        );
+        assert_ne!(
+            hook,
+            WalletAddress::webhook_sender("hook_1749652746620_other")
+        );
+
+        // An ordinary wallet is never mistaken for one.
+        let person = WalletAddress::new("0x742d35Cc6634C0532925a3b844Bc9e7595f06b22").unwrap();
+        assert!(!person.is_webhook_sender());
     }
 }

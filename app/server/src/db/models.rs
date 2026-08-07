@@ -450,6 +450,51 @@ pub struct InvitationView {
     pub created_at: String,
 }
 
+/// An incoming webhook (docs/API.md §17), token included.
+///
+/// The token appears in every serialisation on purpose: these objects are only
+/// ever returned to a room admin, and the admin's one job on this screen is to
+/// copy the URL — a listing that redacted it would force a revoke-and-recreate
+/// cycle every time a CI config is rebuilt.
+#[derive(Debug, Clone, Serialize)]
+pub struct Webhook {
+    pub id: String,
+    #[serde(rename = "roomId")]
+    pub room_id: String,
+    pub name: String,
+    pub token: String,
+    /// The path an external system POSTs to. Derived, but sent anyway so no
+    /// integrator has to learn the URL shape from prose.
+    pub url: String,
+    /// The address this webhook's messages are sent from — see
+    /// `WalletAddress::webhook_sender`.
+    #[serde(rename = "senderAddress")]
+    pub sender_address: String,
+    #[serde(rename = "createdBy")]
+    pub created_by: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+}
+
+impl Webhook {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let id: String = row.get("id")?;
+        let token: String = row.get("token")?;
+        Ok(Self {
+            url: format!("/api/webhooks/{token}"),
+            sender_address: pocketskynet_core::WalletAddress::webhook_sender(&id)
+                .as_str()
+                .to_owned(),
+            id,
+            room_id: row.get("room_id")?,
+            name: row.get("name")?,
+            token,
+            created_by: row.get("created_by")?,
+            created_at: iso_ms(row.get("created_at")?),
+        })
+    }
+}
+
 /// One reaction code and the set of users currently holding it.
 ///
 /// `count` is the size of the reactor set. It can exceed `users.len()` when a

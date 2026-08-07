@@ -97,7 +97,7 @@ async fn add(
         })
         .await?;
 
-    super::messages::announce(&state, &room, &caller, event.msg_serial).await;
+    super::messages::announce(&state, &room, Some(&caller), event.msg_serial).await;
     // A bare `Message`: the reaction row has no `sender` in the wire shape,
     // and the caller already knows who reacted — it was them.
     event.sender = None;
@@ -133,7 +133,7 @@ async fn remove(
         })
         .await?;
 
-    super::messages::announce(&state, &room, &caller, event.msg_serial).await;
+    super::messages::announce(&state, &room, Some(&caller), event.msg_serial).await;
     Ok(super::message("Emoticon removed successfully"))
 }
 

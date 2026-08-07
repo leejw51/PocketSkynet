@@ -214,9 +214,9 @@ Lighter than enterprise compliance, but still needed for a real team:
 
 ## 4. Platform & scale
 
-- **Integration surface** — no webhooks (in or out), no slash commands, no
-  public API contract. Incoming webhooks (CI, GitHub, monitoring → room)
-  are the minimum company glue.
+- **Integration surface** — incoming webhooks **shipped** (§7 M4, API.md
+  §17): CI, GitHub, monitoring → room, per-room token, plaintext rooms only.
+  Still open: outgoing webhooks, slash commands, a public API contract.
 - **Single-node only** — in-process hub, SQLite, in-process rate limiter.
   Fine for a team-sized deployment; acknowledged in PARITY.md.
 - **E2EE vs. search/AI tension** — encrypted messages are excluded from
@@ -305,7 +305,11 @@ In priority order; M1 and M2 decide whether people stay after day one.*
 - [ ] Per-room persistent drafts
 
 **M4 — Operating it** (one server, somebody has to run it)
-- [ ] Incoming webhooks: per-room token, POST → message, plaintext rooms only
+- [x] Incoming webhooks: per-room token, POST → message, plaintext rooms only
+      — **shipped**: `POST /api/webhooks/{token}` (the token is the auth, own
+      rate budget), admin create/list/revoke in the room menu, derived
+      `0x00000000…` sender identity with a webhook badge, refused for E2EE
+      rooms at create *and* post time (API.md §17)
 - [ ] Backup / restore doc (SQLite + `data/`, one page)
 
 **M5 — Reliability debt (§5)**

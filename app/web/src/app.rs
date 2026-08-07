@@ -937,6 +937,9 @@ fn render_modal(store: &Store, route: &Route, on_navigate: &Callback<Route>) -> 
         Some(Modal::ManageAdmins(id)) => html! {
             <dialogs::ManageAdmins room_id={id} on_close={close} />
         },
+        Some(Modal::Webhooks(id)) => html! {
+            <dialogs::ManageWebhooks room_id={id} on_close={close} />
+        },
         Some(Modal::Blocked) => html! { <dialogs::Blocked on_close={close} /> },
         Some(Modal::HiddenRooms) => html! { <dialogs::HiddenRooms on_close={close} /> },
         Some(Modal::RenameRoom(id, current)) => html! {

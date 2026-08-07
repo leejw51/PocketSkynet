@@ -1424,6 +1424,12 @@ fn room_menu(
                 { item(t(lang, Key::rename_room), Modal::RenameRoom(id.clone(), name.clone()), open.clone()) }
                 { item(t(lang, Key::manage_admins), Modal::ManageAdmins(id.clone()), open.clone()) }
             }
+            // Only where the server would say yes: a webhook holds no room
+            // key, so an encrypted room has nothing to manage behind this
+            // item and offering it would open a dialog that only errors.
+            if !direct && is_admin && !room.has_encryption {
+                { item(t(lang, Key::webhooks_menu), Modal::Webhooks(id.clone()), open.clone()) }
+            }
             <button
                 type="button"
                 role="menuitem"

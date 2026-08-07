@@ -188,6 +188,14 @@ pub fn message_row(p: &MessageProps) -> Html {
             if !p.grouped {
                 <header class="fn-msg__sender">
                     <strong>{ &sender_name }</strong>
+                    // A robot is not a member and must not read as one. The
+                    // reserved sender prefix is the wire-level attribution
+                    // (core `webhook_sender`); this chip is what it looks
+                    // like. Colour is never the only signal — the word is
+                    // right there for screen readers and greyscale alike.
+                    if m.sender_address.is_webhook_sender() {
+                        <span class="fn-badge fn-badge--info">{ t(lang, Key::webhook_badge) }</span>
+                    }
                     <Addr address={m.sender_address.clone()} />
                     <time class="fn-msg__time" datetime={m.created_at.clone().unwrap_or_default()}>
                         { format::hhmm(m.message_timestamp, p.tz) }

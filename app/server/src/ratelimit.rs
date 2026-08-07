@@ -72,6 +72,15 @@ pub enum Scope {
     Challenge,
     /// `POST /api/auth/login`.
     Login,
+    /// `POST /api/webhooks/{token}` — the unauthenticated webhook post.
+    ///
+    /// Its own budget, applied *instead of* [`Scope::General`], for the same
+    /// structural reason the auth endpoints have theirs: this is the one
+    /// message-writing route with no wallet behind it, so the IP is the only
+    /// identity there is to meter. One post a second sustained is more than
+    /// any CI pipeline produces and little enough that a looping script
+    /// cannot flood a room between someone noticing and revoking the token.
+    Webhook,
 }
 
 impl Scope {
@@ -88,6 +97,7 @@ impl Scope {
             Self::Upload => 1_200,
             Self::Challenge => 10,
             Self::Login => 5,
+            Self::Webhook => 60,
         }
     }
 
@@ -102,6 +112,7 @@ impl Scope {
             Self::Upload => "Too many upload requests, please slow down and resume",
             Self::Challenge => "Too many challenge requests, please try again later",
             Self::Login => "Too many login attempts, please try again later",
+            Self::Webhook => "Too many webhook posts, please slow down",
         }
     }
 }
@@ -301,6 +312,12 @@ pub async fn login(State(state): State<AppState>, req: Request, next: Next) -> R
     enforce(Scope::Login, state, req, next).await
 }
 
+/// The webhook-post budget, applied *instead of* [`general`] — see
+/// [`Scope::Webhook`].
+pub async fn webhook(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    enforce(Scope::Webhook, state, req, next).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,6 +483,7 @@ mod tests {
         assert_eq!(Scope::General.max_per_minute(), 100);
         assert_eq!(Scope::Challenge.max_per_minute(), 10);
         assert_eq!(Scope::Login.max_per_minute(), 5);
+        assert_eq!(Scope::Webhook.max_per_minute(), 60);
 
         let limiter = RateLimiter::new(true);
         let now = Instant::now();

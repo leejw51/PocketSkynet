@@ -75,6 +75,12 @@ Server-side wire validation your encoder must satisfy:
 - `RoomId` / `MessageId` — opaque server-assigned strings, validated per the
   table above. Reject traversal characters; a port must not be stricter than
   the wire format (room ids may contain `.`).
+- **Webhook senders** — a webhook post's `senderAddress` is a derived,
+  wallet-shaped address: `"0x00000000"` ‖ first 32 hex chars of
+  `hex(SHA-256(utf8(webhookId)))`. It parses as an ordinary `WalletAddress`
+  (a port must not special-case it on the wire), no key for it exists, and
+  the reserved 4-zero-byte prefix is the display signal for "this sender is
+  a webhook, not a member".
 
 ---
 

@@ -480,6 +480,35 @@ CREATE TABLE IF NOT EXISTS published_sites (
 
 CREATE INDEX IF NOT EXISTS idx_sites_created ON published_sites (created_at DESC);
 
+-- Incoming webhooks (docs/API.md §17). One row per credential: an external
+-- system POSTs to /api/webhooks/{token} and the server turns the body into an
+-- ordinary message in the room — the token IS the auth, there is no wallet.
+--
+-- `token` is stored as issued, not hashed. Deliberate: the admin UI lists the
+-- URL so it can be re-copied into the next CI config, and a hash would defend
+-- nothing this database has not already lost — the token is a capability to
+-- post into one *plaintext* room, and anyone reading this database is reading
+-- every one of those rooms directly. Revocation is `DELETE FROM` this table,
+-- checked on every post, so it takes effect on the next request.
+--
+-- `id` doubles as the identity of the webhook's posts: its messages are sent
+-- from `WalletAddress::webhook_sender(id)` (core/src/ids.rs), and a `users`
+-- row under that address carries `name` for display. Plaintext rooms only —
+-- a webhook holds no room key, so it could never seal a message an encrypted
+-- room's members could read; enforced at create and again at post time.
+CREATE TABLE IF NOT EXISTS room_webhooks (
+    id         TEXT    PRIMARY KEY,     -- hook_{millis}_{uuid}
+    room_id    TEXT    NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
+    name       TEXT    NOT NULL,        -- what the posts appear as, e.g. "CI"
+    token      TEXT    NOT NULL UNIQUE, -- whk_ + 64 hex; the whole credential
+    created_by TEXT    NOT NULL,        -- admin wallet, for the audit trail
+    created_at INTEGER NOT NULL
+) STRICT;
+
+-- The management list; the post path reads through the UNIQUE token index.
+CREATE INDEX IF NOT EXISTS idx_room_webhooks_room
+    ON room_webhooks (room_id, created_at DESC);
+
 -- The operator ladder (the game layer's only server-side state).
 --
 -- One row per wallet, self-reported by the client: synaptic load, the rank it

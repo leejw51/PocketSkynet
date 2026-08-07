@@ -512,6 +512,17 @@ strings! {
     (admin_limit_reached, "Admin limit reached. Remove an admin to add another.", "관리자 수가 한도에 도달했습니다. 한 명을 해제해야 추가할 수 있습니다.", "管理者数が上限です。追加するには誰かを解除してください。", "管理員數量已滿，要移除一個先可以再加。", "Dosažen limit správců. Nejprve někoho odeberte.", "Límite de administradores alcanzado. Quita uno para añadir otro.", "已达到管理员上限。移除一名后才能再添加。", "Admin-Limit erreicht. Entferne einen Admin, um einen weiteren hinzuzufügen."),
     (everyone_is_admin, "Every other member is already an admin.", "다른 멤버는 모두 이미 관리자입니다.", "他のメンバーは全員すでに管理者です。", "其他成員全部都已經係管理員。", "Všichni ostatní členové už jsou správci.", "Todos los demás miembros ya son administradores.", "其他成员都已是管理员。", "Alle anderen Mitglieder sind bereits Admins."),
 
+    // --- Dialogs: webhooks --------------------------------------------------
+    (webhooks_menu, "Webhooks", "웹훅", "Webhook", "Webhook", "Webhooky", "Webhooks", "Webhook", "Webhooks"),
+    (webhooks_title, "Incoming webhooks", "수신 웹훅", "受信Webhook", "接收 Webhook", "Příchozí webhooky", "Webhooks entrantes", "传入 Webhook", "Eingehende Webhooks"),
+    (webhooks_note, "External systems post into this room by sending JSON to a URL. Anyone holding the URL can post here — treat it like a password.", "외부 시스템이 URL로 JSON을 보내 이 방에 게시합니다. URL을 가진 누구나 게시할 수 있으니 비밀번호처럼 다루세요.", "外部システムはURLにJSONを送ってこのルームに投稿します。URLを持つ誰でも投稿できるため、パスワードのように扱ってください。", "外部系統向URL傳送JSON就可以喺呢個房間發帖。持有URL嘅任何人都可以發帖，請當密碼咁保管。", "Externí systémy přispívají do této místnosti odesláním JSON na URL. Přispívat může každý, kdo URL zná — zacházejte s ní jako s heslem.", "Los sistemas externos publican en esta sala enviando JSON a una URL. Cualquiera con la URL puede publicar: trátala como una contraseña.", "外部系统通过向 URL 发送 JSON 在此房间发帖。持有该 URL 的任何人都能发帖，请像密码一样保管。", "Externe Systeme posten in diesen Raum, indem sie JSON an eine URL senden. Wer die URL besitzt, kann hier posten — behandle sie wie ein Passwort."),
+    (webhook_how, "POST {\"text\": \"hello\"} to the URL as JSON.", "URL로 {\"text\": \"hello\"}를 JSON POST로 보내세요.", "URLに {\"text\": \"hello\"} をJSONでPOSTしてください。", "以JSON POST方式將 {\"text\": \"hello\"} 傳送到URL。", "Pošlete {\"text\": \"hello\"} jako JSON POST na URL.", "Envía {\"text\": \"hello\"} como POST JSON a la URL.", "以 JSON POST 方式将 {\"text\": \"hello\"} 发送到该 URL。", "Sende {\"text\": \"hello\"} als JSON-POST an die URL."),
+    (webhook_name_placeholder, "Name, e.g. CI", "이름 (예: CI)", "名前（例: CI）", "名稱（例如 CI）", "Název, např. CI", "Nombre, p. ej. CI", "名称（如 CI）", "Name, z. B. CI"),
+    (webhooks_empty, "No webhooks yet. Create one and paste its URL into your CI or monitoring.", "아직 웹훅이 없습니다. 하나 만들어 URL을 CI나 모니터링에 붙여넣으세요.", "まだWebhookがありません。作成してURLをCIや監視ツールに貼り付けてください。", "仲未有Webhook。建立一個然後將URL貼入你嘅CI或者監控系統。", "Zatím žádné webhooky. Vytvořte jeden a vložte jeho URL do CI nebo monitoringu.", "Aún no hay webhooks. Crea uno y pega su URL en tu CI o monitorización.", "还没有 Webhook。创建一个并把 URL 粘贴到你的 CI 或监控系统。", "Noch keine Webhooks. Erstelle einen und füge seine URL in dein CI oder Monitoring ein."),
+    (revoke, "Revoke", "철회", "取り消す", "撤銷", "Odvolat", "Revocar", "撤销", "Widerrufen"),
+    (webhook_url_copied, "Webhook URL copied", "웹훅 URL을 복사했습니다", "Webhook URLをコピーしました", "已複製Webhook URL", "URL webhooku zkopírována", "URL del webhook copiada", "已复制 Webhook URL", "Webhook-URL kopiert"),
+    (webhook_badge, "webhook", "웹훅", "Webhook", "Webhook", "webhook", "webhook", "Webhook", "Webhook"),
+
     // --- Dialogs: invite ----------------------------------------------------
     (invite, "Invite", "초대", "招待", "邀請", "Pozvat", "Invitar", "邀请", "Einladen"),
     (invited, "Invited", "초대함", "招待済み", "已邀請", "Pozván", "Invitado", "已邀请", "Eingeladen"),
@@ -1252,6 +1263,13 @@ mod tests {
             (Lang::De, Key::presence_online),
             (Lang::Cs, Key::presence_offline),
             (Lang::De, Key::presence_offline),
+            // "Webhook" is a loanword wherever the concept exists; Spanish,
+            // German and Czech tech writing all use it untranslated, and a
+            // coined native word would name the feature nobody searches for.
+            (Lang::Es, Key::webhooks_menu),
+            (Lang::De, Key::webhooks_menu),
+            (Lang::Es, Key::webhook_badge),
+            (Lang::Cs, Key::webhook_badge),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

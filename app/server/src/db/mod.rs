@@ -42,6 +42,7 @@ pub mod sites;
 pub mod storage;
 pub mod uploads;
 pub mod users;
+pub mod webhooks;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

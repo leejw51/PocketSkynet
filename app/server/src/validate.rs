@@ -270,6 +270,41 @@ pub fn room_description(raw: Option<&str>) -> ApiResult<Option<String>> {
     Ok(Some(trimmed.to_owned()))
 }
 
+/// A webhook's display name — 1–50 characters after trimming, no markup.
+///
+/// Tighter than a room name because it renders where usernames do, beside a
+/// robot badge, and a name that needs a second line is a name for something
+/// other than a feed.
+pub fn webhook_name(raw: Option<&str>) -> ApiResult<String> {
+    let raw = raw.ok_or_else(|| required("name", "Webhook name"))?;
+    let trimmed = raw.trim();
+    if trimmed.chars().any(is_forbidden_markup) {
+        return Err(ApiError::field(
+            "name",
+            "Webhook name contains invalid characters",
+        ));
+    }
+    let len = trimmed.chars().count();
+    if !(1..=50).contains(&len) {
+        return Err(ApiError::field(
+            "name",
+            "Webhook name must be between 1 and 50 characters",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// A webhook token as it appears in the post URL: `whk_` + 64 lowercase hex.
+///
+/// Returns an *option*, not an error. The token is the credential, and the
+/// route answers a malformed one exactly as it answers an unknown one — 404 —
+/// so a prober learns nothing about which half of the check a guess failed.
+pub fn webhook_token(raw: &str) -> Option<&str> {
+    raw.strip_prefix("whk_")
+        .filter(|hex| is_lower_hex(hex, 64))
+        .map(|_| raw)
+}
+
 /// `messageContent` — 1–5000 characters after trimming.
 ///
 /// There is deliberately **no** content blocklist: it was bypassable, and it
