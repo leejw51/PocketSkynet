@@ -217,7 +217,7 @@ pub async fn jarvis_reply(store: Store, room_id: RoomId) {
     let raw = match crate::ai::generate_chat(provider, &key, &system, &turns).await {
         Ok(reply) => reply,
         Err(e) => {
-            tracing::warn!("jarvis: {e}");
+            web_sys::console::warn_1(&format!("jarvis: {e}").into());
             return;
         }
     };
@@ -230,7 +230,9 @@ pub async fn jarvis_reply(store: Store, room_id: RoomId) {
         // action, same rendering, same `/sync` cursor. Nothing downstream has
         // to know an agent wrote it.
         Ok(message) => store.dispatch(Action::Sync(room_id, vec![message])),
-        Err(e) => tracing::warn!("jarvis reply rejected: {}", e.user_message()),
+        Err(e) => web_sys::console::warn_1(
+            &format!("jarvis reply rejected: {}", e.user_message()).into(),
+        ),
     }
 }
 
