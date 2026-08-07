@@ -25,6 +25,7 @@ mod new_dm;
 mod rename;
 mod server;
 mod wallet;
+mod webhooks;
 
 pub use admin::AdminConsole;
 pub use admins::ManageAdmins;
@@ -42,3 +43,4 @@ pub use new_dm::NewDirectMessage;
 pub use rename::RenameRoom;
 pub use server::ServerInfoDialog;
 pub use wallet::Wallet;
+pub use webhooks::ManageWebhooks;

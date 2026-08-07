@@ -182,6 +182,7 @@ and the general limiter.
 | `apiRateLimiter` | `app.use("/api", …)` — every `/api` route **registered after it** | 100 | `{"message": "Too many requests, please try again later"}` |
 | `authChallengeRateLimiter` | `POST /api/auth/challenge` | 10 | `{"message": "Too many challenge requests, please try again later"}` |
 | `authLoginRateLimiter` | `POST /api/auth/login` | 5 | `{"message": "Too many login attempts, please try again later"}` |
+| webhook *(PocketSkynet extension)* | `POST /api/webhooks/{token}` — **instead of** the general limiter | 60 | `{"message": "Too many webhook posts, please slow down"}` |
 
 - **`GET /api/health` is exempt** — it is registered *before* `app.use("/api", apiRateLimiter)`
   so probes are never throttled. Every other `/api` route is subject to the 100/min limit.
@@ -3164,6 +3165,10 @@ open past the hour re-fetches the listing when its tiles start failing.
 | 57 | DELETE | `/api/rooms/:roomId/invites/:inviteId` | ✓ | **admin** (§6.7a) |
 | 58 | GET | `/api/invites/:token` | — | capability token (§6.7a) |
 | 59 | POST | `/api/invites/:token/redeem` | ✓ | any user with a valid token (§6.7a) |
+| 60 | POST | `/api/rooms/:roomId/webhooks` | ✓ | **admin**; plaintext channels only (PocketSkynet extension, §17) |
+| 61 | GET | `/api/rooms/:roomId/webhooks` | ✓ | **admin** — the list carries the tokens |
+| 62 | DELETE | `/api/rooms/:roomId/webhooks/:webhookId` | ✓ | **admin**; revocation is immediate |
+| 63 | POST | `/api/webhooks/:token` | — | the token IS the auth (60/min, own budget) |
 | — | WS | `/ws` | ✓ (subprotocol or `?token=`) | subscribed to own rooms |
 
 ### 14.1 Route-precedence requirements
@@ -3344,3 +3349,80 @@ HTML never executes *as* this origin.
 `GET /api/search` accepts `kind=site`; site documents are `title` + the
 readable text of `index.html` (tags/scripts/styles stripped, capped at
 2000 chars), visible to every signed-in user.
+
+---
+
+## 17. Incoming Webhooks (PocketSkynet extension)
+
+External events (CI, GitHub, monitoring) posted into rooms — the minimum
+integration surface. A webhook is a per-room credential: an external system
+POSTs JSON to a URL bearing the token, and the server turns the body into an
+ordinary message in that room. The token **is** the auth; there is no wallet
+and no JWT on the post path.
+
+**Plaintext rooms only, enforced twice.** A webhook holds no room key, so it
+could never seal a message an encrypted room's members could read. Creation is
+refused (400) for a room where anyone holds a wrapped key (`hasEncryption`),
+and every post re-checks the same fact (409) — a room keyed *after* the
+webhook was created silences it at that moment. DMs are refused too (400):
+a feed wired into a private conversation turns it into something neither
+person opened.
+
+**Sender identity.** Each webhook's posts are sent from a derived, wallet-shaped
+address: `0x00000000` ‖ first 32 hex chars of `SHA-256(webhook id)`
+(`WalletAddress::webhook_sender` in `core/src/ids.rs`). It parses everywhere a
+wallet address does, is stable per webhook, and is controlled by nobody — it
+can never sign a login challenge. A `users` row under that address carries the
+webhook's display name; clients render the reserved prefix as a webhook badge.
+Webhook identities are excluded from `GET /api/users/search`.
+
+**Token.** `whk_` + 64 lowercase hex (32 CSPRNG bytes), stored as issued so
+admins can re-copy the URL; the listing is therefore admin-only. Unknown,
+malformed and revoked tokens all answer the same `404 {"message": "Unknown
+webhook"}`, so a prober learns nothing — including whether a leaked token
+used to work.
+
+#### `POST /api/rooms/{roomId}/webhooks` — Auth: **yes** (room admin)
+
+Body: `{"name": string}` (1–50 chars, no markup). 400 for encrypted rooms and
+DMs; 400 past 20 webhooks per room. Returns the `Webhook` object:
+
+```json
+{
+  "id": "hook_1749652746620_4cfe…",
+  "roomId": "room_…",
+  "name": "CI",
+  "token": "whk_…64 hex…",
+  "url": "/api/webhooks/whk_…",
+  "senderAddress": "0x00000000…",
+  "createdBy": "0x…",
+  "createdAt": "2026-08-07T…Z"
+}
+```
+
+`url` is a path — clients prefix their own origin, which is the one surface
+known to be reachable from outside.
+
+#### `GET /api/rooms/{roomId}/webhooks` — Auth: **yes** (room admin)
+
+Array of `Webhook`, newest first, tokens included.
+
+#### `DELETE /api/rooms/{roomId}/webhooks/{webhookId}` — Auth: **yes** (room admin)
+
+`{"message": "Webhook revoked"}`; 404 for an id that names nothing. The post
+handler re-reads the table per request, so revocation is immediate. History
+keeps its attribution: the webhook's `users` row survives.
+
+#### `POST /api/webhooks/{token}` — Auth: **no** (the token is the auth)
+
+Body: `{"text": string}` — validated exactly like `content` (1–5000 chars
+after trimming). The server computes `msgHash` itself
+(SHA-256 of the trimmed text) and the message then takes the ordinary path
+end to end: same insert and serial allocation, same `@mention` and media
+extraction from plaintext, same search indexing, same realtime fan-out
+(`new_message` over WS/SSE, visible to `/sync`) — so clients see a webhook
+post arrive exactly as they see a person's. Returns the created `Message`.
+
+Rate limited at 60/min per IP under its own budget (§2), **instead of** the
+general limiter — the general budget is shared per IP, and a spinning CI
+runner must not 429 the humans behind the same NAT.

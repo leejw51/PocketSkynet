@@ -160,18 +160,26 @@ pub fn search_users(
     }
     let pattern = format!("%{escaped}%");
 
-    let mut stmt = conn.prepare(
+    // Webhook identities (`WEBHOOK_SENDER_PREFIX`) are users rows so their
+    // posts render with a name, but they are not people: everything this
+    // search feeds — a DM, an invitation, a block — acts on an address, and
+    // acting on one nobody holds only manufactures dead-end errors. A human
+    // who ground out a vanity address under the reserved prefix is filtered
+    // too; looking like a robot comes with being treated as one.
+    let mut stmt = conn.prepare(&format!(
         "SELECT wallet_address, username, public_key, public_key_sig, profile_image,
                 created_at, updated_at
          FROM users
          WHERE (username LIKE ?1 ESCAPE '\\' OR wallet_address LIKE ?1 ESCAPE '\\')
+           AND wallet_address NOT LIKE '{}%'
            AND wallet_address NOT IN
                (SELECT blocked_address FROM blocked_users WHERE blocker_address = ?2)
            AND wallet_address NOT IN
                (SELECT blocker_address FROM blocked_users WHERE blocked_address = ?2)
          ORDER BY username, wallet_address
          LIMIT ?3",
-    )?;
+        pocketskynet_core::WEBHOOK_SENDER_PREFIX
+    ))?;
     let rows = stmt.query_map(params![pattern, viewer, limit], User::from_row)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -500,7 +508,10 @@ mod tests {
         let db = test_db();
         db.call_blocking(|conn| {
             for i in 0..10 {
-                let addr = format!("0x{:040x}", i);
+                // Not `{:040x}`: a small integer zero-padded to 40 hex digits
+                // lands inside `WEBHOOK_SENDER_PREFIX`, and the search rightly
+                // hides webhook identities — these must look like people.
+                let addr = format!("0xaa{:038x}", i);
                 upsert_user(conn, &addr, &format!("user{:02}", 9 - i), None, None).unwrap();
             }
             let hits = search_users(conn, ALICE, "user", 3).unwrap();

@@ -118,6 +118,9 @@ pub enum Modal {
     /// way so the dialog never opens onto a 403.
     InviteLinks(RoomId),
     ManageAdmins(RoomId),
+    /// Incoming webhooks for one room (API.md §17) — admins only, and only
+    /// offered for plaintext channels, because the server refuses the rest.
+    Webhooks(RoomId),
     Blocked,
     HiddenRooms,
     RenameRoom(RoomId, String),

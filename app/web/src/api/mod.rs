@@ -49,6 +49,7 @@ pub mod sites;
 /// layer and the progress UI both name.
 pub mod uploads;
 mod users;
+mod webhooks;
 
 use std::rc::Rc;
 

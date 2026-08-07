@@ -199,7 +199,7 @@ async fn send(
         })
         .await?;
 
-    announce(&state, &room, &caller, message.msg_serial).await;
+    announce(&state, &room, Some(&caller), message.msg_serial).await;
     Ok(Json(message).into_response())
 }
 
@@ -240,7 +240,7 @@ fn resolve_parent(
 /// Both go through the same roster check, so neither is trusted: a declared
 /// address that is not a member resolves to nothing, exactly like an `@name`
 /// that matches nobody.
-fn resolve_mentions(
+pub(super) fn resolve_mentions(
     conn: &rusqlite::Connection,
     room_id: &str,
     content: &str,
@@ -262,7 +262,11 @@ fn resolve_mentions(
 /// about a person — so the union is the answer. `validate::media_names` has
 /// already refused anything that is not a servable filename, which is what
 /// keeps a declaration from naming a path.
-fn resolve_media(content: &str, is_encrypted: bool, declared: Vec<String>) -> Vec<String> {
+pub(super) fn resolve_media(
+    content: &str,
+    is_encrypted: bool,
+    declared: Vec<String>,
+) -> Vec<String> {
     let mut names = declared;
     if !is_encrypted {
         for name in crate::db::media::extract(content) {
@@ -469,7 +473,7 @@ async fn edit(
         .await?
         .ok_or_else(|| ApiError::not_found("Message not found or unauthorized"))?;
 
-    announce(&state, &room, &caller, updated.msg_serial).await;
+    announce(&state, &room, Some(&caller), updated.msg_serial).await;
     Ok(Json(updated).into_response())
 }
 
@@ -528,7 +532,7 @@ async fn remove(
             .call(move |conn| messages::latest_serial(conn, &room_id))
             .await?
     };
-    announce(&state, &room, &caller, serial).await;
+    announce(&state, &room, Some(&caller), serial).await;
     Ok(super::message("Message deleted successfully"))
 }
 
@@ -573,7 +577,7 @@ async fn purge(
         serde_json::json!({ "roomId": room.as_str(), "deletedCount": deleted }),
     );
 
-    announce(&state, &room, &caller, marker.msg_serial).await;
+    announce(&state, &room, Some(&caller), marker.msg_serial).await;
 
     Ok(Json(serde_json::json!({
         "message": "All messages deleted successfully",
@@ -674,16 +678,18 @@ async fn publish(
     // The reference emitted nothing here, which meant the anchor only reached
     // other clients on their next poll even though its serial had already
     // advanced for exactly that purpose.
-    announce(&state, &room, &caller, updated.msg_serial).await;
+    announce(&state, &room, Some(&caller), updated.msg_serial).await;
     Ok(Json(updated).into_response())
 }
 
 /// Wake the room. `origin` is the actor, so members who blocked them get no
-/// notification at all rather than one followed by an empty sync.
+/// notification at all rather than one followed by an empty sync. `None` is a
+/// webhook post — no wallet acted, so nobody's block list applies here (the
+/// read paths still filter for anyone who blocked the webhook's own address).
 pub(super) async fn announce(
     state: &AppState,
     room: &RoomId,
-    origin: &WalletAddress,
+    origin: Option<&WalletAddress>,
     msg_serial: i64,
 ) {
     state
@@ -692,7 +698,7 @@ pub(super) async fn announce(
             Target::Room {
                 room_id: room.clone(),
             },
-            Some(origin.clone()),
+            origin.cloned(),
             ServerEvent::NewMessage {
                 room_id: room.clone(),
                 msg_serial,

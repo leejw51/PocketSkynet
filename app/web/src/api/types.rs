@@ -439,6 +439,27 @@ impl Invitation {
     }
 }
 
+/// An incoming webhook, as the management endpoints return it (API.md §17).
+///
+/// `token` and `url` are present on list as well as create — the server
+/// stores the token retrievably precisely so an admin can re-copy the URL —
+/// and the URL is a *path*: the dialog joins it onto the page origin, because
+/// only the browser knows which host and port the operator exposed.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Webhook {
+    pub id: String,
+    pub room_id: RoomId,
+    pub name: String,
+    pub token: String,
+    pub url: String,
+    /// The wallet-shaped identity its posts are sent from; recognisable by
+    /// `WalletAddress::is_webhook_sender`.
+    pub sender_address: WalletAddress,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
 /// One entry of `POST /api/users/public-keys`. A `null` `publicKeySig` means
 /// **unverifiable** — CRYPTO.md §4.3 requires refusing to wrap in that case.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

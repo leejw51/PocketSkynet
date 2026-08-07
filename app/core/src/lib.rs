@@ -28,7 +28,7 @@ pub use crypto::{CryptoError, EncryptedMessage, WrappedRoomKey};
 pub use eip191::{personal_sign, recover_address, verify_signature};
 pub use events::{ClientMessage, PresenceStatus, ResyncReason, ServerEvent, Target};
 pub use hash::{msg_hash_encrypted, msg_hash_plaintext, EmoticonAction};
-pub use ids::{IdError, MessageId, RoomId, WalletAddress};
+pub use ids::{IdError, MessageId, RoomId, WalletAddress, WEBHOOK_SENDER_PREFIX};
 pub use keys::{verify_key_binding, EncryptionKeypair};
 pub use progression::{Award, Directive, Rank, Snapshot, Trophy};
 pub use username::{deterministic_username, room_name_from_entropy};

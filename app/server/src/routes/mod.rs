@@ -30,6 +30,7 @@ pub mod sites;
 pub mod sync;
 pub mod uploads;
 pub mod users;
+pub mod webhooks;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -163,6 +164,15 @@ fn api_router(state: &AppState) -> Router<AppState> {
         axum::middleware::from_fn_with_state(state.clone(), crate::ratelimit::media),
     );
 
+    // The webhook post route has no wallet behind it, so the general budget
+    // would let one CI runner spend a whole office's allowance (they share an
+    // IP) — and, worse, a spinning script would then 429 the *people* behind
+    // that NAT. Its own scope keeps the meter on the robot.
+    let webhook_posts = webhooks::post_router().layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::ratelimit::webhook,
+    ));
+
     let limited = Router::new()
         .merge(misc::router())
         .merge(auth::router(state))
@@ -171,6 +181,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(rooms::router())
         .merge(invitations::router())
         .merge(invites::router())
+        .merge(webhooks::router())
         .merge(keys::router())
         .merge(messages::router())
         .merge(mentions::router())
@@ -191,6 +202,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
     unlimited
         .merge(uploads)
         .merge(media)
+        .merge(webhook_posts)
         .merge(limited)
         .fallback(unknown_route)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
