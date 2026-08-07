@@ -245,6 +245,109 @@ pub struct AdminStorage {
     pub activity: Activity,
 }
 
+/// The rooms, by what they are (`GET /api/admin/stats`, `rooms`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomComposition {
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub channels: i64,
+    #[serde(default)]
+    pub direct_messages: i64,
+    #[serde(default)]
+    pub encrypted: i64,
+    #[serde(default)]
+    pub plaintext: i64,
+}
+
+/// The accounts, by standing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeopleStats {
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub suspended: i64,
+    #[serde(default)]
+    pub in_rooms: i64,
+}
+
+/// The conversation volume — counts, never a word of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageStats {
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub thread_replies: i64,
+    #[serde(default)]
+    pub reactions: i64,
+}
+
+/// One day of message volume, UTC — same contract as [`GrowthPoint`]:
+/// silent days are absent and the chart restores them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageDay {
+    #[serde(default)]
+    pub day: String,
+    #[serde(default)]
+    pub messages: i64,
+}
+
+/// One room's share of the conversation. Names and counts — the same fields
+/// the admin room listing shows, and nothing a conversation could leak
+/// through.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusyRoom {
+    #[serde(default)]
+    pub room_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub members: i64,
+    #[serde(default)]
+    pub messages: i64,
+    #[serde(default)]
+    pub has_encryption: bool,
+}
+
+/// Heads connected right now — two integers, deliberately not a roster:
+/// *who* is online is knowledge scoped to shared rooms, admin or not.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresenceCounts {
+    #[serde(default)]
+    pub online: i64,
+    #[serde(default)]
+    pub away: i64,
+}
+
+/// Everything `GET /api/admin/stats` reports — the Skynet Dashboard's
+/// whole-server half.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminStats {
+    #[serde(default)]
+    pub uptime_seconds: i64,
+    #[serde(default)]
+    pub presence: PresenceCounts,
+    #[serde(default)]
+    pub rooms: RoomComposition,
+    #[serde(default)]
+    pub people: PeopleStats,
+    #[serde(default)]
+    pub messages: MessageStats,
+    #[serde(default)]
+    pub activity: Vec<MessageDay>,
+    #[serde(default)]
+    pub busiest: Vec<BusyRoom>,
+}
+
 #[derive(Serialize)]
 struct SuspendReq<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -280,6 +383,13 @@ impl Client {
     /// volume, and the in-process transfer counters.
     pub async fn admin_storage(&self) -> ApiResult<AdminStorage> {
         self.send(Method::GET, "/api/admin/storage").await
+    }
+
+    /// The deployment in counts: rooms by kind and encryption, accounts,
+    /// message volume and its daily series, the loudest rooms, live
+    /// presence head-counts, and uptime.
+    pub async fn admin_stats(&self) -> ApiResult<AdminStats> {
+        self.send(Method::GET, "/api/admin/stats").await
     }
 
     /// Every attachment's metadata, newest first. Sorting and filtering are

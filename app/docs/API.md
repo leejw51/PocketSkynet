@@ -2299,7 +2299,7 @@ people actually triage by.
 
 ---
 
-### 6.14 Server administration (9)
+### 6.14 Server administration (10)
 
 Every route here requires the caller's wallet to appear in
 `VITE_FRUITNATION_ADMIN` (§1.9) — **except** `/api/admin/session`, which is
@@ -2317,8 +2317,9 @@ the wrong place.
 | `DELETE` | `/api/admin/users/:addr` | Remove from every room **and** suspend |
 | `GET` | `/api/admin/rooms` | Every room — **metadata only** |
 | `DELETE` | `/api/admin/rooms/:id` | Delete any room |
-| `GET` | `/api/admin/storage` | The files dashboard's aggregates (below) |
+| `GET` | `/api/admin/storage` | The Skynet Dashboard's file aggregates (below) |
 | `GET` | `/api/admin/files` | Every attachment — **metadata only**, newest first, `?limit=` capped at 2 000 |
+| `GET` | `/api/admin/stats` | The Skynet Dashboard's whole-server counts (below) |
 
 **Suspension is the closest thing this server has to session revocation.** A
 JWT is valid until it expires and carries no id to revoke, so the only place
@@ -2343,8 +2344,38 @@ a side door would make a room's privacy depend on which checkbox was ticked
 when it was made. An admin who needs to be in a room can be invited, which
 everybody already there can see.
 
-**The storage report** (`GET /api/admin/storage`) is everything the files
-dashboard renders, in one response:
+**The stats report** (`GET /api/admin/stats`) is the Skynet Dashboard's
+server half — the deployment, in counts:
+
+```json
+{
+  "uptimeSeconds": 86211,
+  "presence": { "online": 4, "away": 2 },
+  "rooms": { "total": 9, "channels": 6, "directMessages": 3,
+             "encrypted": 5, "plaintext": 4 },
+  "people": { "total": 12, "suspended": 1, "inRooms": 11 },
+  "messages": { "total": 4210, "threadReplies": 380, "reactions": 96 },
+  "activity": [ { "day": "2026-08-07", "messages": 41 }, … ],
+  "busiest":  [ { "roomId": "room_…", "name": "Engineering", "kind": "channel",
+                  "members": 8, "messages": 1201, "hasEncryption": true }, … ]
+}
+```
+
+- Every number is an aggregate, and no query behind this endpoint touches
+  `messages.content`. `messages` counts live human-authored rows (the same
+  `msg_type = 'add'`, not-deleted predicate every other count uses);
+  `threadReplies` is the subset posted into threads, `reactions` is emoticon
+  adds minus removes. `activity` is a UTC day-bucketed month, same contract
+  as the file `growth` series. `busiest` carries the twelve loudest rooms —
+  names, sizes and counts, the fields `/admin/rooms` already shows.
+- `presence` is two integers derived from the hub's live connections,
+  **deliberately not a roster**: *who* is online is knowledge scoped to
+  shared rooms (§6.15), and a server admin gets no exemption from that — a
+  head-count is the whole of what this reports. Like `uptimeSeconds` it
+  describes the process, not history, and resets at restart.
+
+**The storage report** (`GET /api/admin/storage`) is the dashboard's file
+half, in one response:
 
 ```json
 {

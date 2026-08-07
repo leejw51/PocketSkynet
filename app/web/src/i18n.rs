@@ -874,8 +874,27 @@ strings! {
 
     // --- Files dashboard (admin) ---------------------------------------------
     // Column order, as everywhere: en, ko, ja, yue, cs, es, zh, de.
-    (dash_title, "Files dashboard", "파일 대시보드", "ファイルダッシュボード", "檔案儀表板", "Přehled souborů", "Panel de archivos", "文件仪表盘", "Datei-Dashboard"),
-    (dash_subtitle, "Every attachment on this server — metadata only. Opening a file still requires being in its room.", "이 서버의 모든 첨부 파일 — 메타데이터만 표시됩니다. 파일을 열려면 여전히 해당 방의 멤버여야 합니다.", "このサーバー上のすべての添付ファイル — メタデータのみ。ファイルを開くには、その部屋のメンバーである必要があります。", "呢部伺服器上所有附件 — 只顯示元數據。要開檔案仍然要係嗰個房嘅成員。", "Všechny přílohy na tomto serveru — pouze metadata. K otevření souboru je stále potřeba být v jeho místnosti.", "Todos los adjuntos de este servidor — solo metadatos. Para abrir un archivo sigue haciendo falta estar en su sala.", "此服务器上的所有附件 — 仅显示元数据。要打开文件，仍需是该聊天室的成员。", "Alle Anhänge auf diesem Server — nur Metadaten. Zum Öffnen einer Datei muss man weiterhin Mitglied ihres Raums sein."),
+    // The dashboard's name is a product name, like "PocketSkynet" on the
+    // login card — the same eight characters in every locale, so the console
+    // an operator reads about in English docs is the one their colleague
+    // sees in Korean. The *subtitle* below is where each language speaks.
+    (dash_title, "Skynet Dashboard", "Skynet Dashboard", "Skynet Dashboard", "Skynet Dashboard", "Skynet Dashboard", "Skynet Dashboard", "Skynet Dashboard", "Skynet Dashboard"),
+    (dash_subtitle, "The whole server at a glance — counts and metadata only. No message content, and opening a file still requires being in its room.", "서버 전체를 한눈에 — 개수와 메타데이터만 표시됩니다. 메시지 내용은 없으며, 파일을 열려면 여전히 해당 방의 멤버여야 합니다.", "サーバー全体をひと目で — 数とメタデータのみ。メッセージ本文はなく、ファイルを開くにはその部屋のメンバーである必要があります。", "成個伺服器一眼睇晒 — 只有數量同元數據。冇訊息內容，要開檔案仍然要係嗰個房嘅成員。", "Celý server na jeden pohled — pouze počty a metadata. Žádný obsah zpráv, a k otevření souboru je stále potřeba být v jeho místnosti.", "Todo el servidor de un vistazo — solo recuentos y metadatos. Sin contenido de mensajes, y para abrir un archivo sigue haciendo falta estar en su sala.", "整个服务器一目了然 — 仅有数量和元数据。没有消息内容，要打开文件仍需是该聊天室的成员。", "Der ganze Server auf einen Blick — nur Zahlen und Metadaten. Kein Nachrichteninhalt, und zum Öffnen einer Datei muss man weiterhin Mitglied ihres Raums sein."),
+    (dash_section_server, "Server", "서버", "サーバー", "伺服器", "Server", "Servidor", "服务器", "Server"),
+    (dash_section_files, "Files", "파일", "ファイル", "檔案", "Soubory", "Archivos", "文件", "Dateien"),
+    (dash_uptime, "Uptime", "가동 시간", "稼働時間", "運行時間", "Doba běhu", "Tiempo activo", "运行时间", "Laufzeit"),
+    (dash_online_now, "Online now", "현재 온라인", "現在オンライン", "而家在線", "Právě online", "En línea ahora", "当前在线", "Jetzt online"),
+    (dash_away_foot, "{n} away", "자리 비움 {n}명", "退席中{n}人", "{n} 人唔喺度", "{n} nepřítomných", "{n} ausentes", "{n} 人离开", "{n} abwesend"),
+    (dash_people_foot, "{rooms} in rooms · {suspended} suspended", "방 참여 {rooms}명 · 정지 {suspended}명", "ルーム参加{rooms}人 · 停止{suspended}人", "{rooms} 人喺房 · {suspended} 人停用", "{rooms} v místnostech · {suspended} pozastaveno", "{rooms} en salas · {suspended} suspendidos", "{rooms} 人在聊天室 · {suspended} 人停用", "{rooms} in Räumen · {suspended} gesperrt"),
+    (dash_rooms_split, "{channels} channels · {dms} direct · {encrypted} encrypted", "채널 {channels}개 · 다이렉트 {dms}개 · 암호화 {encrypted}개", "チャンネル{channels} · ダイレクト{dms} · 暗号化{encrypted}", "{channels} 個頻道 · {dms} 個私訊 · {encrypted} 個加密", "{channels} kanálů · {dms} přímých · {encrypted} šifrovaných", "{channels} canales · {dms} directos · {encrypted} cifradas", "{channels} 个频道 · {dms} 个私信 · {encrypted} 个加密", "{channels} Kanäle · {dms} direkt · {encrypted} verschlüsselt"),
+    (dash_messages_tile, "Messages", "메시지", "メッセージ", "訊息", "Zprávy", "Mensajes", "消息", "Nachrichten"),
+    (dash_messages_foot, "{threads} in threads · {reactions} reactions", "스레드 {threads}개 · 반응 {reactions}개", "スレッド{threads}件 · リアクション{reactions}件", "{threads} 則喺討論串 · {reactions} 個反應", "{threads} ve vláknech · {reactions} reakcí", "{threads} en hilos · {reactions} reacciones", "{threads} 条在主题中 · {reactions} 个回应", "{threads} in Threads · {reactions} Reaktionen"),
+    (dash_msg_activity, "Messages by day", "일별 메시지", "日別メッセージ", "每日訊息", "Zprávy po dnech", "Mensajes por día", "每日消息", "Nachrichten pro Tag"),
+    // `{messages}` arrives pre-counted, like `{files}` in the file strings.
+    (dash_msg_activity_total, "{messages} over 30 days", "30일 · {messages}", "30日間 · {messages}", "30 日 · {messages}", "{messages} · za 30 dní", "{messages} en 30 días", "30 天 · {messages}", "{messages} über 30 Tage"),
+    (dash_msg_activity_label, "Messages per day over the last {days} days, {messages} in total", "최근 {days}일간 일별 메시지, 총 {messages}", "過去{days}日間の日別メッセージ、合計{messages}", "最近 {days} 日每日訊息，總共 {messages}", "Zprávy za den za posledních {days} dní, celkem {messages}", "Mensajes por día en los últimos {days} días, {messages} en total", "最近 {days} 天每日消息，共 {messages}", "Nachrichten pro Tag der letzten {days} Tage, insgesamt {messages}"),
+    (dash_msg_activity_empty, "No messages in the last 30 days.", "최근 30일간 메시지가 없습니다.", "過去30日間メッセージはありません。", "最近 30 日冇訊息。", "Za posledních 30 dní žádné zprávy.", "Sin mensajes en los últimos 30 días.", "最近 30 天没有消息。", "Keine Nachrichten in den letzten 30 Tagen."),
+    (dash_busiest, "Busiest rooms", "가장 활발한 방", "最も活発な部屋", "最活躍嘅房", "Nejrušnější místnosti", "Salas más activas", "最活跃的聊天室", "Aktivste Räume"),
     (dash_error, "Couldn't load the dashboard", "대시보드를 불러오지 못했습니다", "ダッシュボードを読み込めませんでした", "載入唔到儀表板", "Přehled se nepodařilo načíst", "No se pudo cargar el panel", "无法加载仪表盘", "Dashboard konnte nicht geladen werden"),
     (dash_empty_title, "No files yet", "아직 파일이 없습니다", "まだファイルがありません", "仲未有檔案", "Zatím žádné soubory", "Aún no hay archivos", "还没有文件", "Noch keine Dateien"),
     (dash_empty_desc, "When someone attaches a file to a room, it shows up here.", "누군가 방에 파일을 첨부하면 여기에 표시됩니다.", "誰かが部屋にファイルを添付すると、ここに表示されます。", "有人喺房入面附加檔案，就會喺呢度顯示。", "Když někdo do místnosti přiloží soubor, objeví se zde.", "Cuando alguien adjunte un archivo a una sala, aparecerá aquí.", "当有人在聊天室中附加文件时，会显示在这里。", "Wenn jemand eine Datei an einen Raum anhängt, erscheint sie hier."),
@@ -1333,6 +1352,18 @@ mod tests {
             (Lang::Es, Key::dash_cat_audio),
             (Lang::De, Key::dash_col_name),
             (Lang::De, Key::dash_col_uploader),
+            // "Skynet Dashboard" is a product name, untranslated everywhere
+            // by the same rule as the "PocketSkynet" wordmark.
+            (Lang::Ko, Key::dash_title),
+            (Lang::Ja, Key::dash_title),
+            (Lang::Yue, Key::dash_title),
+            (Lang::Cs, Key::dash_title),
+            (Lang::Es, Key::dash_title),
+            (Lang::Zh, Key::dash_title),
+            (Lang::De, Key::dash_title),
+            // "Server" is the ordinary Czech and German noun too.
+            (Lang::Cs, Key::dash_section_server),
+            (Lang::De, Key::dash_section_server),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

@@ -264,6 +264,176 @@ pub fn totals(conn: &Connection) -> ApiResult<AdminTotals> {
     })
 }
 
+// ------------------------------------------------------------- deployment ---
+//
+// The Skynet Dashboard's whole-server half: what this deployment holds,
+// who is on it, and how busy it is — all of it aggregation over rows that
+// already exist, and all of it counts. The line drawn for storage below
+// holds here identically: an operator sees the *shape* of the traffic,
+// never a word of it. No query in this section touches `messages.content`.
+
+/// The rooms, by what they are.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RoomComposition {
+    pub total: i64,
+    pub channels: i64,
+    #[serde(rename = "directMessages")]
+    pub direct_messages: i64,
+    /// Rooms with at least one wrapped key — the same test the admin room
+    /// listing uses for its lock badge.
+    pub encrypted: i64,
+    pub plaintext: i64,
+}
+
+pub fn room_composition(conn: &Connection) -> ApiResult<RoomComposition> {
+    let (total, channels, encrypted) = conn.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(kind = 'channel'), 0),
+                COALESCE(SUM(EXISTS (SELECT 1 FROM room_keys k WHERE k.room_id = r.id)), 0)
+         FROM rooms r",
+        [],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        },
+    )?;
+    Ok(RoomComposition {
+        total,
+        channels,
+        direct_messages: total - channels,
+        encrypted,
+        plaintext: total - encrypted,
+    })
+}
+
+/// The accounts, by standing.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PeopleStats {
+    pub total: i64,
+    pub suspended: i64,
+    /// Distinct wallets holding at least one membership — the difference
+    /// from `total` is accounts that signed in and joined nothing.
+    #[serde(rename = "inRooms")]
+    pub in_rooms: i64,
+}
+
+pub fn people_stats(conn: &Connection) -> ApiResult<PeopleStats> {
+    let one = |sql: &str| -> ApiResult<i64> { Ok(conn.query_row(sql, [], |r| r.get(0))?) };
+    Ok(PeopleStats {
+        total: one("SELECT COUNT(*) FROM users")?,
+        suspended: one("SELECT COUNT(*) FROM suspended_users")?,
+        in_rooms: one("SELECT COUNT(DISTINCT user_address) FROM room_members")?,
+    })
+}
+
+/// The conversation volume, in counts and nothing else.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MessageStats {
+    /// Live, human-authored messages — the same predicate every other count
+    /// in this module uses (`msg_type = 'add'`, not deleted).
+    pub total: i64,
+    /// The subset of `total` posted into a thread.
+    #[serde(rename = "threadReplies")]
+    pub thread_replies: i64,
+    /// Reactions currently standing: adds minus removes over the emoticon
+    /// event rows, floored at zero because an event log replayed against a
+    /// purge can transiently disagree with itself.
+    pub reactions: i64,
+}
+
+pub fn message_stats(conn: &Connection) -> ApiResult<MessageStats> {
+    let (total, thread_replies) = conn.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(parent_message_id IS NOT NULL), 0)
+         FROM messages WHERE msg_type = 'add' AND is_deleted = 0",
+        [],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    )?;
+    let reactions: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(CASE msg_type WHEN 'emoticon_add' THEN 1
+                                           WHEN 'emoticon_remove' THEN -1
+                                           ELSE 0 END), 0)
+         FROM messages",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(MessageStats {
+        total,
+        thread_replies,
+        reactions: reactions.max(0),
+    })
+}
+
+/// One day of message volume, UTC — the conversation twin of [`growth`],
+/// with the same contract: silent days produce no row, the chart fills them.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MessageDay {
+    /// `YYYY-MM-DD`.
+    pub day: String,
+    pub messages: i64,
+}
+
+pub fn message_activity(conn: &Connection, days: i64) -> ApiResult<Vec<MessageDay>> {
+    let since = now_ms() - days.max(1) * 24 * 60 * 60 * 1000;
+    let mut stmt = conn.prepare(
+        "SELECT date(message_timestamp / 1000, 'unixepoch') AS day, COUNT(*)
+         FROM messages
+         WHERE msg_type = 'add' AND is_deleted = 0 AND message_timestamp >= ?1
+         GROUP BY day
+         ORDER BY day",
+    )?;
+    let rows = stmt.query_map(params![since], |r| {
+        Ok(MessageDay {
+            day: r.get(0)?,
+            messages: r.get(1)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// One room's share of the conversation.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BusyRoom {
+    #[serde(rename = "roomId")]
+    pub room_id: String,
+    pub name: String,
+    pub kind: String,
+    pub members: i64,
+    pub messages: i64,
+    #[serde(rename = "hasEncryption")]
+    pub has_encryption: bool,
+}
+
+/// Loudest rooms first. Name, size and volume — an operator can see *that*
+/// a room roars, and nothing of what it says.
+pub fn busiest_rooms(conn: &Connection, limit: i64) -> ApiResult<Vec<BusyRoom>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.name, r.kind,
+                (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id) AS members,
+                (SELECT COUNT(*) FROM messages m
+                  WHERE m.room_id = r.id AND m.msg_type = 'add' AND m.is_deleted = 0)
+                  AS messages,
+                EXISTS (SELECT 1 FROM room_keys k WHERE k.room_id = r.id) AS has_encryption
+         FROM rooms r
+         ORDER BY messages DESC, r.id
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |r| {
+        Ok(BusyRoom {
+            room_id: r.get(0)?,
+            name: r.get(1)?,
+            kind: r.get(2)?,
+            members: r.get(3)?,
+            messages: r.get(4)?,
+            has_encryption: r.get::<_, i64>(5)? != 0,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 // ---------------------------------------------------------------- storage ---
 //
 // What the files dashboard reads. Everything below is aggregation over rows
@@ -707,6 +877,129 @@ mod tests {
             500,
             now,
         );
+    }
+
+    /// The deployment-stats world: a keyed channel, a DM, and a week of
+    /// traffic — enough of each shape for every count to have a wrong answer
+    /// available.
+    fn talking_world(conn: &mut Connection) {
+        upsert_user(conn, ALICE, "alice", None, None).unwrap();
+        upsert_user(conn, BOB, "bob", None, None).unwrap();
+        rooms::create_room(conn, "room_stats_chan", "Engineering", None, ALICE).unwrap();
+        rooms::create_dm(conn, "room_stats_dm", &[ALICE.into(), BOB.into()]).unwrap();
+        keys::store_key(
+            conn,
+            "room_stats_chan",
+            &keys::KeyWrap {
+                user_address: ALICE.into(),
+                encrypted_symmetric_key: "aa".into(),
+                ephemeral_public_key: "bb".into(),
+                encryption_iv: "cc".into(),
+                hmac: "dd".into(),
+                enc_ver: 2,
+            },
+            1,
+        )
+        .unwrap();
+
+        let day = 24 * 60 * 60 * 1000;
+        let now = now_ms();
+        let insert =
+            |id: &str, room: &str, msg_type: &str, parent: Option<&str>, deleted: i64, at: i64| {
+                conn.execute(
+                    "INSERT INTO messages (id, room_id, sender_address, content, msg_hash,
+                                       message_timestamp, msg_type, msg_serial, is_deleted,
+                                       created_at, parent_message_id)
+                 VALUES (?1, ?2, ?3, '', '', ?4, ?5, 0, ?6, ?4, ?7)",
+                    params![id, room, ALICE, at, msg_type, deleted, parent],
+                )
+                .unwrap();
+            };
+        insert("m1", "room_stats_chan", "add", None, 0, now);
+        insert("m2", "room_stats_chan", "add", Some("m1"), 0, now);
+        insert("m3", "room_stats_chan", "add", None, 0, now - 2 * day);
+        insert("m4", "room_stats_dm", "add", None, 0, now);
+        // Noise every count must ignore: a deletion, a tombstone, a reaction
+        // pair, and something ancient outside every window.
+        insert("m5", "room_stats_chan", "add", None, 1, now);
+        insert("m6", "room_stats_chan", "emoticon_add", None, 0, now);
+        insert("m7", "room_stats_chan", "emoticon_add", None, 0, now);
+        insert("m8", "room_stats_chan", "emoticon_remove", None, 0, now);
+        insert("m9", "room_stats_chan", "add", None, 0, now - 40 * day);
+    }
+
+    #[test]
+    fn the_composition_splits_rooms_both_ways_at_once() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            talking_world(conn);
+            assert_eq!(
+                room_composition(conn).unwrap(),
+                RoomComposition {
+                    total: 2,
+                    channels: 1,
+                    direct_messages: 1,
+                    encrypted: 1,
+                    plaintext: 1,
+                }
+            );
+            let people = people_stats(conn).unwrap();
+            assert_eq!((people.total, people.suspended, people.in_rooms), (2, 0, 2));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn message_counts_ignore_events_and_the_deleted() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            talking_world(conn);
+            let stats = message_stats(conn).unwrap();
+            // m1..m4 and the ancient m9 — never m5 (deleted) and never the
+            // emoticon events, which are reactions, not speech.
+            assert_eq!(stats.total, 5);
+            assert_eq!(stats.thread_replies, 1);
+            // Two adds, one remove: one reaction still standing.
+            assert_eq!(stats.reactions, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn message_activity_buckets_like_the_file_growth_does() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            talking_world(conn);
+            let days = message_activity(conn, 30).unwrap();
+            assert_eq!(days.len(), 2, "the 40-day-old message is out of frame");
+            assert!(days[0].day < days[1].day);
+            assert_eq!(days[0].messages, 1);
+            // Today: m1, m2, m4 — the deleted m5 and the reactions never count.
+            assert_eq!(days[1].messages, 3);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn the_loudest_room_leads_and_carries_no_content() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            talking_world(conn);
+            let rooms = busiest_rooms(conn, 10).unwrap();
+            assert_eq!(rooms[0].name, "Engineering");
+            assert_eq!((rooms[0].members, rooms[0].messages), (1, 4));
+            assert!(rooms[0].has_encryption);
+            assert_eq!(rooms[1].messages, 1);
+            // The wire shape is counts and names — nothing a conversation
+            // could leak through.
+            let json = serde_json::to_string(&rooms).unwrap();
+            assert!(!json.contains("content"));
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

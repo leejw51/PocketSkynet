@@ -55,6 +55,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/rooms/{roomId}", delete(delete_room))
         .route("/admin/storage", get(storage))
         .route("/admin/files", get(list_files))
+        .route("/admin/stats", get(stats))
 }
 
 /// `GET /api/admin/session` — whether *the caller* is an admin.
@@ -383,6 +384,66 @@ async fn storage(State(state): State<AppState>, _admin: ServerAdmin) -> ApiResul
     .into_response())
 }
 
+/// How many of the busiest rooms the stats report ranks — same reasoning as
+/// [`ROOM_USAGE_LIMIT`], same number, kept separate because the two lists
+/// answer different questions and need not move together.
+const BUSIEST_LIMIT: i64 = 12;
+
+/// How far back the message-activity series reaches, matching the file
+/// growth window so the two charts share an x-axis a reader can compare.
+const ACTIVITY_DAYS: i64 = 30;
+
+/// `GET /api/admin/stats` — the whole deployment, in counts.
+///
+/// The Skynet Dashboard's server half: rooms by kind and by encryption,
+/// accounts by standing, message volume in total and per day, the loudest
+/// rooms, who is connected right now, and how long this process has been up.
+///
+/// Every number is an aggregate. The busiest-rooms list carries names, sizes
+/// and counts — the same fields `/admin/rooms` already shows — and nothing
+/// here reads `messages.content` or ever could: the queries live in
+/// `db/admin.rs` and select counts. Presence is two integers, not a roster:
+/// *who* is online is knowledge scoped to shared rooms (§6.15), and a server
+/// admin gets no exemption from that — a head-count is the whole of what
+/// this reports.
+async fn stats(State(state): State<AppState>, _admin: ServerAdmin) -> ApiResult<Response> {
+    let (rooms, people, messages, activity, busiest) = state
+        .db
+        .call(|conn| {
+            Ok((
+                admin::room_composition(conn)?,
+                admin::people_stats(conn)?,
+                admin::message_stats(conn)?,
+                admin::message_activity(conn, ACTIVITY_DAYS)?,
+                admin::busiest_rooms(conn, BUSIEST_LIMIT)?,
+            ))
+        })
+        .await?;
+
+    // Derived from the hub's live connection registry, exactly as presence
+    // is (ROADMAP.md §0a): nothing stored, nothing surviving a restart.
+    let mut online = 0i64;
+    let mut away = 0i64;
+    for (_, status) in state.hub.present_wallets() {
+        match status {
+            pocketskynet_core::PresenceStatus::Online => online += 1,
+            pocketskynet_core::PresenceStatus::Away => away += 1,
+            pocketskynet_core::PresenceStatus::Offline => {}
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "uptimeSeconds": state.started.elapsed().as_secs(),
+        "presence": { "online": online, "away": away },
+        "rooms": rooms,
+        "people": people,
+        "messages": messages,
+        "activity": activity,
+        "busiest": busiest,
+    }))
+    .into_response())
+}
+
 /// `GET /api/admin/files` — every attachment's metadata, newest first.
 ///
 /// Sortable and filterable client-side; the cap is the same scale decision as
@@ -427,6 +488,7 @@ mod tests {
     use crate::routes::build;
     use crate::test_support::{arm_server_admin, boss, register, send, state, wallet};
     use axum::http::StatusCode;
+    use sha2::Digest;
 
     #[tokio::test]
     async fn the_admin_routes_refuse_everybody_else() {
@@ -442,6 +504,7 @@ mod tests {
             "/api/admin/rooms",
             "/api/admin/storage",
             "/api/admin/files",
+            "/api/admin/stats",
         ] {
             let response = send(&router, "GET", path, Some(&token), None).await;
             assert_eq!(
@@ -764,6 +827,77 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_stats_report_counts_the_deployment_without_reading_it() {
+        arm_server_admin();
+        let state = state("admin-stats");
+        let boss_token = register(&state, &boss(), "boss");
+        let alice = wallet("alice");
+        let bob = wallet("bob");
+        let alice_token = register(&state, &alice, "alice");
+        let bob_token = register(&state, &bob, "bob");
+        let router = build(state);
+
+        let room = send(
+            &router,
+            "POST",
+            "/api/rooms",
+            Some(&alice_token),
+            Some(serde_json::json!({ "name": "Engineering" })),
+        )
+        .await
+        .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        send(
+            &router,
+            "POST",
+            "/api/rooms/dm",
+            Some(&alice_token),
+            Some(serde_json::json!({ "walletAddress": bob.as_str() })),
+        )
+        .await;
+        // A real message, hashed the way the protocol demands (§13: plain
+        // SHA-256 of the trimmed plaintext).
+        let content = "the plans are in the vault";
+        let msg_hash = hex::encode(sha2::Sha256::digest(content.as_bytes()));
+        let posted = send(
+            &router,
+            "POST",
+            &format!("/api/rooms/{room}/messages"),
+            Some(&alice_token),
+            Some(serde_json::json!({ "content": content, "msgHash": msg_hash })),
+        )
+        .await;
+        assert!(posted.status.is_success(), "{:?}", posted.body);
+
+        let refused = send(&router, "GET", "/api/admin/stats", Some(&bob_token), None).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN);
+
+        let stats = send(&router, "GET", "/api/admin/stats", Some(&boss_token), None).await;
+        assert_eq!(stats.status, StatusCode::OK, "{:?}", stats.body);
+        let report = stats.json();
+        assert_eq!(report["rooms"]["total"], 2);
+        assert_eq!(report["rooms"]["channels"], 1);
+        assert_eq!(report["rooms"]["directMessages"], 1);
+        assert_eq!(report["people"]["total"], 3);
+        assert_eq!(report["messages"]["total"], 1);
+        assert_eq!(report["activity"].as_array().unwrap().len(), 1);
+        assert_eq!(report["busiest"][0]["name"], "Engineering");
+        assert_eq!(report["busiest"][0]["messages"], 1);
+        assert!(report["uptimeSeconds"].is_number());
+        assert!(report["presence"]["online"].is_number());
+
+        // The privacy line, stated as a property of the bytes on the wire:
+        // a message was posted, and no admin surface ever echoes it.
+        let body = serde_json::to_string(&report).unwrap();
+        assert!(
+            !body.contains("vault"),
+            "the stats report must never carry message content"
+        );
     }
 
     #[tokio::test]

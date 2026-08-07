@@ -497,6 +497,7 @@
   --img-boot-endoskull:      url("/static/img/boot-endoskull.png");
   --img-bank-vault-hall:     url("/static/img/bank-vault-hall.png");
   --img-bank-emblem:         url("/static/img/bank-emblem.png");
+  --img-dashboard-emblem:    url("/static/img/dashboard-emblem.png");
   --img-banker-core:         url("/static/img/banker-core.png");
   /* Themed pairs. The `-dark` half is a genuinely different file, not a
      filter: a flat PNG cannot adapt its own baked-in background plate. */
@@ -794,6 +795,7 @@
   --img-boot-endoskull:      url("/static/img/cute/boot-endoskull.png");
   --img-bank-vault-hall:     url("/static/img/cute/bank-vault-hall.png");
   --img-bank-emblem:         url("/static/img/cute/bank-emblem.png");
+  --img-dashboard-emblem:    url("/static/img/cute/dashboard-emblem.png");
   --img-banker-core:         url("/static/img/cute/banker-core.png");
   --img-empty-rooms:         url("/static/img/cute/empty-rooms.png");
   --img-empty-rooms-dark:    url("/static/img/cute/empty-rooms-dark.png");
@@ -1097,6 +1099,7 @@
   --img-boot-endoskull:      url("/static/img/human/boot-endoskull.png");
   --img-bank-vault-hall:     url("/static/img/human/bank-vault-hall.png");
   --img-bank-emblem:         url("/static/img/human/bank-emblem.png");
+  --img-dashboard-emblem:    url("/static/img/human/dashboard-emblem.png");
   --img-banker-core:         url("/static/img/human/banker-core.png");
   --img-empty-rooms:         url("/static/img/human/empty-rooms.png");
   --img-empty-rooms-dark:    url("/static/img/human/empty-rooms-dark.png");
@@ -4711,6 +4714,10 @@ span.fn-conn { cursor: default; }
 .fn-art--bank-emblem {
   --fn-art-light: var(--img-bank-emblem);
   --fn-art-dark: var(--img-bank-emblem);
+}
+.fn-art--dashboard-emblem {
+  --fn-art-light: var(--img-dashboard-emblem);
+  --fn-art-dark: var(--img-dashboard-emblem);
 }
 .fn-art--banker {
   --fn-art-light: var(--img-bank-banker);
@@ -10503,9 +10510,10 @@ span.fn-conn { cursor: default; }
 }
 
 /* ==========================================================================
-   FILES DASHBOARD — the operator's view of the disk (/dashboard,
-   components/dashboard.rs, docs/API.md §6.14). Admin-only in effect; the
-   gate is server-side and this styling assumes nothing about it.
+   SKYNET DASHBOARD — the operator's view of the deployment (/dashboard,
+   components/dashboard.rs, docs/API.md §6.14): the server in counts, then
+   the disk in files. Admin-only in effect; the gate is server-side and this
+   styling assumes nothing about it.
 
    Additive, like §18: new class names only, tokens only. The charts keep to
    one recessive ink on purpose — identity lives in the row labels and the
@@ -10522,9 +10530,37 @@ span.fn-conn { cursor: default; }
   align-content: start;
 }
 
+.fn-dash__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 14px;
+  align-items: center;
+}
 .fn-dash__head h1 {
   font-size: var(--fn-t-xl);
   letter-spacing: -0.01em;
+}
+/* The archivist's mark (tools/genart.py `dashboard-emblem`, one drawing per
+   skin). Decoration, so it spans the rows and stays out of the reading
+   order; the squircle radius is the identity-tile shape, which is what makes
+   44px read as an emblem rather than a thumbnail. */
+.fn-dash__emblem {
+  grid-row: 1 / 3;
+  width: 44px;
+  height: 44px;
+  border-radius: 34%;
+  box-shadow: var(--fn-elev-1);
+}
+
+/* The two panel labels. An eyebrow rather than a second h1-sized heading:
+   the sections are rooms of one instrument, not two screens sharing a URL. */
+.fn-dash__eyebrow {
+  margin-top: 8px;
+  font-size: var(--fn-t-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fn-fg-faint);
 }
 .fn-dash__sub {
   margin-top: 4px;

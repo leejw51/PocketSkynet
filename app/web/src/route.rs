@@ -39,7 +39,8 @@ pub enum Route {
     /// `/operator` — the operator's file: clearance, standing orders, the
     /// trophy wall, and this server's ladder.
     Operator,
-    /// `/dashboard` — the server files dashboard. Admin-only in effect: the
+    /// `/dashboard` — the Skynet Dashboard: the whole deployment in counts,
+    /// then the disk in files. Admin-only in effect: the
     /// route parses for anybody (a URL is not an access control), but every
     /// fetch behind it requires the server to name this wallet an admin, so
     /// all a non-admin can reach is the refusal screen.
@@ -188,7 +189,7 @@ impl Route {
             Route::Publish => "Publish · PocketSkynet",
             Route::Bank => "Bank · PocketSkynet",
             Route::Operator => "Operator · PocketSkynet",
-            Route::Dashboard => "Files dashboard · PocketSkynet",
+            Route::Dashboard => "Skynet Dashboard · PocketSkynet",
             Route::Settings => "Settings · PocketSkynet",
             Route::NotFound => "Page not found · PocketSkynet",
         }

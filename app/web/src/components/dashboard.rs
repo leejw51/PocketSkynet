@@ -1,4 +1,5 @@
-//! The files dashboard — an operator's view of the disk (`/dashboard`).
+//! The Skynet Dashboard — an operator's view of the whole deployment
+//! (`/dashboard`): the server in counts, then the disk in files.
 //!
 //! Offered only to wallets the *server* names as administrators, exactly like
 //! the admin console: hiding the route is a courtesy, the access control is
@@ -7,11 +8,13 @@
 //!
 //! # What it deliberately does not do
 //!
-//! Nothing here opens a file. The listing is metadata — names, sizes, rooms,
-//! uploaders, dates — and the API it reads from carries no download URL and
-//! honours none an admin could build: the bytes stay behind the room
-//! membership check (`GET /api/files/{id}/raw`), admin or not. An attachment
-//! is part of a conversation, and this dashboard is not a way to read one.
+//! Nothing here opens a conversation, and nothing opens a file. The server
+//! half is counts — rooms by kind, message volume by day, heads connected —
+//! and the files half is metadata: names, sizes, rooms, uploaders, dates.
+//! The API it reads from carries no download URL and honours none an admin
+//! could build: the bytes stay behind the room membership check
+//! (`GET /api/files/{id}/raw`), admin or not. An attachment is part of a
+//! conversation, and this dashboard is not a way to read one.
 //!
 //! # The charts
 //!
@@ -24,7 +27,7 @@
 
 use yew::prelude::*;
 
-use crate::api::admin::{AdminFile, AdminStorage, FlowStats, GrowthPoint};
+use crate::api::admin::{AdminFile, AdminStats, AdminStorage, FlowStats, GrowthPoint, MessageDay};
 use crate::components::common::{Empty, Skeleton};
 use crate::components::transfers::human_bytes;
 use crate::i18n::{t, Key, Lang};
@@ -84,13 +87,35 @@ fn day_label(day: i64) -> String {
     format!("{:04}-{:02}-{:02}", civil.year, civil.month, civil.day)
 }
 
+/// The dense trailing window both day charts draw: `(first day, today)`.
+fn day_window(now_ms: i64, days: i64) -> (i64, i64) {
+    let today = now_ms.div_euclid(86_400_000);
+    (today - (days - 1), today)
+}
+
+/// Uptime as a machine readout: `"3d 04h"`, `"4h 12m"`, `"09m"`. The unit
+/// letters stay untranslated like every HUD code in this product — they are
+/// telemetry, not prose.
+pub fn uptime_label(secs: i64) -> String {
+    let secs = secs.max(0);
+    let d = secs / 86_400;
+    let h = (secs % 86_400) / 3_600;
+    let m = (secs % 3_600) / 60;
+    if d > 0 {
+        format!("{d}d {h:02}h")
+    } else if h > 0 {
+        format!("{h}h {m:02}m")
+    } else {
+        format!("{m:02}m")
+    }
+}
+
 /// Lay the server's sparse day buckets onto a dense trailing window, oldest
 /// first. The server sends only days that saw an upload — a wire format
 /// padded with zeros is just a bigger wire format — but a bar chart with the
 /// silent days removed lies about the rhythm, so the gaps are restored here.
 pub fn fill_growth(points: &[GrowthPoint], now_ms: i64, days: i64) -> Vec<GrowthPoint> {
-    let today = now_ms.div_euclid(86_400_000);
-    let start = today - (days - 1);
+    let (start, today) = day_window(now_ms, days);
     let mut series: Vec<GrowthPoint> = (start..=today)
         .map(|day| GrowthPoint {
             day: day_label(day),
@@ -104,6 +129,25 @@ pub fn fill_growth(points: &[GrowthPoint], now_ms: i64, days: i64) -> Vec<Growth
                 let slot = &mut series[(day - start) as usize];
                 slot.files = point.files;
                 slot.bytes = point.bytes;
+            }
+        }
+    }
+    series
+}
+
+/// The message twin of [`fill_growth`], with the identical contract.
+pub fn fill_activity(points: &[MessageDay], now_ms: i64, days: i64) -> Vec<MessageDay> {
+    let (start, today) = day_window(now_ms, days);
+    let mut series: Vec<MessageDay> = (start..=today)
+        .map(|day| MessageDay {
+            day: day_label(day),
+            messages: 0,
+        })
+        .collect();
+    for point in points {
+        if let Some(day) = parse_day(&point.day) {
+            if day >= start && day <= today {
+                series[(day - start) as usize].messages = point.messages;
             }
         }
     }
@@ -209,6 +253,7 @@ pub fn dashboard() -> Html {
     let store = use_store();
     let lang = store.language;
 
+    let stats = use_state(AdminStats::default);
     let storage = use_state(AdminStorage::default);
     let files = use_state(Vec::<AdminFile>::new);
     let load = use_state(Load::default);
@@ -221,6 +266,7 @@ pub fn dashboard() -> Html {
 
     {
         let store = store.clone();
+        let stats = stats.clone();
         let storage = storage.clone();
         let files = files.clone();
         let load = load.clone();
@@ -228,13 +274,20 @@ pub fn dashboard() -> Html {
             load.set(Load::Loading);
             wasm_bindgen_futures::spawn_local(async move {
                 let client = store.client.clone();
-                match futures::join!(client.admin_storage(), client.admin_files()) {
-                    (Ok(s), Ok(f)) => {
+                match futures::join!(
+                    client.admin_stats(),
+                    client.admin_storage(),
+                    client.admin_files()
+                ) {
+                    (Ok(st), Ok(s), Ok(f)) => {
+                        stats.set(st);
                         storage.set(s);
                         files.set(f);
                         load.set(Load::Ready);
                     }
-                    (Err(e), _) | (_, Err(e)) => load.set(Load::Error(e.user_message())),
+                    (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                        load.set(Load::Error(e.user_message()))
+                    }
                 }
             });
             || ()
@@ -249,35 +302,180 @@ pub fn dashboard() -> Html {
             <Empty art="⚠️" title={t(lang, Key::dash_error)}
                    description={e.clone()} is_error=true />
         },
-        Load::Ready if storage.totals.files == 0 => html! {
-            <Empty art="🗄️" art_class={classes!("fn-art--files")}
-                   title={t(lang, Key::dash_empty_title)}
-                   description={t(lang, Key::dash_empty_desc)} />
-        },
-        Load::Ready => html! {
-            <>
-                { tiles(lang, &storage) }
-                <div class="fn-dash__grid">
-                    { breakdown_card(lang, &storage) }
-                    { growth_card(lang, &storage) }
-                    { rooms_card(lang, &storage) }
-                    { largest_card(lang, &storage) }
-                </div>
-                { activity_card(lang, &storage) }
-                { files_table(lang, &files, &sort, &query, &category) }
-            </>
-        },
+        Load::Ready => {
+            // The files half stands down to its empty state on a server with
+            // no attachments; the server half always has something to say —
+            // a deployment with zero rooms is itself a fact worth a tile.
+            let files_half = if storage.totals.files == 0 {
+                html! {
+                    <Empty art="🗄️" art_class={classes!("fn-art--files")}
+                           title={t(lang, Key::dash_empty_title)}
+                           description={t(lang, Key::dash_empty_desc)} />
+                }
+            } else {
+                html! {
+                    <>
+                        { tiles(lang, &storage) }
+                        <div class="fn-dash__grid">
+                            { breakdown_card(lang, &storage) }
+                            { growth_card(lang, &storage) }
+                            { rooms_card(lang, &storage) }
+                            { largest_card(lang, &storage) }
+                        </div>
+                        { activity_card(lang, &storage) }
+                        { files_table(lang, &files, &sort, &query, &category) }
+                    </>
+                }
+            };
+            html! {
+                <>
+                    { section_head(lang, Key::dash_section_server) }
+                    { server_tiles(lang, &stats) }
+                    <div class="fn-dash__grid">
+                        { message_activity_card(lang, &stats) }
+                        { busiest_card(lang, &stats) }
+                    </div>
+                    { section_head(lang, Key::dash_section_files) }
+                    { files_half }
+                </>
+            }
+        }
     };
 
     html! {
         <div class="fn-dash fn-scroll">
             <header class="fn-dash__head">
+                <div class="fn-art fn-art--dashboard-emblem fn-dash__emblem"
+                     aria-hidden="true"></div>
                 <h1>{ t(lang, Key::dash_title) }</h1>
                 <p class="fn-dash__sub">{ t(lang, Key::dash_subtitle) }</p>
             </header>
             { body }
         </div>
     }
+}
+
+// ---------------------------------------------------------- server section --
+
+/// A section eyebrow: the dashboard reads as one instrument with two panels,
+/// and these are the panel labels.
+fn section_head(lang: Lang, key: Key) -> Html {
+    html! { <h2 class="fn-dash__eyebrow">{ t(lang, key) }</h2> }
+}
+
+fn msg_count_label(lang: Lang, n: i64) -> String {
+    t(
+        lang,
+        if n == 1 {
+            Key::admin_message_one
+        } else {
+            Key::admin_message_many
+        },
+    )
+    .replace("{n}", &n.to_string())
+}
+
+fn member_count_label(lang: Lang, n: i64) -> String {
+    t(
+        lang,
+        if n == 1 {
+            Key::member_count_one
+        } else {
+            Key::member_count_many
+        },
+    )
+    .replace("{n}", &n.to_string())
+}
+
+fn server_tiles(lang: Lang, stats: &AdminStats) -> Html {
+    let rooms_foot = t(lang, Key::dash_rooms_split)
+        .replace("{channels}", &stats.rooms.channels.to_string())
+        .replace("{dms}", &stats.rooms.direct_messages.to_string())
+        .replace("{encrypted}", &stats.rooms.encrypted.to_string());
+    let people_foot = t(lang, Key::dash_people_foot)
+        .replace("{rooms}", &stats.people.in_rooms.to_string())
+        .replace("{suspended}", &stats.people.suspended.to_string());
+    let messages_foot = t(lang, Key::dash_messages_foot)
+        .replace("{threads}", &stats.messages.thread_replies.to_string())
+        .replace("{reactions}", &stats.messages.reactions.to_string());
+
+    html! {
+        <div class="fn-dash__tiles">
+            { tile(t(lang, Key::dash_uptime),
+                   uptime_label(stats.uptime_seconds),
+                   t(lang, Key::dash_counters_note).to_owned()) }
+            { tile(t(lang, Key::dash_online_now),
+                   stats.presence.online.to_string(),
+                   t(lang, Key::dash_away_foot)
+                       .replace("{n}", &stats.presence.away.to_string())) }
+            { tile(t(lang, Key::admin_people), stats.people.total.to_string(), people_foot) }
+            { tile(t(lang, Key::admin_rooms), stats.rooms.total.to_string(), rooms_foot) }
+            { tile(t(lang, Key::dash_messages_tile),
+                   stats.messages.total.to_string(), messages_foot) }
+        </div>
+    }
+}
+
+/// The month of message volume — the conversation twin of [`growth_card`],
+/// drawn by the same shared chart so the two share an x-axis a reader can
+/// hold side by side.
+fn message_activity_card(lang: Lang, stats: &AdminStats) -> Html {
+    let series = fill_activity(&stats.activity, crate::format::now_ms(), GROWTH_DAYS);
+    let total: i64 = series.iter().map(|p| p.messages).sum();
+    let max = series.iter().map(|p| p.messages).max().unwrap_or(0);
+
+    let aside =
+        t(lang, Key::dash_msg_activity_total).replace("{messages}", &msg_count_label(lang, total));
+
+    let body = if max == 0 {
+        html! { <p class="fn-dash__quiet">{ t(lang, Key::dash_msg_activity_empty) }</p> }
+    } else {
+        let columns: Vec<ChartColumn> = series
+            .iter()
+            .map(|point| ChartColumn {
+                day: point.day.clone(),
+                value: point.messages,
+                hover: format!("{} · {}", point.day, msg_count_label(lang, point.messages)),
+            })
+            .collect();
+        let label = t(lang, Key::dash_msg_activity_label)
+            .replace("{days}", &GROWTH_DAYS.to_string())
+            .replace("{messages}", &msg_count_label(lang, total));
+        let peak = t(lang, Key::dash_growth_peak).replace("{bytes}", &max.to_string());
+        column_chart(&columns, label, peak)
+    };
+    card(t(lang, Key::dash_msg_activity), Some(aside), body)
+}
+
+fn busiest_card(lang: Lang, stats: &AdminStats) -> Html {
+    let max = stats
+        .busiest
+        .iter()
+        .map(|r| r.messages)
+        .max()
+        .unwrap_or(0)
+        .max(1) as f64;
+    let rows = stats
+        .busiest
+        .iter()
+        .map(|room| {
+            // The lock rides the name as a glyph, the way the room list wears
+            // it — never colour, and never only an icon: the tooltip-less bar
+            // row still reads because the glyph is beside the text.
+            let label = if room.has_encryption {
+                format!("{} 🔒", room.name)
+            } else {
+                room.name.clone()
+            };
+            bar_row(
+                label,
+                member_count_label(lang, room.members),
+                msg_count_label(lang, room.messages),
+                room.messages as f64 / max,
+            )
+        })
+        .collect::<Html>();
+    card(t(lang, Key::dash_busiest), None, rows)
 }
 
 // ------------------------------------------------------------------ tiles --
@@ -442,13 +640,76 @@ fn largest_card(lang: Lang, storage: &AdminStorage) -> Html {
     card(t(lang, Key::dash_largest), None, rows)
 }
 
-/// The month of upload volume, as an SVG column chart.
+/// One column of a day chart, ready to draw.
+struct ChartColumn {
+    day: String,
+    value: i64,
+    /// The sentence the `<title>` shows on hover.
+    hover: String,
+}
+
+/// The one SVG day chart both halves of the dashboard draw.
 ///
 /// Hand-rolled on purpose (module docs). The geometry is all that lives in
 /// SVG; labels sit in HTML where the type tokens already apply. Every column
-/// carries a `<title>`, so hovering names the day and the bytes — and the
+/// carries a `<title>`, so hovering names the day and its value — and the
 /// whole figure has one accessible sentence, because thirty unlabeled rects
 /// are noise to a screen reader.
+fn column_chart(columns: &[ChartColumn], aria_label: String, peak: String) -> Html {
+    let max = columns.iter().map(|c| c.value).max().unwrap_or(0).max(1);
+    // 20 units per day and a 2-unit gap — the dataviz spacer rule — on a
+    // 100-unit height; `preserveAspectRatio="none"` lets the card decide
+    // the on-screen size while the ratios stay true.
+    let w = 20.0;
+    let gap = 2.0;
+    let height = 100.0;
+    let view_w = columns.len() as f64 * w;
+    let rects = columns
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            let h = (column.value as f64 / max as f64) * (height - 4.0);
+            // Activity happened but rounded to nothing: draw a 1-unit stub
+            // so a day with traffic is never pixel-identical to silence.
+            let h = if column.value > 0 { h.max(1.0) } else { 0.0 };
+            let x = i as f64 * w + gap / 2.0;
+            html! {
+                <rect
+                    key={column.day.clone()}
+                    class="fn-dash__col"
+                    x={format!("{x:.1}")}
+                    y={format!("{:.1}", height - h)}
+                    width={format!("{:.1}", w - gap)}
+                    height={format!("{h:.1}")}
+                >
+                    <title>{ column.hover.clone() }</title>
+                </rect>
+            }
+        })
+        .collect::<Html>();
+    html! {
+        <>
+            <svg
+                class="fn-dash__chart"
+                viewBox={format!("0 0 {view_w} {height}")}
+                preserveAspectRatio="none"
+                role="img"
+                aria-label={aria_label}
+            >
+                <line class="fn-dash__axis" x1="0" y1={height.to_string()}
+                      x2={view_w.to_string()} y2={height.to_string()} />
+                { rects }
+            </svg>
+            <div class="fn-dash__chart-foot fn-nums" aria-hidden="true">
+                <span>{ columns.first().map(|c| c.day.clone()).unwrap_or_default() }</span>
+                <span>{ peak }</span>
+                <span>{ columns.last().map(|c| c.day.clone()).unwrap_or_default() }</span>
+            </div>
+        </>
+    }
+}
+
+/// The month of upload volume, on the shared day chart.
 fn growth_card(lang: Lang, storage: &AdminStorage) -> Html {
     let series = fill_growth(&storage.growth, crate::format::now_ms(), GROWTH_DAYS);
     let total_bytes: i64 = series.iter().map(|p| p.bytes).sum();
@@ -462,66 +723,24 @@ fn growth_card(lang: Lang, storage: &AdminStorage) -> Html {
     let body = if max == 0 {
         html! { <p class="fn-dash__quiet">{ t(lang, Key::dash_growth_empty) }</p> }
     } else {
-        // 20 units per day and a 2-unit gap — the dataviz spacer rule — on a
-        // 100-unit height; `preserveAspectRatio="none"` lets the card decide
-        // the on-screen size while the ratios stay true.
-        let w = 20.0;
-        let gap = 2.0;
-        let height = 100.0;
-        let view_w = series.len() as f64 * w;
-        let columns = series
+        let columns: Vec<ChartColumn> = series
             .iter()
-            .enumerate()
-            .map(|(i, point)| {
-                let h = (point.bytes as f64 / max as f64) * (height - 4.0);
-                // Uploads happened but rounded to nothing: draw a 1-unit stub
-                // so a day with traffic is never pixel-identical to silence.
-                let h = if point.bytes > 0 { h.max(1.0) } else { 0.0 };
-                let x = i as f64 * w + gap / 2.0;
-                let title = format!(
+            .map(|point| ChartColumn {
+                day: point.day.clone(),
+                value: point.bytes,
+                hover: format!(
                     "{} · {} · {}",
                     point.day,
                     human_bytes(point.bytes as f64),
                     count_label(lang, point.files),
-                );
-                html! {
-                    <rect
-                        key={point.day.clone()}
-                        class="fn-dash__col"
-                        x={format!("{x:.1}")}
-                        y={format!("{:.1}", height - h)}
-                        width={format!("{:.1}", w - gap)}
-                        height={format!("{h:.1}")}
-                    >
-                        <title>{ title }</title>
-                    </rect>
-                }
+                ),
             })
-            .collect::<Html>();
+            .collect();
         let label = t(lang, Key::dash_growth_label)
             .replace("{days}", &GROWTH_DAYS.to_string())
             .replace("{bytes}", &human_bytes(total_bytes as f64));
-        html! {
-            <>
-                <svg
-                    class="fn-dash__chart"
-                    viewBox={format!("0 0 {view_w} {height}")}
-                    preserveAspectRatio="none"
-                    role="img"
-                    aria-label={label}
-                >
-                    <line class="fn-dash__axis" x1="0" y1={height.to_string()}
-                          x2={view_w.to_string()} y2={height.to_string()} />
-                    { columns }
-                </svg>
-                <div class="fn-dash__chart-foot fn-nums" aria-hidden="true">
-                    <span>{ series.first().map(|p| p.day.clone()).unwrap_or_default() }</span>
-                    <span>{ t(lang, Key::dash_growth_peak)
-                        .replace("{bytes}", &human_bytes(max as f64)) }</span>
-                    <span>{ series.last().map(|p| p.day.clone()).unwrap_or_default() }</span>
-                </div>
-            </>
-        }
+        let peak = t(lang, Key::dash_growth_peak).replace("{bytes}", &human_bytes(max as f64));
+        column_chart(&columns, label, peak)
     };
     card(t(lang, Key::dash_growth), Some(aside), body)
 }
@@ -803,6 +1022,34 @@ mod tests {
             assert_eq!(day_label(n), day, "round trip failed for {day}");
         }
         assert_eq!(parse_day("1970-01-01"), Some(0));
+    }
+
+    #[test]
+    fn uptime_reads_like_telemetry() {
+        assert_eq!(uptime_label(0), "00m");
+        assert_eq!(uptime_label(59), "00m");
+        assert_eq!(uptime_label(12 * 60), "12m");
+        assert_eq!(uptime_label(3 * 3600 + 4 * 60), "3h 04m");
+        assert_eq!(uptime_label(2 * 86400 + 5 * 3600), "2d 05h");
+        assert_eq!(
+            uptime_label(-5),
+            "00m",
+            "a clock that ran backwards is not a crash"
+        );
+    }
+
+    #[test]
+    fn message_activity_fills_like_file_growth() {
+        let now_ms = parse_day("2026-08-07").unwrap() * 86_400_000;
+        let sparse = vec![MessageDay {
+            day: "2026-08-06".into(),
+            messages: 7,
+        }];
+        let series = fill_activity(&sparse, now_ms, 7);
+        assert_eq!(series.len(), 7);
+        assert_eq!(series[5].day, "2026-08-06");
+        assert_eq!(series[5].messages, 7);
+        assert_eq!(series.iter().map(|p| p.messages).sum::<i64>(), 7);
     }
 
     #[test]
