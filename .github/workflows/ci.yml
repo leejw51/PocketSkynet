@@ -67,6 +67,13 @@ jobs:
             app
             app/web
 
+      # The non-Rust half of `make fmt-check`: black for Python (pinned to
+      # the major in use locally, so CI and a developer's machine can never
+      # disagree about formatting), prettier for JS/TS (version pinned in the
+      # Makefile itself, fetched through the runner's preinstalled node).
+      - name: Install source formatters
+        run: pip3 install 'black==26.*'
+
       - name: Build web bundle
         run: make web
 

@@ -48,14 +48,24 @@ class Resp:
 class Api:
     """A base URL plus an optional bearer token."""
 
-    def __init__(self, base_url: str, token: str | None = None, ca_file: str | None = None):
+    def __init__(
+        self, base_url: str, token: str | None = None, ca_file: str | None = None
+    ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.ca_file = ca_file
         self._opener = _opener_for(ca_file)
 
-    def request(self, method, path, json_body=None, raw_body=None,
-                headers=None, token="inherit", timeout=30) -> Resp:
+    def request(
+        self,
+        method,
+        path,
+        json_body=None,
+        raw_body=None,
+        headers=None,
+        token="inherit",
+        timeout=30,
+    ) -> Resp:
         url = self.base_url + path
         hdrs = dict(headers or {})
         data = None

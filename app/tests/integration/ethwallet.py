@@ -20,12 +20,30 @@ import secrets
 # --- Keccak-256 (the original submission, as Ethereum uses) ----------------
 
 _KECCAK_RC = [
-    0x0000000000000001, 0x0000000000008082, 0x800000000000808A, 0x8000000080008000,
-    0x000000000000808B, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
-    0x000000000000008A, 0x0000000000000088, 0x0000000080008009, 0x000000008000000A,
-    0x000000008000808B, 0x800000000000008B, 0x8000000000008089, 0x8000000000008003,
-    0x8000000000008002, 0x8000000000000080, 0x000000000000800A, 0x800000008000000A,
-    0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+    0x0000000000000001,
+    0x0000000000008082,
+    0x800000000000808A,
+    0x8000000080008000,
+    0x000000000000808B,
+    0x0000000080000001,
+    0x8000000080008081,
+    0x8000000000008009,
+    0x000000000000008A,
+    0x0000000000000088,
+    0x0000000080008009,
+    0x000000008000000A,
+    0x000000008000808B,
+    0x800000000000008B,
+    0x8000000000008089,
+    0x8000000000008003,
+    0x8000000000008002,
+    0x8000000000000080,
+    0x000000000000800A,
+    0x800000008000000A,
+    0x8000000080008081,
+    0x8000000000008080,
+    0x0000000080000001,
+    0x8000000080008008,
 ]
 
 # Rotation offsets for the ρ step, indexed [x][y] with lane A[x][y] = state[x + 5*y].
@@ -47,8 +65,10 @@ def _rotl64(value, shift):
 def _keccak_f1600(state):
     for rc in _KECCAK_RC:
         # θ
-        c = [state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20]
-             for x in range(5)]
+        c = [
+            state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20]
+            for x in range(5)
+        ]
         d = [c[(x - 1) % 5] ^ _rotl64(c[(x + 1) % 5], 1) for x in range(5)]
         for x in range(5):
             for y in range(5):
@@ -57,11 +77,15 @@ def _keccak_f1600(state):
         b = [0] * 25
         for x in range(5):
             for y in range(5):
-                b[y + 5 * ((2 * x + 3 * y) % 5)] = _rotl64(state[x + 5 * y], _KECCAK_ROT[x][y])
+                b[y + 5 * ((2 * x + 3 * y) % 5)] = _rotl64(
+                    state[x + 5 * y], _KECCAK_ROT[x][y]
+                )
         # χ
         for x in range(5):
             for y in range(5):
-                state[x + 5 * y] = b[x + 5 * y] ^ ((~b[(x + 1) % 5 + 5 * y]) & b[(x + 2) % 5 + 5 * y])
+                state[x + 5 * y] = b[x + 5 * y] ^ (
+                    (~b[(x + 1) % 5 + 5 * y]) & b[(x + 2) % 5 + 5 * y]
+                )
         # ι
         state[0] ^= rc
 
@@ -74,9 +98,9 @@ def keccak256(data: bytes) -> bytes:
     pad_len = rate - (len(padded) % rate)
     padded += b"\x01" + b"\x00" * (pad_len - 2) + b"\x80" if pad_len >= 2 else b"\x81"
     for block_start in range(0, len(padded), rate):
-        block = padded[block_start:block_start + rate]
+        block = padded[block_start : block_start + rate]
         for i in range(rate // 8):
-            state[i] ^= int.from_bytes(block[8 * i:8 * i + 8], "little")
+            state[i] ^= int.from_bytes(block[8 * i : 8 * i + 8], "little")
         _keccak_f1600(state)
     # Squeeze: 32 bytes fit inside one rate, no second permutation needed.
     return b"".join(state[i].to_bytes(8, "little") for i in range(4))
@@ -183,12 +207,23 @@ class Wallet:
         prefixed = b"\x19Ethereum Signed Message:\n" + str(len(raw)).encode() + raw
         digest = keccak256(prefixed)
         r, s, recid = _sign_digest(digest, self.priv)
-        return "0x" + r.to_bytes(32, "big").hex() + s.to_bytes(32, "big").hex() + bytes([27 + recid]).hex()
+        return (
+            "0x"
+            + r.to_bytes(32, "big").hex()
+            + s.to_bytes(32, "big").hex()
+            + bytes([27 + recid]).hex()
+        )
 
 
 def _self_test():
-    assert keccak256(b"").hex() == "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
-    assert keccak256(b"abc").hex() == "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+    assert (
+        keccak256(b"").hex()
+        == "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+    )
+    assert (
+        keccak256(b"abc").hex()
+        == "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+    )
     # The canonical address of private key 1.
     assert Wallet(1).address == "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
 

@@ -25,9 +25,9 @@
 // served instead, which is why a home-screen launch with no server reachable
 // still paints the app rather than the browser's dinosaur.
 
-const SHELL = '/';
-const SHELL_CACHE = 'pocketskynet-shell-v1';
-const ASSET_CACHE = 'pocketskynet-assets-v1';
+const SHELL = "/";
+const SHELL_CACHE = "pocketskynet-shell-v1";
+const ASSET_CACHE = "pocketskynet-assets-v1";
 const CACHES = [SHELL_CACHE, ASSET_CACHE];
 
 /// Files the shell needs but does not name.
@@ -46,10 +46,10 @@ const CACHES = [SHELL_CACHE, ASSET_CACHE];
 /// artwork, and precaching it would turn a 3 MB install into a download nobody
 /// asked for. The rest of the imagery is cached as it is actually used.
 const ALWAYS = [
-  '/static/fonts/chakra-petch-600-latin.woff2',
-  '/static/fonts/chakra-petch-700-latin.woff2',
-  '/static/img/icon-192.png',
-  '/static/img/icon-maskable-192.png',
+  "/static/fonts/chakra-petch-600-latin.woff2",
+  "/static/fonts/chakra-petch-700-latin.woff2",
+  "/static/img/icon-192.png",
+  "/static/img/icon-maskable-192.png",
 ];
 
 /// Paths that must always reach the server.
@@ -62,11 +62,11 @@ const ALWAYS = [
 function isLive(url) {
   const path = url.pathname;
   return (
-    path.startsWith('/api/') ||
-    path === '/ws' ||
-    path === '/sites' ||
-    path.startsWith('/sites/') ||
-    path === '/ca.crt'
+    path.startsWith("/api/") ||
+    path === "/ws" ||
+    path === "/sites" ||
+    path.startsWith("/sites/") ||
+    path === "/ca.crt"
   );
 }
 
@@ -76,15 +76,15 @@ function isLive(url) {
 /// stylesheet too, and here that is worth acting on. An unrecognised name falls
 /// through to revalidate-in-background, which is merely slower, never wrong.
 function isHashed(url) {
-  const file = url.pathname.split('/').pop() || '';
-  const stem = file.endsWith('_bg.wasm')
-    ? file.slice(0, -'_bg.wasm'.length)
+  const file = url.pathname.split("/").pop() || "";
+  const stem = file.endsWith("_bg.wasm")
+    ? file.slice(0, -"_bg.wasm".length)
     : /\.(js|wasm|css)$/.test(file)
-      ? file.slice(0, file.lastIndexOf('.'))
+      ? file.slice(0, file.lastIndexOf("."))
       : null;
   if (stem === null) return false;
 
-  const dash = stem.lastIndexOf('-');
+  const dash = stem.lastIndexOf("-");
   if (dash === -1) return false;
   const tail = stem.slice(dash + 1);
   return tail.length >= 8 && /^[0-9a-f]+$/i.test(tail);
@@ -100,7 +100,7 @@ function isHashed(url) {
 function referencedAssets(html) {
   const urls = new Set();
   for (const [, value] of html.matchAll(/(?:src|href)=["']([^"']+)["']/g)) {
-    if (value.startsWith('/')) urls.add(value);
+    if (value.startsWith("/")) urls.add(value);
   }
   // The module script imports the JS glue rather than linking it, so it is
   // reached by a bare `from '/…js'` with no attribute around it.
@@ -121,7 +121,7 @@ function referencedAssets(html) {
 /// fetched and cached on the next load anyway.
 async function precache() {
   try {
-    const response = await fetch(SHELL, { cache: 'reload' });
+    const response = await fetch(SHELL, { cache: "reload" });
     if (!response.ok) return;
     const html = await response.clone().text();
     const cache = await caches.open(SHELL_CACHE);
@@ -142,10 +142,12 @@ async function cacheAssets(referenced) {
   const wanted = [...new Set([...referenced, ...ALWAYS])];
   const cache = await caches.open(ASSET_CACHE);
   await Promise.allSettled(
-    wanted.map((url) => cache.add(new Request(url, { cache: 'reload' }))),
+    wanted.map((url) => cache.add(new Request(url, { cache: "reload" }))),
   );
 
-  const keep = new Set(wanted.map((url) => new URL(url, self.location.origin).href));
+  const keep = new Set(
+    wanted.map((url) => new URL(url, self.location.origin).href),
+  );
   for (const request of await cache.keys()) {
     if (isHashed(new URL(request.url)) && !keep.has(request.url)) {
       await cache.delete(request);
@@ -177,7 +179,10 @@ async function adoptShell(response) {
 async function serveDocument(event) {
   try {
     const fresh = await fetch(event.request);
-    if (fresh.ok && fresh.headers.get('content-type')?.startsWith('text/html')) {
+    if (
+      fresh.ok &&
+      fresh.headers.get("content-type")?.startsWith("text/html")
+    ) {
       event.waitUntil(adoptShell(fresh.clone()));
     }
     return fresh;
@@ -211,28 +216,30 @@ async function serveAsset(event) {
   return network;
 }
 
-self.addEventListener('install', (event) => {
+self.addEventListener("install", (event) => {
   // `skipWaiting` is safe here in a way it is not for most apps: every asset
   // this worker caches is content-hashed or revalidated, so a new worker taking
   // over a live page cannot hand it a stale bundle.
   event.waitUntil(precache().then(() => self.skipWaiting()));
 });
 
-self.addEventListener('activate', (event) => {
+self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const names = await caches.keys();
       await Promise.all(
-        names.filter((name) => !CACHES.includes(name)).map((name) => caches.delete(name)),
+        names
+          .filter((name) => !CACHES.includes(name))
+          .map((name) => caches.delete(name)),
       );
       await self.clients.claim();
     })(),
   );
 });
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener("fetch", (event) => {
   const request = event.request;
-  if (request.method !== 'GET') return;
+  if (request.method !== "GET") return;
 
   const url = new URL(request.url);
   // Cross-origin is left entirely alone: the wallet and AI providers the client
@@ -241,5 +248,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (isLive(url)) return;
 
-  event.respondWith(request.mode === 'navigate' ? serveDocument(event) : serveAsset(event));
+  event.respondWith(
+    request.mode === "navigate" ? serveDocument(event) : serveAsset(event),
+  );
 });

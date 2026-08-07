@@ -13,6 +13,7 @@
 #   make test             Unit + integration
 #   make unittest         Unit tests only
 #   make integrationtest  Integration tests only (Rust suite + Python supervisor)
+#   make format           Format all source code — Rust, Python, JavaScript/TypeScript
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -92,7 +93,7 @@ endif
 .PHONY: help start https http http3 stop restart refresh build gui package test \
         web server tools dev \
         unittest integrationtest test-integration-rust test-integration-python test-wasm \
-        package-installer verify fmt format fmt-check lint clean distclean assets assets-force assets-cute assets-human db-reset
+        package-installer verify fmt format fmt-check fmt-tools lint clean distclean assets assets-force assets-cute assets-human db-reset
 
 ## ----------------------------------------------------------------- help ----
 
@@ -291,15 +292,36 @@ verify: fmt-check lint test test-wasm ## Everything CI would run
 	@echo ""
 	@echo "  ✓ verify passed"
 
-fmt: ## Format all Rust code
+# Formatting covers every language in the tree: Rust via rustfmt, Python via
+# black, JavaScript/TypeScript via prettier. The file lists come from git, so
+# node_modules and build output can never be rewritten; the vendored Privy
+# bundle is the one tracked file excluded — it is built output, not source.
+PY_SRC   := $(shell git ls-files '*.py')
+JS_SRC   := $(shell git ls-files '*.js' '*.mjs' '*.ts' '*.tsx' | grep -v '^web/static/vendor/')
+BLACK    ?= black
+# Pinned so `make fmt` here and `make fmt-check` in CI can never disagree
+# about what formatted means.
+PRETTIER ?= npx --yes prettier@3.6.2
+
+fmt-tools: ## Check the non-Rust formatters are present
+	@command -v $(firstword $(BLACK)) >/dev/null \
+		|| { echo "ERROR: black not found. Install with: pip3 install black"; exit 1; }
+	@command -v npx >/dev/null \
+		|| { echo "ERROR: npx not found. Install Node.js"; exit 1; }
+
+fmt: fmt-tools ## Format all source code — Rust, Python, JavaScript/TypeScript
 	$(CARGO) fmt --all
 	cd web && $(CARGO) fmt --all
+	$(BLACK) --quiet $(PY_SRC)
+	$(PRETTIER) --write --log-level warn $(JS_SRC)
 
-format: fmt ## Format all Rust code (alias for fmt)
+format: fmt ## Format all source code (alias for fmt)
 
-fmt-check: ## Fail if anything is unformatted
+fmt-check: fmt-tools ## Fail if any source is unformatted
 	$(CARGO) fmt --all -- --check
 	cd web && $(CARGO) fmt --all -- --check
+	$(BLACK) --check --quiet $(PY_SRC)
+	$(PRETTIER) --check --log-level warn $(JS_SRC)
 
 lint: tools ## Clippy, warnings denied
 	$(CARGO) clippy --workspace --all-targets -- -D warnings

@@ -34,8 +34,13 @@ def free_udp_port() -> int:
 
 
 class Backend:
-    def __init__(self, binary: str, admin_wallet: str | None = None,
-                 tls: bool = False, http3: bool = False):
+    def __init__(
+        self,
+        binary: str,
+        admin_wallet: str | None = None,
+        tls: bool = False,
+        http3: bool = False,
+    ):
         self.binary = binary
         self.admin_wallet = admin_wallet
         self.tls = tls
@@ -64,20 +69,28 @@ class Backend:
         # from the surrounding shell are scrubbed, and PS_IGNORE_BAKED_ENV
         # keeps a release binary's compiled-in values from granting powers the
         # tests never configured.
-        env = {k: v for k, v in os.environ.items()
-               if not k.startswith(("PS_", "VITE_", "POCKETSKYNET_"))}
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("PS_", "VITE_", "POCKETSKYNET_"))
+        }
         env["PS_IGNORE_BAKED_ENV"] = "1"
         if self.admin_wallet:
             env["VITE_FRUITNATION_ADMIN"] = self.admin_wallet
 
         args = [
             self.binary,
-            "--host", "127.0.0.1",
-            "--port", str(self.port),
-            "--data-dir", self.data_dir,
-            "--static-dir", self.static_dir,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(self.port),
+            "--data-dir",
+            self.data_dir,
+            "--static-dir",
+            self.static_dir,
             "--no-rate-limit",
-            "--log", "warn",
+            "--log",
+            "warn",
         ]
         if self.tls:
             args += ["--tls", "--http-redirect-port", str(self.redirect_port)]
@@ -95,7 +108,9 @@ class Backend:
         while time.monotonic() < deadline:
             if self.child.poll() is not None:
                 self._dump_log()
-                raise RuntimeError(f"server exited during boot (code {self.child.returncode})")
+                raise RuntimeError(
+                    f"server exited during boot (code {self.child.returncode})"
+                )
             try:
                 # Over TLS the probe verifies against the CA the server is
                 # minting; until that file is flushed the attempt fails like

@@ -77,7 +77,9 @@ def main() -> int:
     if tls_flows:
         before = failures
         tls_backend = Backend(binary, tls=True, http3=True)
-        print(f"==> TLS+HTTP/3 backend on {tls_backend.base_url}, data in {tls_backend.root}")
+        print(
+            f"==> TLS+HTTP/3 backend on {tls_backend.base_url}, data in {tls_backend.root}"
+        )
         try:
             tls_backend.start()
             failures += run_flows(TlsContext(tls_backend), tls_flows)

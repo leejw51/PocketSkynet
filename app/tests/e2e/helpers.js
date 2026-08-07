@@ -3,9 +3,9 @@
 // signature for a JWT. No shortcuts — this is the same flow the browser runs,
 // so anything these tests prove is true of the deployed server.
 
-const { Wallet, id: keccakOfString } = require('ethers');
+const { Wallet, id: keccakOfString } = require("ethers");
 
-const BASE = process.env.PS_BASE || 'http://127.0.0.1:9399';
+const BASE = process.env.PS_BASE || "http://127.0.0.1:9399";
 
 // This suite must not reach a server anybody cares about. Two reasons, both
 // hard: the wallets below have PUBLIC private keys, and the admin spec is
@@ -15,12 +15,12 @@ const BASE = process.env.PS_BASE || 'http://127.0.0.1:9399';
 // than in run.sh because `npx playwright test` bypasses run.sh.
 {
   const host = new URL(BASE).hostname;
-  const local = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host);
-  if (!local && process.env.PS_ALLOW_REMOTE !== '1') {
+  const local = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host);
+  if (!local && process.env.PS_ALLOW_REMOTE !== "1") {
     throw new Error(
       `PS_BASE points at ${host}, which is not local. This suite signs in with ` +
-        'publicly-known private keys and destructively exercises the admin API. ' +
-        'If you truly mean to run it against a remote server, set PS_ALLOW_REMOTE=1.',
+        "publicly-known private keys and destructively exercises the admin API. " +
+        "If you truly mean to run it against a remote server, set PS_ALLOW_REMOTE=1.",
     );
   }
 }
@@ -40,8 +40,9 @@ const BASE = process.env.PS_BASE || 'http://127.0.0.1:9399';
 ///     anyone who can read this file.
 ///   * NEVER aim this suite at a server you care about (the guard above
 ///     enforces this one).
-const BOSS_KEY = '0x2db142be06a0c1c779b8f0d65640ceb43de9af1a36552374ad2ac965bdc46e1e';
-const BOSS_ADDRESS = '0xac550F3DA533F335f33ED7a316b2D361DF03919F';
+const BOSS_KEY =
+  "0x2db142be06a0c1c779b8f0d65640ceb43de9af1a36552374ad2ac965bdc46e1e";
+const BOSS_ADDRESS = "0xac550F3DA533F335f33ED7a316b2D361DF03919F";
 
 /// Everybody else is derived from their label.
 ///
@@ -52,7 +53,7 @@ const BOSS_ADDRESS = '0xac550F3DA533F335f33ED7a316b2D361DF03919F';
 /// identities do not fail independently, and a cascade hides which assertion
 /// actually broke.
 function walletFor(label) {
-  if (label === 'boss') return new Wallet(BOSS_KEY);
+  if (label === "boss") return new Wallet(BOSS_KEY);
   return new Wallet(keccakOfString(`pocketskynet-e2e/${label}`));
 }
 
@@ -84,7 +85,9 @@ async function authenticate(request, label) {
     data: { walletAddress: wallet.address },
   });
   if (!challenge.ok()) {
-    throw new Error(`challenge ${challenge.status()}: ${await challenge.text()}`);
+    throw new Error(
+      `challenge ${challenge.status()}: ${await challenge.text()}`,
+    );
   }
   const { challengeId, message } = await challenge.json();
 
@@ -92,7 +95,8 @@ async function authenticate(request, label) {
   const login = await request.post(`${BASE}/api/auth/login`, {
     data: { walletAddress: wallet.address, signature, challengeId, username },
   });
-  if (!login.ok()) throw new Error(`login ${login.status()}: ${await login.text()}`);
+  if (!login.ok())
+    throw new Error(`login ${login.status()}: ${await login.text()}`);
   const body = await login.json();
 
   return {
@@ -117,9 +121,12 @@ function api(request, user) {
   const headers = user ? user.auth : {};
   return {
     get: (path) => request.get(`${BASE}${path}`, { headers }),
-    post: (path, data) => request.post(`${BASE}${path}`, { headers, data: data ?? {} }),
-    put: (path, data) => request.put(`${BASE}${path}`, { headers, data: data ?? {} }),
-    patch: (path, data) => request.patch(`${BASE}${path}`, { headers, data: data ?? {} }),
+    post: (path, data) =>
+      request.post(`${BASE}${path}`, { headers, data: data ?? {} }),
+    put: (path, data) =>
+      request.put(`${BASE}${path}`, { headers, data: data ?? {} }),
+    patch: (path, data) =>
+      request.patch(`${BASE}${path}`, { headers, data: data ?? {} }),
     delete: (path) => request.delete(`${BASE}${path}`, { headers }),
   };
 }
@@ -137,13 +144,18 @@ async function json(response) {
 
 /** Create a channel and return its id. */
 async function channel(request, user, name) {
-  return (await json(await api(request, user).post('/api/rooms', { name }))).id;
+  return (await json(await api(request, user).post("/api/rooms", { name }))).id;
 }
 
 /** Open (or find) the DM between two people and return its id. */
 async function dm(request, from, to) {
-  return (await json(await api(request, from).post('/api/rooms/dm', { walletAddress: to.address })))
-    .id;
+  return (
+    await json(
+      await api(request, from).post("/api/rooms/dm", {
+        walletAddress: to.address,
+      }),
+    )
+  ).id;
 }
 
 /** Post a message and return it. */
@@ -151,7 +163,7 @@ async function post(request, user, room, content, extra = {}) {
   return json(
     await api(request, user).post(`/api/rooms/${room}/messages`, {
       content,
-      msgHash: hash('a'),
+      msgHash: hash("a"),
       ...extra,
     }),
   );
@@ -159,7 +171,9 @@ async function post(request, user, room, content, extra = {}) {
 
 /** Put `who` into `room` through the real invite/accept handshake. */
 async function join(request, inviter, who, room) {
-  await api(request, inviter).post(`/api/rooms/${room}/invite`, { userAddress: who.address });
+  await api(request, inviter).post(`/api/rooms/${room}/invite`, {
+    userAddress: who.address,
+  });
   await api(request, who).post(`/api/invitations/${room}/accept`);
 }
 
