@@ -29,6 +29,7 @@
 
 pub mod admin;
 pub mod files;
+pub mod invites;
 pub mod keys;
 pub mod media;
 pub mod mentions;

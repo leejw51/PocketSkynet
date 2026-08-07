@@ -200,8 +200,11 @@ Lighter than enterprise compliance, but still needed for a real team:
 - ~~**Server owner role**~~ — **done.** `VITE_FRUITNATION_ADMIN` (§6.14 of
   API.md). Deliberately configuration rather than a table, because an admin
   table is a table whose first row has to come from somewhere.
-- **Invite links / codes** — still open. Invites are by wallet address only. A
-  link or QR that onboards a new member is table stakes.
+- ~~**Invite links / codes**~~ — **done.** Admins mint per-room links with
+  expiry, an optional use limit, and immediate revocation; the token is a
+  bearer capability stored only as a hash (API.md §6.7a). The landing page
+  carries a newcomer from the link through create-wallet into the room, and
+  joining an encrypted room flags it for re-keying, mirroring leave/kick. §7 M1.
 - ~~**History protection**~~ — **done.** Purging a room is admin-only.
 - ~~**Presence**~~ — **done.** Online / away / offline, derived from live
   connections rather than stored, scoped to shared rooms and filtered by blocks
@@ -249,8 +252,8 @@ Lighter than enterprise compliance, but still needed for a real team:
 
 1. ~~**Mentions + threads + DMs**~~ — **shipped** (§0), server and client.
 2. ~~**Server owner role + session revocation**~~ — **shipped** (§0).
-3. **Invite links** — the one §3 item still open, and the thing between "a team
-   could use this" and "a team could join this". Broken into tasks in §7 M1.
+3. ~~**Invite links**~~ — **shipped** (§7 M1), server and client. The thing
+   between "a team could use this" and "a team could join this".
 4. **Webhooks** — external events into rooms; the minimum integration
    surface. Broken into tasks in §7 M4.
 5. ~~**Presence**~~ — **shipped** (§0a), server and client. Taken out of order
@@ -271,10 +274,18 @@ messenger for a team, not Slack parity. One node already covers this scale.
 In priority order; M1 and M2 decide whether people stay after day one.*
 
 **M1 — Invite links** (no onboarding funnel exists today)
-- [ ] Server: create / list / revoke; signed token, expiry, per room
-- [ ] Server: redeem token → membership, re-key flag for encrypted rooms
-- [ ] Client: share dialog (link + QR), revocation list
-- [ ] Client: landing flow — link → create wallet → signed in → in the room
+- [x] Server: create / list / revoke; signed token, expiry, per room —
+      **shipped** (API.md §6.7a): `inv_` + 32 CSPRNG bytes, stored only as a
+      SHA-256, expiry and an optional use budget enforced by one conditional
+      UPDATE at redeem, revocation immediate
+- [x] Server: redeem token → membership, re-key flag for encrypted rooms —
+      **shipped**: joining a room that holds wraps sets `keyRotationPending`,
+      the same flag leave/kick set from the other side
+- [x] Client: share dialog (link + QR), revocation list — **shipped**: one
+      admin dialog mints, shows URL + QR (inline SVG), and revokes
+- [x] Client: landing flow — link → create wallet → signed in → in the room —
+      **shipped**: `/invite/{token}` parks the token across the sign-in
+      journey and redeems it the moment a session exists
 
 **M2 — Notifications** (all tiers on-premises; mute ships with it)
 - [ ] Tab title / favicon badge + mention sound

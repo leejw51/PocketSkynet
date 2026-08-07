@@ -113,6 +113,10 @@ pub enum Modal {
     /// administers it — see `Store::is_server_admin`.
     AdminConsole,
     Invite(RoomId),
+    /// Share-by-link: mint invite links, show them as URL + QR, revoke them.
+    /// Admin-only by the server's rules; the entry points are gated the same
+    /// way so the dialog never opens onto a 403.
+    InviteLinks(RoomId),
     ManageAdmins(RoomId),
     Blocked,
     HiddenRooms,

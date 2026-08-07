@@ -13,6 +13,7 @@ pub mod dialogs;
 pub mod gallery;
 pub mod icons;
 pub mod invitations;
+pub mod invite_landing;
 pub mod knowledge;
 pub mod lightbox;
 pub mod login;

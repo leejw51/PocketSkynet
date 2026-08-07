@@ -150,6 +150,38 @@ pub async fn refresh_rooms(store: Store) {
     }
 }
 
+/// Redeem an invite-link token into membership and land in the room
+/// (ROADMAP §7 M1) — the last step of the landing flow, shared by its two
+/// callers: the landing page when a signed-in user opens a link, and the
+/// post-sign-in hook in `app.rs` when the token was parked across the
+/// create-wallet journey.
+///
+/// Both outcomes navigate. Success goes to the room it just opened; failure
+/// goes to `/rooms` with the refusal as a toast, because the person standing
+/// on a dead invite link is signed in by now and stranding them on it would
+/// hide the app they just joined.
+pub async fn redeem_invite(
+    store: Store,
+    token: String,
+    navigate: yew::Callback<crate::route::Route>,
+) {
+    let lang = store.language;
+    match store.client.redeem_invite(&token).await {
+        Ok(joined) => {
+            refresh_rooms(store.clone()).await;
+            toast::success(
+                &store,
+                t(lang, Key::invite_joined).replace("{name}", &joined.room_name),
+            );
+            navigate.emit(crate::route::Route::Room(joined.room_id));
+        }
+        Err(e) => {
+            toast::error(&store, e.user_message(), None);
+            navigate.emit(crate::route::Route::Rooms);
+        }
+    }
+}
+
 /// Open a room. The contract: **a room you have seen costs zero requests to
 /// paint.** The network's only job on open is the `/sync` delta, and it runs
 /// after the stream is already on screen.

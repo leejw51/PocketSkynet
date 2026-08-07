@@ -54,6 +54,7 @@ const KEY_SHELL_LAYOUT: &str = "ps-shell-layout";
 const KEY_FONT: &str = "ps-font";
 const KEY_FONT_SCALE: &str = "ps-font-scale";
 const KEY_CURSOR_PREFIX: &str = "ps-cursor:";
+const KEY_PENDING_INVITE: &str = "ps-pending-invite";
 
 /// `localStorage` access, isolated behind four functions.
 ///
@@ -137,6 +138,29 @@ impl PersistedSession {
     pub fn clear() {
         backend::delete(KEY_SESSION);
     }
+}
+
+/// The invite token carried across the sign-in dance (ROADMAP §7 M1).
+///
+/// Opening an invite link while signed out means the token must survive the
+/// whole create-wallet → challenge → login journey, including the reloads an
+/// external wallet can cause — which is why it sits in `localStorage` rather
+/// than component state. It is a capability, so it is single-read: [`take`]
+/// deletes on load, and an abandoned sign-in leaves at worst one stale token
+/// that the next successful login harmlessly fails to redeem.
+///
+/// [`take`]: take_pending_invite
+pub fn remember_pending_invite(token: &str) {
+    backend::set(KEY_PENDING_INVITE, &token.to_owned());
+}
+
+/// Read *and clear* the pending invite token, if one is stored.
+pub fn take_pending_invite() -> Option<String> {
+    let token: Option<String> = backend::get(KEY_PENDING_INVITE);
+    if token.is_some() {
+        backend::delete(KEY_PENDING_INVITE);
+    }
+    token
 }
 
 /// A fully unlocked session: a token *and* the keys to use it with.
