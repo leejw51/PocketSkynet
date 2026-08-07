@@ -980,6 +980,231 @@ mod tests {
         .unwrap();
     }
 
+    // ----------------------------------------------------- built-in rooms ---
+
+    /// The address the provisioner derives for Alice's agent.
+    fn alice_agent() -> String {
+        pocketskynet_core::WalletAddress::agent_of(
+            &pocketskynet_core::WalletAddress::new(ALICE).unwrap(),
+        )
+        .as_str()
+        .to_owned()
+    }
+
+    #[test]
+    fn a_static_room_id_names_its_kind_and_its_owner() {
+        // The id *is* the ownership proof — no lookup table — so the two
+        // properties that matter are that it is derived and that it is stable.
+        assert_eq!(
+            static_room_id(ROOM_KIND_NOTE, ALICE),
+            format!("room_note_{ALICE}")
+        );
+        assert_eq!(
+            static_room_id(ROOM_KIND_NOTE, ALICE),
+            static_room_id(ROOM_KIND_NOTE, &ALICE.to_uppercase()),
+            "a checksummed address must not mint a second, parallel note"
+        );
+        assert_ne!(
+            static_room_id(ROOM_KIND_NOTE, ALICE),
+            static_room_id(ROOM_KIND_NOTE, BOB)
+        );
+        assert_ne!(
+            static_room_id(ROOM_KIND_NOTE, ALICE),
+            static_room_id(ROOM_KIND_JARVIS, ALICE)
+        );
+
+        // And every one of them is a legal room id, which is what stops the
+        // provisioner from writing rooms no route can address.
+        for kind in STATIC_ROOM_KINDS {
+            let id = static_room_id(kind, ALICE);
+            assert!((10..=100).contains(&id.len()), "{id}");
+            assert!(pocketskynet_core::RoomId::new(&id).is_ok(), "{id}");
+        }
+    }
+
+    #[test]
+    fn room_kinds_classify_into_direct_static_and_ordinary() {
+        let room = |kind: &str| Room {
+            id: ROOM.into(),
+            name: "x".into(),
+            description: None,
+            current_key_version: 1,
+            key_rotation_pending: false,
+            kind: kind.into(),
+            created_at: String::new(),
+        };
+
+        // The three axes every route reads, kept apart: a built-in room is not
+        // a DM, and neither is an ordinary channel.
+        for kind in STATIC_ROOM_KINDS {
+            assert!(room(kind).is_static(), "{kind}");
+            assert!(!room(kind).is_direct(), "{kind}");
+            assert_eq!(room(kind).fixed_roster(), Some("a built-in room"));
+        }
+        for kind in [ROOM_KIND_DM, ROOM_KIND_GROUP_DM] {
+            assert!(!room(kind).is_static(), "{kind}");
+            assert!(room(kind).is_direct(), "{kind}");
+            assert_eq!(room(kind).fixed_roster(), Some("a direct message"));
+        }
+        assert!(!room(ROOM_KIND_CHANNEL).is_static());
+        assert!(!room(ROOM_KIND_CHANNEL).is_direct());
+        assert_eq!(
+            room(ROOM_KIND_CHANNEL).fixed_roster(),
+            None,
+            "an ordinary channel is the only kind whose roster somebody chose"
+        );
+    }
+
+    #[test]
+    fn provisioning_creates_all_three_with_the_rosters_their_kinds_promise() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            upsert_user(conn, ALICE, "alice", None, None).unwrap();
+            upsert_user(conn, BOB, "bob", None, None).unwrap();
+            provision_static_rooms(conn, ALICE, &[BOB.to_owned()]).unwrap();
+
+            let note = static_room_id(ROOM_KIND_NOTE, ALICE);
+            let jarvis = static_room_id(ROOM_KIND_JARVIS, ALICE);
+            let lobby = static_room_id(ROOM_KIND_LOBBY, ALICE);
+
+            for id in [&note, &jarvis, &lobby] {
+                let room = get_room(conn, id).unwrap().unwrap();
+                assert!(room.is_static(), "{id}");
+                assert!(is_member(conn, id, ALICE).unwrap(), "{id}");
+                assert!(is_admin(conn, id, ALICE).unwrap(), "{id}");
+            }
+            assert_eq!(get_room(conn, &note).unwrap().unwrap().kind, ROOM_KIND_NOTE);
+
+            // The note is alone, forever — the property the whole room exists
+            // for.
+            let members: Vec<String> = list_members(conn, &note)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.user_address)
+                .collect();
+            assert_eq!(members, vec![ALICE.to_owned()]);
+
+            // Jarvis holds the owner and the derived agent, and the agent has
+            // a profile row or the roster would silently drop it.
+            let mut jarvis_members: Vec<String> = list_members(conn, &jarvis)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.user_address)
+                .collect();
+            jarvis_members.sort();
+            let mut want = vec![ALICE.to_owned(), alice_agent()];
+            want.sort();
+            assert_eq!(jarvis_members, want);
+
+            // The lobby holds the owner and the server's admins.
+            assert!(is_member(conn, &lobby, BOB).unwrap());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn provisioning_is_idempotent_and_survives_being_run_repeatedly() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            upsert_user(conn, ALICE, "alice", None, None).unwrap();
+            // Every room-list fetch runs this, so "cheap and repeatable" is
+            // not a nicety — three tabs do it in the same second.
+            for _ in 0..3 {
+                provision_static_rooms(conn, ALICE, &[]).unwrap();
+            }
+            let note = static_room_id(ROOM_KIND_NOTE, ALICE);
+            assert_eq!(list_members(conn, &note).unwrap().len(), 1);
+            assert_eq!(admin_count(conn, &note).unwrap(), 1);
+            assert_eq!(visible_room_ids(conn, ALICE).unwrap().len(), 3);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn the_lobby_roster_follows_the_configured_admins_in_both_directions() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            for (address, name) in [(ALICE, "alice"), (BOB, "bob")] {
+                upsert_user(conn, address, name, None, None).unwrap();
+            }
+            let lobby = static_room_id(ROOM_KIND_LOBBY, ALICE);
+
+            // Bob is promoted in the deployment's config.
+            provision_static_rooms(conn, ALICE, &[BOB.to_owned()]).unwrap();
+            assert!(is_member(conn, &lobby, BOB).unwrap());
+
+            // …and demoted again. Nobody issued a kick — the roster is a
+            // function of the config, so it has to shrink on its own.
+            provision_static_rooms(conn, ALICE, &[]).unwrap();
+            assert!(!is_member(conn, &lobby, BOB).unwrap());
+            assert!(
+                is_member(conn, &lobby, ALICE).unwrap(),
+                "the owner is never reconciled away from their own lobby"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_second_wallet_smuggled_into_a_note_is_reconciled_out_of_it() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            for (address, name) in [(ALICE, "alice"), (BOB, "bob")] {
+                upsert_user(conn, address, name, None, None).unwrap();
+            }
+            provision_static_rooms(conn, ALICE, &[]).unwrap();
+            let note = static_room_id(ROOM_KIND_NOTE, ALICE);
+
+            // The routes refuse every verb that could do this; the point of
+            // the test is that the invariant does not *depend* on them. A row
+            // inserted straight into the table — a future route, a migration,
+            // a hand-edited database — is gone by the next listing.
+            add_member(conn, &note, BOB).unwrap();
+            mark_read(conn, &note, BOB, 42).unwrap();
+            hide_room(conn, BOB, &note).unwrap();
+            assert!(is_member(conn, &note, BOB).unwrap());
+
+            provision_static_rooms(conn, ALICE, &[]).unwrap();
+
+            assert!(!is_member(conn, &note, BOB).unwrap());
+            assert_eq!(last_read_serial(conn, &note, BOB).unwrap(), 0);
+            assert!(list_hidden(conn, BOB).unwrap().is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn hiding_a_built_in_room_works_exactly_like_hiding_any_other() {
+        let db = test_db();
+        db.call_blocking(|conn| {
+            upsert_user(conn, ALICE, "alice", None, None).unwrap();
+            provision_static_rooms(conn, ALICE, &[]).unwrap();
+            let note = static_room_id(ROOM_KIND_NOTE, ALICE);
+
+            hide_room(conn, ALICE, &note).unwrap();
+            assert_eq!(visible_room_ids(conn, ALICE).unwrap().len(), 2);
+            assert_eq!(
+                user_room_ids(conn, ALICE).unwrap().len(),
+                3,
+                "hiding is a list preference, not a departure"
+            );
+
+            // Reversible, and — the part that could plausibly have broken —
+            // provisioning must not quietly unhide it on the next fetch.
+            provision_static_rooms(conn, ALICE, &[]).unwrap();
+            assert_eq!(visible_room_ids(conn, ALICE).unwrap().len(), 2);
+
+            unhide_room(conn, ALICE, &note).unwrap();
+            assert_eq!(visible_room_ids(conn, ALICE).unwrap().len(), 3);
+            Ok(())
+        })
+        .unwrap();
+    }
+
     #[test]
     fn key_rotation_pending_is_a_room_level_flag() {
         let db = test_db();

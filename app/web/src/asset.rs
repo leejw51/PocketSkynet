@@ -42,7 +42,7 @@ use crate::session::Skin;
 /// an otherwise entirely cute interface, and it read as a rendering bug rather
 /// than as a deliberate economy. Fallback works where the base art is quiet;
 /// it does not work where the art is the content.
-pub const CUTE_ART: [&str; 63] = [
+pub const CUTE_ART: [&str; 66] = [
     // Cinematic — one file each, their palette baked into the prompt.
     "logo",
     "skynet-hero",
@@ -70,6 +70,14 @@ pub const CUTE_ART: [&str; 63] = [
     "error-offline",
     "bank-hero",
     "bank-banker",
+    // The three built-in rooms. Redrawn per skin rather than left to fall
+    // back, for the profile-gallery reason: these three sit *pinned above*
+    // every other room, so their artwork is the first thing in the sidebar and
+    // the fallback would put three chrome emblems at the top of an otherwise
+    // entirely cute list. Fallback works where the base art is quiet.
+    "my-note",
+    "my-jarvis",
+    "my-lobby",
     // Room sigils — the rack's posters.
     "room-skull",
     "room-visor",
@@ -118,7 +126,7 @@ pub const CUTE_ART: [&str; 63] = [
 
 /// The stems the human skin redraws.
 ///
-/// The same sixty-three as the cute skin, and that is not a coincidence worth
+/// The same sixty-six as the cute skin, and that is not a coincidence worth
 /// hiding behind an alias: the two lists are the same *because both skins chose
 /// to redraw everything the base set draws that has a subject in it*, and a
 /// third skin that redraws forty would be no less valid. Aliasing them would
@@ -127,7 +135,7 @@ pub const CUTE_ART: [&str; 63] = [
 ///
 /// Ordered as the generator emits them, matching [`CUTE_ART`] so the two can be
 /// diffed by eye.
-pub const HUMAN_ART: [&str; 63] = CUTE_ART;
+pub const HUMAN_ART: [&str; 66] = CUTE_ART;
 
 /// The stems `skin` ships its own drawing of. Empty for the base skin, whose
 /// art *is* the fallback.
