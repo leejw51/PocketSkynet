@@ -150,6 +150,90 @@ pub async fn refresh_rooms(store: Store) {
     }
 }
 
+/// Ask the user's own AI for an answer in "My Jarvis", and post it there.
+///
+/// # The shape of this, and where each half runs
+///
+/// The model call is made **here, in the browser**, with a key that lives in
+/// this device's `localStorage` and is sent to the provider and to nobody else
+/// — the position `docs/SEARCH.md` §5 already established for every AI surface
+/// in the product. The server's only involvement is writing the answer down
+/// under the agent's address, because a browser cannot claim a `senderAddress`
+/// that is not its own wallet.
+///
+/// # Failures are silent on purpose
+///
+/// Every early return below is a *nothing happens* rather than a toast. Two
+/// reasons. A missing provider key is the ordinary state of a fresh install,
+/// and a toast on every message in a room the user is using as a notepad would
+/// be nagging, not information — the room's own empty state says where to put
+/// a key instead. And a provider error is somebody else's outage: it is worth
+/// a line in the console, but posting "the provider answered HTTP 500" into a
+/// chatroom would leave a permanent message in a persistent transcript that the
+/// user then has to delete.
+pub async fn jarvis_reply(store: Store, room_id: RoomId) {
+    let settings = crate::ai::AiSettings::load();
+    let (Some(provider), Some(me)) = (settings.text_provider(), store.me().cloned()) else {
+        return;
+    };
+    let key = settings.key_for(provider).unwrap_or_default().to_owned();
+
+    // The agent's own address, derived the same way the server derives it —
+    // which is what lets the transcript be split into two sides without the
+    // client having to be told which member is the machine.
+    let agent = WalletAddress::agent_of(&me);
+    let lines: Vec<crate::jarvis::RoomLine> = match store.room_state(&room_id) {
+        Some(state) => state
+            .ordered(&store.blocks)
+            .iter()
+            // Built-in rooms are plaintext by construction (`routes/keys.rs`
+            // refuses to key one), so there is nothing to decrypt here and no
+            // branch for a message this device cannot read.
+            .filter(|m| !m.is_encrypted && !m.is_deleted)
+            .map(|m| crate::jarvis::RoomLine {
+                from_agent: m.sender_address == agent,
+                text: m.content.clone(),
+            })
+            .collect(),
+        None => return,
+    };
+
+    let turns = crate::jarvis::turns(&lines);
+    // Nothing to answer. Reached when the send that triggered this failed, so
+    // the question the reply would be replying to is not in the room.
+    if turns.last().map(|t| !t.user).unwrap_or(true) {
+        return;
+    }
+
+    let system = crate::jarvis::system_prompt(&crate::jarvis::AgentContext {
+        owner: store
+            .room(&room_id)
+            .and_then(|r| r.members.iter().find(|m| m.user_address == me))
+            .map(|m| m.user.display_name())
+            .unwrap_or_else(|| me.abbreviated()),
+        lang: store.language,
+    });
+
+    let raw = match crate::ai::generate_chat(provider, &key, &system, &turns).await {
+        Ok(reply) => reply,
+        Err(e) => {
+            tracing::warn!("jarvis: {e}");
+            return;
+        }
+    };
+    let Some(text) = crate::jarvis::reply_to_post(&raw) else {
+        return;
+    };
+
+    match store.client.agent_reply(&room_id, &text).await {
+        // The reply lands in the room like any other message: same store
+        // action, same rendering, same `/sync` cursor. Nothing downstream has
+        // to know an agent wrote it.
+        Ok(message) => store.dispatch(Action::Sync(room_id, vec![message])),
+        Err(e) => tracing::warn!("jarvis reply rejected: {}", e.user_message()),
+    }
+}
+
 /// Redeem an invite-link token into membership and land in the room
 /// (ROADMAP §7 M1) — the last step of the landing flow, shared by its two
 /// callers: the landing page when a signed-in user opens a link, and the

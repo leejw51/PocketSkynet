@@ -95,6 +95,30 @@ impl Lang {
         }
     }
 
+    /// The language's name **in English**, for the one audience that reads
+    /// English by construction: a model being told which language to answer in
+    /// (`crate::jarvis::system_prompt`).
+    ///
+    /// The exact opposite of [`Self::endonym`], and worth having both rather
+    /// than reusing one. A prompt saying "reply in 廣東話" is asking a model to
+    /// infer an instruction from a string it may tokenise poorly, whereas
+    /// "reply in Cantonese (traditional characters)" is unambiguous — and the
+    /// parenthetical on the two Chinese entries is the whole reason this is a
+    /// table and not `format!("{:?}", self)`: "Chinese" alone is what produces
+    /// simplified characters for a Cantonese reader.
+    pub fn english_name(self) -> &'static str {
+        match self {
+            Lang::En => "English",
+            Lang::Ko => "Korean",
+            Lang::Ja => "Japanese",
+            Lang::Yue => "Cantonese (traditional characters)",
+            Lang::Zh => "Simplified Chinese",
+            Lang::Cs => "Czech",
+            Lang::De => "German",
+            Lang::Es => "Spanish",
+        }
+    }
+
     /// Parse a tag, tolerating a region suffix (`ko-KR`, `es-419`) and case.
     ///
     /// `zh-HK` and `zh-Hant-HK` map to Cantonese: a browser set to Hong Kong

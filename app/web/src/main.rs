@@ -33,6 +33,7 @@ mod eip1193;
 mod format;
 mod i18n;
 mod identity;
+mod jarvis;
 mod media;
 mod mentions;
 mod privy;

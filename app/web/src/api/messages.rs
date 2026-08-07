@@ -121,6 +121,24 @@ impl Client {
         .await
     }
 
+    /// Post the AI's answer into the caller's own "My Jarvis" room.
+    ///
+    /// The model call happened here, in the browser, with a key that never
+    /// leaves it (`crate::ai`). This endpoint exists only for the one thing a
+    /// browser cannot do: write a message under the agent's address rather
+    /// than the caller's, so the reply reads as a reply and not as the user
+    /// talking to themselves. The server checks that the room really is this
+    /// wallet's Jarvis room and derives the sender itself, so the most this
+    /// call can do is put words in your own agent's mouth.
+    pub async fn agent_reply(&self, room: &RoomId, text: &str) -> ApiResult<Message> {
+        self.send_json(
+            Method::POST,
+            &format!("/api/rooms/{}/agent", encode_segment(room.as_str())),
+            &serde_json::json!({ "text": text }),
+        )
+        .await
+    }
+
     /// Initial load and scroll-back.
     ///
     /// Paginate on the oldest returned `messageTimestamp`, **never** on the

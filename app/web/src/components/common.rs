@@ -153,6 +153,21 @@ pub struct IdentProps {
     /// an unknown or hostile value silently falls back to the hash tile.
     #[prop_or_default]
     pub image: Option<String>,
+    /// A named artwork stem to draw instead of the one the seed hashes to.
+    ///
+    /// Exists for the three built-in rooms and deliberately not for anything
+    /// else. Every other room's picture is *derived*, which is what makes the
+    /// set evenly distinguishable and what stops two rooms colliding on one
+    /// face; My Note and its siblings are the opposite case — there is exactly
+    /// one of each per account and the picture has to say which one it is,
+    /// because "the room pinned at the top with the notebook on it" is how a
+    /// user finds it, not its position.
+    ///
+    /// Ranked below [`Self::image`] and above the hash, matching what each one
+    /// means: a chosen avatar is a person's own decision, this is the
+    /// product's, and the hash is what is left when nobody has decided.
+    #[prop_or_default]
+    pub art: Option<&'static str>,
     /// When set, tapping the tile raises the spotlight — the full-screen
     /// zoom of this exact portrait — so a face can be checked at more than
     /// forty pixels. The tile becomes a real button (focusable, labelled)
@@ -184,6 +199,7 @@ pub fn ident_tile(p: &IdentProps) -> Html {
         .image
         .as_deref()
         .and_then(|i| identity::avatar_src(skin, i))
+        .or_else(|| p.art.map(|stem| crate::asset::img(skin, stem)))
         .unwrap_or_else(|| crate::asset::img(skin, identity::art_for(&p.seed)));
     let mut class = classes!("fn-ident", "fn-ident--art", p.class.clone());
     class.push(p.size.class().trim());

@@ -567,7 +567,13 @@ pub fn chat(p: &ChatProps) -> Html {
     // DM does not, and the server's placeholder must never reach the screen.
     // See `RoomWithMembers::title_for` — the answer differs per viewer, so it
     // can only be worked out here.
-    let title = room.title_for(&me);
+    // …and a built-in room has neither: its stored name is the fallback the
+    // `NOT NULL` column needs, and the label is translated from its kind.
+    let built_in = crate::rooms::static_room(&room);
+    let title = match built_in {
+        Some(r) => t(lang, r.title()).to_owned(),
+        None => room.title_for(&me),
+    };
     // In a one-to-one DM the header stands for a person, so it carries their
     // status; a channel header stands for a room, which is not somewhere
     // anybody is. This is the single most useful place for it — it is what
@@ -632,8 +638,18 @@ pub fn chat(p: &ChatProps) -> Html {
             reply_to.set(None);
             let store2 = store.clone();
             let room_id = room_id.clone();
+            // In My Jarvis a message is also a question. The answer is fetched
+            // after the send resolves rather than beside it, so a failed send
+            // does not produce a reply to something that was never posted —
+            // and so the agent's turn list contains the message it is
+            // answering.
+            let ask = built_in == Some(crate::rooms::StaticRoom::Jarvis);
             wasm_bindgen_futures::spawn_local(async move {
-                actions::send_message(store2, room_id, local_id, text, extras).await;
+                actions::send_message(store2.clone(), room_id.clone(), local_id, text, extras)
+                    .await;
+                if ask {
+                    actions::jarvis_reply(store2, room_id).await;
+                }
             });
         })
     };
@@ -986,6 +1002,7 @@ pub fn chat(p: &ChatProps) -> Html {
                 <Ident
                     seed={p.room_id.to_string()}
                     size={IdentSize::Sm}
+                    art={built_in.map(|r| r.art())}
                     presence={peer_presence}
                     zoom={crate::components::common::Zoom {
                         title: title.clone(),
