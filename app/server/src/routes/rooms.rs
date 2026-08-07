@@ -88,29 +88,57 @@ pub(super) async fn require_admin(
 /// person who set it and a derived one to everybody else, and a DM you could
 /// be added to would not be the conversation the other person opened.
 ///
+/// The three built-in rooms refuse the same verbs for the same reason and are
+/// caught by the same predicate ([`Room::fixed_roster`]): their rosters are
+/// recomputed from the owner and the server's configuration on every listing,
+/// so a membership granted through one of these verbs would be silently undone
+/// on the next fetch — which is worse than a refusal, because it looks like it
+/// worked.
+///
 /// 400 rather than 403 on purpose — the caller is not unauthorised, the
 /// request does not apply.
 pub(super) async fn require_channel(state: &AppState, room: &RoomId, verb: &str) -> ApiResult<()> {
-    if is_direct(state, room).await? {
+    if let Some(noun) = fetch_room(state, room).await?.fixed_roster() {
+        return Err(ApiError::bad_request(format!("Cannot {verb} {noun}.")));
+    }
+    Ok(())
+}
+
+/// Refuse a verb that would remove one of the built-in rooms.
+///
+/// Delete, leave and the admin console's destroy all end here. These rooms are
+/// not a thing anybody created, so there is nothing to undo by removing one:
+/// the next room-list fetch would provision it straight back, empty, and the
+/// user would have lost their notes to a button that did not do what it said.
+/// Hiding is the verb that means "stop showing me this", and unlike a delete it
+/// is reversible — which is why the refusal names it.
+pub(super) async fn refuse_static_removal(
+    state: &AppState,
+    room: &RoomId,
+    verb: &str,
+) -> ApiResult<()> {
+    if fetch_room(state, room).await?.is_static() {
         return Err(ApiError::bad_request(format!(
-            "Cannot {verb} a direct message."
+            "Cannot {verb} a built-in room. Hide it instead."
         )));
     }
     Ok(())
 }
 
-/// Whether this room is a DM. Separate from [`require_channel`] so a caller
-/// that wants its own wording — `leave` does — can ask the question without
-/// having to catch and reinterpret an error, which would also swallow the
-/// database failures this can legitimately return.
-async fn is_direct(state: &AppState, room: &RoomId) -> ApiResult<bool> {
+/// The room, or 404. Separate from the predicates above so a caller that wants
+/// its own wording — `leave` does — can ask the question without having to
+/// catch and reinterpret an error, which would also swallow the database
+/// failures this can legitimately return.
+pub(super) async fn fetch_room(
+    state: &AppState,
+    room: &RoomId,
+) -> ApiResult<crate::db::models::Room> {
     let room_id = room.as_str().to_owned();
-    let record = state
+    state
         .db
         .call(move |conn| rooms::get_room(conn, &room_id))
         .await?
-        .ok_or_else(|| ApiError::not_found("Room not found"))?;
-    Ok(record.is_direct())
+        .ok_or_else(|| ApiError::not_found("Room not found"))
 }
 
 pub(super) async fn require_room_exists(state: &AppState, room: &RoomId) -> ApiResult<()> {
@@ -274,11 +302,39 @@ async fn open_dm(
 }
 
 /// `GET /api/rooms` — the caller's rooms with unread state.
+///
+/// This is also where the three built-in rooms are provisioned, and the choice
+/// of *here* rather than at sign-in is the one worth explaining.
+///
+/// Sign-in is the obvious hook and it is the wrong one, for two reasons that
+/// only show up later. A JWT lasts a day, so somebody who was already logged in
+/// when the feature shipped would not see their rooms until the token expired —
+/// and the operator who added a wallet to `VITE_FRUITNATION_ADMIN` this morning
+/// would not appear in anybody's lobby until each of them logged in again.
+/// Neither is a bug anyone would report as "provisioning ran at the wrong
+/// time"; they are reported as "the feature does not work", days apart.
+///
+/// The room list is the request that *needs* the rooms to exist. It is issued
+/// by every client on every start and after every realtime nudge, it is
+/// idempotent, and it already reads the whole membership set — so the reconcile
+/// costs three keyed upserts against a connection that was being checked out
+/// anyway. Doing it here means the invariant is repaired continuously rather
+/// than asserted once, which is the only version of it that survives a config
+/// change.
 async fn list(State(state): State<AppState>, AuthUser(caller): AuthUser) -> ApiResult<Response> {
     let address = caller.as_str().to_owned();
+    let admins = super::misc::server_admins();
     let out = state
         .db
-        .call(move |conn| storage::visible_rooms(conn, &address))
+        .call(move |conn| {
+            // Degraded, not fatal: a listing that answers without the built-in
+            // rooms is a worse answer, but no answer at all would take the
+            // whole client down with it.
+            if let Err(e) = rooms::provision_static_rooms(conn, &address, &admins) {
+                tracing::warn!(error = %e, "could not provision the built-in rooms");
+            }
+            storage::visible_rooms(conn, &address)
+        })
         .await?;
     Ok(Json(out).into_response())
 }
@@ -366,6 +422,7 @@ async fn remove(
         "Only room admins can delete the room",
     )
     .await?;
+    refuse_static_removal(&state, &room, "delete").await?;
 
     // Collect the roster before the delete so the remaining members can be
     // told; afterwards there is nothing left to enumerate.
@@ -447,11 +504,12 @@ async fn leave(
     // that still answers to a key naming them — and re-opening the DM would
     // find it and refuse them entry to their own history. Hiding is the verb
     // for "stop showing me this", and it is reversible.
-    if is_direct(&state, &room).await? {
+    if fetch_room(&state, &room).await?.is_direct() {
         return Err(ApiError::bad_request(
             "Cannot leave a direct message. Hide it instead.",
         ));
     }
+    refuse_static_removal(&state, &room, "leave").await?;
 
     let room_id = room.as_str().to_owned();
     let address = caller.as_str().to_owned();

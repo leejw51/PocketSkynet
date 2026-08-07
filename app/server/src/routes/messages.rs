@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
             "/rooms/{roomId}/messages",
             post(send).get(list).delete(purge),
         )
+        .route("/rooms/{roomId}/agent", post(agent_reply))
         .route("/messages/{messageId}", patch(edit).delete(remove))
         .route("/messages/{messageId}/thread", get(thread))
         .route("/messages/{messageId}/publish", post(publish))
@@ -152,6 +153,16 @@ async fn send(
     // Unencrypted rooms skip the epoch machinery entirely — the room is not
     // even fetched, which is what keeps plaintext rooms cheap.
     if is_encrypted {
+        // The built-in rooms hold no keys (`routes/keys.rs::plaintext_only`),
+        // so ciphertext here could only be a client sealing under a key nobody
+        // else has. Refused at the door rather than left to fail the epoch
+        // check, whose message would blame a rotation that cannot happen.
+        if super::rooms::fetch_room(&state, &room).await?.is_static() {
+            return Err(ApiError::conflict(
+                "Built-in rooms are plaintext so their contents stay searchable; \
+                 they cannot carry encrypted messages.",
+            ));
+        }
         check_epoch(&state, &room, key_version).await?;
     }
 
@@ -200,6 +211,98 @@ async fn send(
         .await?;
 
     announce(&state, &room, Some(&caller), message.msg_serial).await;
+    Ok(Json(message).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentBody {
+    text: Option<String>,
+}
+
+/// `POST /api/rooms/{roomId}/agent` — post the AI's reply into "My Jarvis".
+///
+/// # Why the client sends the answer instead of the server fetching it
+///
+/// The user's API keys live in their browser and nowhere else
+/// (`web/src/ai.rs`), and the search feature already established the shape:
+/// retrieval here, generation there, with the model call made from the device
+/// that holds the credential (`docs/SEARCH.md` §5). Making the server call the
+/// model would mean either shipping it the key on every turn or asking the
+/// operator to configure one for everybody — the first turns a self-hosted
+/// messenger into a credential store, the second makes "your own AI agent" the
+/// operator's agent. Neither is the product.
+///
+/// So the browser talks to the model and hands the text back, and this endpoint
+/// exists for the one thing the browser cannot do: write a message under an
+/// address that is not the caller's. It is the same trick incoming webhooks
+/// use, with the same reasoning — a reply needs a `senderAddress`, and the
+/// alternative was a per-message "this one was the AI" flag that every read
+/// path would have to learn.
+///
+/// # What stops this being a way to forge messages
+///
+/// Three conditions, all necessary. The room must be of kind `jarvis`; its id
+/// must be the one [`rooms::static_room_id`] derives for *the caller*, so a
+/// wallet cannot post into somebody else's agent room even knowing its id; and
+/// the sender written is [`WalletAddress::agent_of`] the caller — never a value
+/// from the request. The most a caller can do with this endpoint is put words
+/// in their own agent's mouth, in a room only they can read.
+async fn agent_reply(
+    State(state): State<AppState>,
+    AuthUser(caller): AuthUser,
+    Path(room_id): Path<String>,
+    ValidJson(body): ValidJson<AgentBody>,
+) -> ApiResult<Response> {
+    let room = validate::room_id(&room_id)?;
+    let expected = rooms::static_room_id(
+        crate::db::models::ROOM_KIND_JARVIS,
+        caller.as_str(),
+    );
+    if room.as_str() != expected {
+        // Deliberately the same refusal a non-member gets anywhere else: a
+        // distinct "that is not your agent room" would confirm which room ids
+        // are somebody's, which is exactly the oracle `require_member` avoids.
+        return Err(ApiError::access_denied());
+    }
+    require_member(&state, &room, &caller).await?;
+
+    let content = validate::message_content(body.text.as_deref())?;
+    // Computed here for the same reason a webhook's is: the caller is relaying
+    // somebody else's words and has no business asserting their hash.
+    let msg_hash = pocketskynet_core::msg_hash_plaintext(&content);
+
+    let id = format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
+    let room_id = room.as_str().to_owned();
+    let sender = WalletAddress::agent_of(&caller).as_str().to_owned();
+    let message = state
+        .db
+        .call(move |conn| {
+            let mentions = resolve_mentions(conn, &room_id, &content, false, Vec::new())?;
+            let media = resolve_media(&content, false, Vec::new());
+            messages::create_message(
+                conn,
+                NewMessage {
+                    id,
+                    room_id,
+                    sender,
+                    content,
+                    msg_hash,
+                    is_encrypted: false,
+                    iv: None,
+                    hmac: None,
+                    enc_ver: 1,
+                    key_version: 1,
+                    parent_message_id: None,
+                    mentions,
+                    media,
+                },
+            )
+        })
+        .await?;
+
+    // `None` origin: no wallet acted, so nobody's block list mutes the wake-up
+    // — and the caller's other tabs are exactly who needs to see this land.
+    announce(&state, &room, None, message.msg_serial).await;
     Ok(Json(message).into_response())
 }
 

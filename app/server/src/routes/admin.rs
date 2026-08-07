@@ -286,12 +286,22 @@ async fn list_rooms(
 /// for a room they administer. This one exists for the case that endpoint
 /// cannot reach: a room whose last admin has gone, which nobody remaining can
 /// delete or rename, and which would otherwise be permanent.
+///
+/// It stops at the three built-in rooms, and an operator's reach is exactly why
+/// the check has to be repeated here rather than left to the room-level guard.
+/// This route exists to reach past a room's own admins; if it also reached past
+/// the rule that a person's note cannot be destroyed, then "nobody else can
+/// ever read this" would quietly mean "except whoever runs the server", which
+/// is not what the room promises. Provisioning would recreate it empty on the
+/// owner's next fetch, so the only thing the destroy could accomplish is
+/// deleting somebody's notes.
 async fn delete_room(
     State(state): State<AppState>,
     admin: ServerAdmin,
     Path(room_id): Path<String>,
 ) -> ApiResult<Response> {
     let room = validate::room_id(&room_id)?;
+    super::rooms::refuse_static_removal(&state, &room, "destroy").await?;
     let room_id = room.as_str().to_owned();
 
     let members = state

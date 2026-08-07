@@ -56,6 +56,17 @@ async fn invite(
             let Some(record) = rooms::get_room(conn, &room_id)? else {
                 return Err(ApiError::not_found("Room not found"));
             };
+            // A built-in room's roster is recomputed from its owner and the
+            // server's admin list on every listing, so an invitation into one
+            // is a promise the next fetch would break. "My Note" is the sharp
+            // case: it is the one room on the server whose whole contract is
+            // that nobody else is ever in it, and an invitation is precisely
+            // the request that would end that.
+            if record.is_static() {
+                return Err(ApiError::bad_request(
+                    "Cannot invite anyone to a built-in room. Its members are decided by the server.",
+                ));
+            }
             // A DM is the conversation between the people in it. Adding a
             // third would silently turn the room two people believed was
             // private into one that is not, and there is no notion of

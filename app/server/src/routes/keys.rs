@@ -64,6 +64,40 @@ fn parse_wrap(body: &WrapBody, default_enc_ver: i64) -> ApiResult<(WalletAddress
     Ok((user, wrap, key_version))
 }
 
+/// The refusal every path that would key a built-in room ends at.
+///
+/// # Why the three built-in rooms are plaintext, deliberately
+///
+/// This is the one place in the product where privacy is traded for something,
+/// so it is worth being explicit about what and why.
+///
+/// The server never indexes ciphertext (`docs/SEARCH.md` §2) — it cannot read
+/// it, and no derived table may learn what `messages` does not say. That rule
+/// is not negotiable, and it means an encrypted "My Note" is a notebook you
+/// cannot search. Search is the entire reason to keep notes on a server rather
+/// than in a text file, so an encrypted note is a room with no purpose.
+///
+/// What is given up is smaller than it looks. These rooms exist on a server the
+/// user runs, or one run by somebody they chose to trust with the box; E2EE
+/// defends against the operator, and for a room whose members are *the owner
+/// and the operator's admins* (My Lobby) there is nobody left for it to defend
+/// against. "My Jarvis" gives its content to a cloud model by design. Only "My
+/// Note" is a genuine trade, and it is the one where the feature — find the
+/// thing you wrote down — is the whole point.
+///
+/// A per-room choice was the alternative and is worse: it would make whether
+/// your notes are findable depend on a checkbox you ticked months ago, and
+/// leave the index half-populated with no way to tell which half.
+///
+/// 409, not 400: the request is well-formed and would be accepted for any other
+/// room, which is exactly what a conflict means.
+fn plaintext_only() -> ApiError {
+    ApiError::conflict(
+        "Built-in rooms are plaintext so their contents stay searchable; \
+         they cannot be end-to-end encrypted.",
+    )
+}
+
 /// `POST /api/rooms/{roomId}/keys` — store one wrap for one epoch.
 ///
 /// This endpoint never touches `currentKeyVersion`: establishing epoch 1 is a
@@ -87,8 +121,11 @@ async fn store(
     state
         .db
         .call(move |conn| {
-            if rooms::get_room(conn, &room_id)?.is_none() {
+            let Some(record) = rooms::get_room(conn, &room_id)? else {
                 return Err(ApiError::not_found("Room not found"));
+            };
+            if record.is_static() {
+                return Err(plaintext_only());
             }
             // An invitee is a legitimate recipient: pre-wrapping at invite
             // time is the point, because the admin is online then and the
@@ -194,6 +231,9 @@ async fn rotate(
         return Err(ApiError::forbidden(
             "Only room members can rotate the room key",
         ));
+    }
+    if super::rooms::fetch_room(&state, &room).await?.is_static() {
+        return Err(plaintext_only());
     }
 
     let new_version = validate::key_version("newVersion", body.new_version, 0)?;

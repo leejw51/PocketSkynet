@@ -4,7 +4,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::models::{
     iso_ms, HiddenRoom, InvitationView, Room, RoomMemberWithUser, User, ROOM_KIND_CHANNEL,
-    ROOM_KIND_DM, ROOM_KIND_GROUP_DM,
+    ROOM_KIND_DM, ROOM_KIND_GROUP_DM, ROOM_KIND_JARVIS, ROOM_KIND_LOBBY, ROOM_KIND_NOTE,
+    STATIC_ROOM_KINDS,
 };
 use super::now_ms;
 use crate::error::ApiResult;
@@ -74,6 +75,161 @@ pub fn get_room(conn: &Connection, room_id: &str) -> ApiResult<Option<Room>> {
         )
         .optional()?;
     Ok(room)
+}
+
+// -------------------------------------------------------- built-in rooms ---
+
+/// The name a built-in room is stored under.
+///
+/// English, and stored rather than derived, because `rooms.name` is `NOT NULL`
+/// and every surface that has never heard of these kinds — the admin console's
+/// room list, the storage report, an old client — has to print *something*. The
+/// clients that do know them translate by kind (`web/src/rooms.rs`), exactly as
+/// they already title a DM after its members rather than after the placeholder
+/// the column holds. So this string is the fallback, not the label.
+pub fn static_room_name(kind: &str) -> &'static str {
+    match kind {
+        ROOM_KIND_NOTE => "My Note",
+        ROOM_KIND_JARVIS => "My Jarvis",
+        ROOM_KIND_LOBBY => "My Lobby",
+        _ => "Room",
+    }
+}
+
+/// The id of one person's built-in room: `room_<kind>_<owner>`.
+///
+/// Derived rather than allocated, and that is what makes provisioning safe to
+/// run on every room-list fetch. An id from `uuid::Uuid::new_v4()` would need a
+/// lookup table — "which room is Alice's note?" — and every check that a room
+/// is *yours* would become a join. Here the question is a string comparison
+/// against a value the caller already holds, so the ownership test cannot be
+/// forgotten in the way a lookup can be, and two concurrent provisioning runs
+/// collide on the primary key instead of creating two notes.
+///
+/// The owner is lowercased because [`WalletAddress`] already guarantees it and
+/// a caller passing a checksummed string would otherwise mint a second, parallel
+/// room for the same person. 52–54 characters of `[a-z0-9_]`, comfortably inside
+/// the 10–100 the protocol allows.
+pub fn static_room_id(kind: &str, owner: &str) -> String {
+    format!("room_{kind}_{}", owner.to_lowercase())
+}
+
+/// Ensure `owner` has all three built-in rooms and that their rosters say what
+/// the kind promises. Idempotent, and safe to run on every request that needs
+/// them to exist.
+///
+/// # Why the roster is reconciled and not just created
+///
+/// Two of the three have a membership that is a *function of something else*
+/// rather than a record of who joined. "My Lobby" is the owner plus whoever
+/// `VITE_FRUITNATION_ADMIN` currently names, and that list is a line in a
+/// config file the operator edits and restarts — there is no request that
+/// changes it and therefore no place to hang an incremental update. So the set
+/// is recomputed here, which also means an operator who adds themselves as an
+/// admin appears in everybody's lobby without anybody re-inviting them, and one
+/// who is removed leaves the same way.
+///
+/// "My Jarvis" is the same shape with a set of one: the owner's agent address,
+/// which is derived and so can be reconstructed rather than remembered.
+///
+/// "My Note" is the strict case and the reason this function owns the roster at
+/// all: its member set is exactly `[owner]`, enforced here on every pass. The
+/// route layer refuses every verb that could add a second member, but a rule
+/// with one enforcement point is a rule that a future route can bypass by
+/// accident; recomputing the set means the room *heals* rather than merely
+/// resisting.
+pub fn provision_static_rooms(
+    conn: &mut Connection,
+    owner: &str,
+    server_admins: &[String],
+) -> ApiResult<()> {
+    let agent = pocketskynet_core::WalletAddress::agent_of(
+        &pocketskynet_core::WalletAddress::new(owner)
+            .map_err(|e| crate::error::ApiError::Internal(anyhow::anyhow!(e)))?,
+    );
+
+    for kind in STATIC_ROOM_KINDS {
+        let id = static_room_id(kind, owner);
+        // The roster this kind promises, owner first.
+        let mut roster = vec![owner.to_lowercase()];
+        match kind {
+            ROOM_KIND_JARVIS => roster.push(agent.as_str().to_owned()),
+            ROOM_KIND_LOBBY => roster.extend(server_admins.iter().cloned()),
+            _ => {}
+        }
+        roster = dedup_sorted(&roster);
+
+        let now = now_ms();
+        let tx = conn.transaction()?;
+        // `DO NOTHING` rather than a read-then-write: two of the caller's tabs
+        // can fetch the room list in the same millisecond, and the loser of
+        // that race must find the winner's room, not fail the whole listing.
+        tx.execute(
+            "INSERT INTO rooms (id, name, description, current_key_version,
+                                key_rotation_pending, kind, dm_key, created_at)
+             VALUES (?1, ?2, NULL, 1, 0, ?3, NULL, ?4)
+             ON CONFLICT (id) DO NOTHING",
+            params![id, static_room_name(kind), kind, now],
+        )?;
+        tx.execute(
+            "INSERT INTO room_serials (room_id, next_serial) VALUES (?1, ?2)
+             ON CONFLICT (room_id) DO NOTHING",
+            params![id, now],
+        )?;
+        // The owner administers all three. Not much of a power — every verb
+        // admin gates is refused for these rooms — but the roster and admin
+        // views both render "who runs this", and "nobody" would be a lie about
+        // a room that is entirely one person's.
+        tx.execute(
+            "INSERT INTO room_admins (room_id, wallet_address, created_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (room_id, wallet_address) DO NOTHING",
+            params![id, owner.to_lowercase(), now],
+        )?;
+
+        for member in &roster {
+            tx.execute(
+                "INSERT INTO room_members (room_id, user_address, joined_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (room_id, user_address) DO NOTHING",
+                params![id, member, now],
+            )?;
+        }
+        // Anyone the roster no longer names goes, along with their read pointer
+        // and hidden-room row — the same three deletes `remove_member` does,
+        // spelled out here because they have to happen inside this transaction.
+        let placeholders = roster
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut binds: Vec<&dyn rusqlite::ToSql> = vec![&id];
+        for member in &roster {
+            binds.push(member);
+        }
+        for table in ["room_members", "room_reads"] {
+            tx.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE room_id = ?1 AND user_address NOT IN ({placeholders})"
+                ),
+                binds.as_slice(),
+            )?;
+        }
+        tx.execute(
+            &format!(
+                "DELETE FROM hidden_rooms
+                 WHERE room_id = ?1 AND user_address NOT IN ({placeholders})"
+            ),
+            binds.as_slice(),
+        )?;
+        tx.commit()?;
+    }
+
+    // The agent needs a profile row or `list_members` drops it and every
+    // message it ever posts renders under the synthesised "User 0x0000…"
+    // placeholder. Written last, outside the loop, because it belongs to the
+    // person rather than to any one room.
+    super::users::upsert_user(conn, agent.as_str(), "Jarvis", None, None)?;
+    Ok(())
 }
 
 // ------------------------------------------------------- direct messages ---
