@@ -1257,16 +1257,21 @@ fn edit_box(
     let onkeydown = {
         let commit = commit.clone();
         let editing = editing.clone();
-        Callback::from(move |e: KeyboardEvent| match e.key().as_str() {
-            "Enter" => {
-                e.prevent_default();
-                commit.emit(());
+        Callback::from(move |e: KeyboardEvent| {
+            if super::common::ime_composing(&e) {
+                return;
             }
-            "Escape" => {
-                e.stop_propagation();
-                editing.set(false);
+            match e.key().as_str() {
+                "Enter" => {
+                    e.prevent_default();
+                    commit.emit(());
+                }
+                "Escape" => {
+                    e.stop_propagation();
+                    editing.set(false);
+                }
+                _ => {}
             }
-            _ => {}
         })
     };
     html! {

@@ -180,7 +180,7 @@ pub fn knowledge(p: &KnowledgeProps) -> Html {
         let query = query.clone();
         let run_search = run_search.clone();
         Callback::from(move |e: KeyboardEvent| {
-            if e.key() == "Enter" {
+            if e.key() == "Enter" && !super::common::ime_composing(&e) {
                 e.prevent_default();
                 run_search.emit((*query).clone());
             }

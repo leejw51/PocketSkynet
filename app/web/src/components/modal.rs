@@ -426,7 +426,11 @@ pub fn confirm_dialog(p: &ConfirmProps) -> Html {
                                 // Enter submits, but only once the phrase is
                                 // right — otherwise this is the reflex Enter
                                 // the whole gate exists to stop.
-                                if e.key() == "Enter" && unlocked && !busy {
+                                if e.key() == "Enter"
+                                    && unlocked
+                                    && !busy
+                                    && !super::common::ime_composing(&e)
+                                {
                                     e.prevent_default();
                                     on_confirm.emit(());
                                 }

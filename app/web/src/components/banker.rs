@@ -1281,7 +1281,7 @@ pub fn banker_view(p: &BankerProps) -> Html {
                         onkeydown={{
                             let ask = ask.clone();
                             Callback::from(move |e: KeyboardEvent| {
-                                if e.key() == "Enter" {
+                                if e.key() == "Enter" && !super::common::ime_composing(&e) {
                                     e.prevent_default();
                                     ask.emit(MouseEvent::new("click").unwrap());
                                 }
