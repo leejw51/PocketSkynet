@@ -148,6 +148,10 @@ not gaps:
 - **Push notifications** (Web Push / APNs / FCM) — in-app unread badges are
   the notification model.
 
+§7 narrows the first and third: a rendering-only subset, and notification
+tiers that stay self-hosted. The exclusions still stand against full
+markdown and third-party push.
+
 ---
 
 ## 1. Core communication primitives ~~(blockers)~~ — **shipped**
@@ -246,9 +250,9 @@ Lighter than enterprise compliance, but still needed for a real team:
 1. ~~**Mentions + threads + DMs**~~ — **shipped** (§0), server and client.
 2. ~~**Server owner role + session revocation**~~ — **shipped** (§0).
 3. **Invite links** — the one §3 item still open, and the thing between "a team
-   could use this" and "a team could join this".
+   could use this" and "a team could join this". Broken into tasks in §7 M1.
 4. **Webhooks** — external events into rooms; the minimum integration
-   surface.
+   surface. Broken into tasks in §7 M4.
 5. ~~**Presence**~~ — **shipped** (§0a), server and client. Taken out of order
    because it cost no schema: the hub already knew who was connected, and every
    piece of the authorisation it needed — shared rooms, and blocks in both
@@ -257,3 +261,47 @@ Lighter than enterprise compliance, but still needed for a real team:
 The wallet identity, E2EE, on-chain payment rails, and shared knowledge base
 are the platform's edge — every step above builds on them rather than
 replacing them with Slack's model.
+
+---
+
+## 7. Team-messenger TODO
+
+*Added 2026-08-07. Scope: ~100 people, one on-premises server — the daily
+messenger for a team, not Slack parity. One node already covers this scale.
+In priority order; M1 and M2 decide whether people stay after day one.*
+
+**M1 — Invite links** (no onboarding funnel exists today)
+- [ ] Server: create / list / revoke; signed token, expiry, per room
+- [ ] Server: redeem token → membership, re-key flag for encrypted rooms
+- [ ] Client: share dialog (link + QR), revocation list
+- [ ] Client: landing flow — link → create wallet → signed in → in the room
+
+**M2 — Notifications** (all tiers on-premises; mute ships with it)
+- [ ] Tab title / favicon badge + mention sound
+- [ ] Browser Notification API for backgrounded tabs
+- [ ] Tauri native notifications on desktop
+- [ ] Per-room mute / mentions-only / DND hours
+
+**M3 — Writing ergonomics** (render-side only; wire stays plain text)
+- [x] Mention another user by `@…` — **shipped** (§0): composer autocomplete,
+      highlight in the bubble, per-room badge, inbox behind the `@` icon
+- [ ] Autocomplete inserts `@nickname(0x1234..5678)` — search as you type,
+      then replace the typed handle with name *plus* short address, so two
+      people with the same nickname cannot be mistaken for each other and
+      the text itself says who was meant, even after a rename
+- [ ] Code spans + fenced code blocks
+- [ ] Pinned messages per room
+- [ ] Per-room persistent drafts
+
+**M4 — Operating it** (one server, somebody has to run it)
+- [ ] Incoming webhooks: per-room token, POST → message, plaintext rooms only
+- [ ] Backup / restore doc (SQLite + `data/`, one page)
+
+**M5 — Reliability debt (§5)**
+- [ ] WS→SSE→polling fallback actually engages (`realtime.rs:123`) — this is
+      what corporate networks that block WebSockets hit
+- [ ] Verify anchoring tx hash server-side
+- [ ] Wallet-backup JSON loads back at sign-in
+
+Stays excluded: calls / screen share, full markdown, server-side agents,
+federation, multi-node, Slack history import.
