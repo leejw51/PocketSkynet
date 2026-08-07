@@ -1166,6 +1166,48 @@ strings! {
     (publish_copy_url, "Copy URL", "URL 복사", "URLをコピー", "複製網址", "Kopírovat URL", "Copiar URL", "复制网址", "URL kopieren"),
     (publish_url_copied, "URL copied", "URL이 복사되었습니다", "URLをコピーしました", "已複製網址", "URL zkopírována", "URL copiada", "已复制网址", "URL kopiert"),
     (publish_copy_failed, "Copy is unavailable here — select the URL on the card.", "여기서는 복사를 사용할 수 없습니다 — 카드의 URL을 직접 선택하세요.", "ここではコピーを使えません — カードのURLを選択してください。", "呢度用唔到複製 — 請自己揀選卡上面嘅網址。", "Kopírování zde není dostupné — označte URL na kartě.", "Copiar no está disponible aquí: selecciona la URL en la tarjeta.", "此处无法复制 — 请手动选中卡片上的网址。", "Kopieren ist hier nicht verfügbar — markiere die URL auf der Karte."),
+
+    // --- Skynet Password (the encrypted key/value store) ---------------------
+    (nav_passwords, "Passwords", "비밀번호", "パスワード", "密碼", "Hesla", "Contraseñas", "密码", "Passwörter"),
+    (pw_title, "Skynet Password", "스카이넷 패스워드", "スカイネット・パスワード", "Skynet 密碼", "Skynet Password", "Skynet Password", "Skynet 密码", "Skynet Password"),
+    (pw_hint, "A key and a value, sealed on this device before they leave it. The server stores what it cannot read.", "키와 값을 이 기기에서 봉인한 뒤 전송합니다. 서버는 읽을 수 없는 것만 보관합니다.", "キーと値をこの端末で封じてから送信します。サーバーは読めないものだけを保管します。", "個名同個值喺呢部機封咗先送出去。伺服器只係存住佢睇唔到嘅嘢。", "Klíč a hodnota, zapečetěné na tomto zařízení, než ho opustí. Server ukládá to, co neumí přečíst.", "Una clave y un valor, sellados en este dispositivo antes de salir de él. El servidor guarda lo que no puede leer.", "键和值在本机封存后才发送。服务器保存的是它读不懂的内容。", "Ein Schlüssel und ein Wert, auf diesem Gerät versiegelt, bevor sie es verlassen. Der Server speichert, was er nicht lesen kann."),
+    (pw_only_you, "Only you can open these — not this server, not whoever runs it.", "오직 본인만 열 수 있습니다 — 이 서버도, 운영자도 열 수 없습니다.", "開けるのはあなただけです — このサーバーも運営者も開けません。", "只有你先開得到 — 呢個伺服器同營運者都開唔到。", "Otevřít je můžete jen vy — ne tento server ani ten, kdo ho provozuje.", "Solo tú puedes abrirlos: ni este servidor ni quien lo administra.", "只有你能打开 — 服务器和运营者都不行。", "Nur du kannst sie öffnen — weder dieser Server noch wer ihn betreibt."),
+    (pw_lost_warning, "Lose the wallet and these are gone. There is no reset link.", "지갑을 잃으면 이 항목들도 사라집니다. 재설정 링크는 없습니다.", "ウォレットを失えばこれらも失われます。リセットリンクはありません。", "唔見咗個錢包，呢啲嘢就冇咗。冇重設連結。", "Když ztratíte peněženku, ztratíte i tohle. Žádný odkaz na obnovu neexistuje.", "Si pierdes la cartera, esto se pierde. No hay enlace de recuperación.", "钱包丢了，这些就没了。没有重置链接。", "Verlierst du die Wallet, ist das hier weg. Es gibt keinen Reset-Link."),
+    (pw_add, "Add a secret", "비밀 추가", "シークレットを追加", "新增一項", "Přidat tajemství", "Añadir un secreto", "添加一条", "Geheimnis hinzufügen"),
+    (pw_name_label, "What it is for", "용도", "用途", "用途", "K čemu je", "Para qué es", "用途", "Wofür"),
+    (pw_name_placeholder, "chase.com, the office door, the router…", "chase.com, 사무실 출입문, 공유기…", "chase.com、オフィスのドア、ルーター…", "chase.com、辦公室門、路由器…", "chase.com, dveře v kanceláři, router…", "chase.com, la puerta de la oficina, el router…", "chase.com、办公室门、路由器…", "chase.com, die Bürotür, der Router…"),
+    (pw_secret_label, "Secret", "비밀", "シークレット", "秘密", "Tajemství", "Secreto", "秘密", "Geheimnis"),
+    (pw_secret_placeholder, "Password, key, or code", "비밀번호, 키 또는 코드", "パスワード、鍵、コード", "密碼、鎖匙或者代碼", "Heslo, klíč nebo kód", "Contraseña, clave o código", "密码、密钥或代码", "Passwort, Schlüssel oder Code"),
+    (pw_save, "Save", "저장", "保存", "儲存", "Uložit", "Guardar", "保存", "Speichern"),
+    (pw_saved, "Saved", "저장되었습니다", "保存しました", "已儲存", "Uloženo", "Guardado", "已保存", "Gespeichert"),
+    (pw_updated, "Updated", "수정되었습니다", "更新しました", "已更新", "Aktualizováno", "Actualizado", "已更新", "Aktualisiert"),
+    (pw_removed, "Removed", "삭제되었습니다", "削除しました", "已移除", "Odstraněno", "Eliminado", "已移除", "Entfernt"),
+    (pw_remove, "Remove", "삭제", "削除", "移除", "Odstranit", "Eliminar", "移除", "Entfernen"),
+    (pw_remove_arm, "Remove for good?", "정말 삭제할까요?", "完全に削除しますか？", "真係要永久移除？", "Odstranit natrvalo?", "¿Eliminar definitivamente?", "确定永久移除？", "Endgültig entfernen?"),
+    (pw_filter, "Filter by name…", "이름으로 필터…", "名前で絞り込む…", "用名篩選…", "Filtrovat podle názvu…", "Filtrar por nombre…", "按名称筛选…", "Nach Name filtern…"),
+    (pw_empty, "Nothing saved yet", "아직 저장된 항목이 없습니다", "まだ何も保存されていません", "仲未儲存咗嘢", "Zatím nic uloženo", "Aún no hay nada guardado", "还没有保存任何内容", "Noch nichts gespeichert"),
+    (pw_empty_desc, "Add a name and a secret. Both are encrypted here before anything is sent.", "이름과 비밀을 추가하세요. 둘 다 전송 전에 여기서 암호화됩니다.", "名前とシークレットを追加してください。どちらも送信前にここで暗号化されます。", "加個名同一個秘密。兩樣都會喺呢度加密先送出去。", "Přidejte název a tajemství. Obojí se zašifruje zde, ještě než se cokoli odešle.", "Añade un nombre y un secreto. Ambos se cifran aquí antes de enviar nada.", "添加一个名称和一个秘密。两者都会在本机加密后再发送。", "Füge einen Namen und ein Geheimnis hinzu. Beides wird hier verschlüsselt, bevor irgendetwas gesendet wird."),
+    (pw_count, "{n} saved", "{n}개 저장됨", "{n}件保存済み", "已儲存{n}項", "Uloženo: {n}", "{n} guardados", "已保存{n}项", "{n} gespeichert"),
+    (pw_generate, "Generate", "생성", "生成", "產生", "Vygenerovat", "Generar", "生成", "Erzeugen"),
+    (pw_gen_title, "Random password", "무작위 비밀번호", "ランダムなパスワード", "隨機密碼", "Náhodné heslo", "Contraseña aleatoria", "随机密码", "Zufälliges Passwort"),
+    (pw_gen_length, "Length", "길이", "長さ", "長度", "Délka", "Longitud", "长度", "Länge"),
+    (pw_gen_lowercase, "Lowercase", "소문자", "小文字", "細楷", "Malá písmena", "Minúsculas", "小写字母", "Kleinbuchstaben"),
+    (pw_gen_uppercase, "Uppercase", "대문자", "大文字", "大楷", "Velká písmena", "Mayúsculas", "大写字母", "Großbuchstaben"),
+    (pw_gen_digits, "Digits", "숫자", "数字", "數字", "Číslice", "Dígitos", "数字", "Ziffern"),
+    (pw_gen_symbols, "Symbols", "기호", "記号", "符號", "Symboly", "Símbolos", "符号", "Symbole"),
+    (pw_gen_strength, "about {bits} bits", "약 {bits}비트", "約{bits}ビット", "大約{bits}位元", "asi {bits} bitů", "unos {bits} bits", "约{bits}位", "etwa {bits} Bit"),
+    (pw_gen_no_classes, "Choose at least one kind of character.", "문자 종류를 하나 이상 선택하세요.", "文字の種類を少なくとも1つ選んでください。", "至少揀一種字元。", "Vyberte alespoň jeden druh znaků.", "Elige al menos un tipo de carácter.", "请至少选择一种字符类型。", "Wähle mindestens eine Zeichenart."),
+    (pw_gen_failed, "This browser gave no secure randomness, so nothing was generated. Type a password yourself rather than trusting a weak one.", "이 브라우저에서 안전한 난수를 얻지 못해 아무것도 생성하지 않았습니다. 약한 값을 쓰지 말고 직접 입력하세요.", "このブラウザから安全な乱数を取得できなかったため、何も生成していません。弱い値に頼らず、ご自身で入力してください。", "呢個瀏覽器攞唔到安全嘅隨機數，所以冇產生任何嘢。唔好用弱密碼，請自己打。", "Tento prohlížeč neposkytl bezpečnou náhodnost, takže se nic nevygenerovalo. Napište heslo raději sami, než abyste spoléhali na slabé.", "Este navegador no dio aleatoriedad segura, así que no se generó nada. Escribe tú la contraseña en vez de fiarte de una débil.", "此浏览器无法提供安全随机数，因此没有生成任何内容。请自己输入密码，不要使用弱密码。", "Dieser Browser lieferte keine sichere Zufälligkeit, daher wurde nichts erzeugt. Tippe lieber selbst ein Passwort, statt einem schwachen zu vertrauen."),
+    (pw_reveal, "Show", "표시", "表示", "顯示", "Zobrazit", "Mostrar", "显示", "Anzeigen"),
+    (pw_hide, "Hide", "숨기기", "隠す", "隱藏", "Skrýt", "Ocultar", "隐藏", "Verbergen"),
+    (pw_copy, "Copy secret", "비밀 복사", "シークレットをコピー", "複製秘密", "Kopírovat tajemství", "Copiar secreto", "复制秘密", "Geheimnis kopieren"),
+    (pw_copied, "Copied", "복사되었습니다", "コピーしました", "已複製", "Zkopírováno", "Copiado", "已复制", "Kopiert"),
+    (pw_copy_failed, "Copy is unavailable here — reveal the secret and select it by hand.", "여기서는 복사를 사용할 수 없습니다 — 비밀을 표시한 뒤 직접 선택하세요.", "ここではコピーを使えません — シークレットを表示して手動で選択してください。", "呢度用唔到複製 — 顯示個秘密再自己揀選佢。", "Kopírování zde není dostupné — zobrazte tajemství a označte ho ručně.", "Copiar no está disponible aquí: muestra el secreto y selecciónalo a mano.", "此处无法复制 — 请显示秘密后手动选中。", "Kopieren ist hier nicht verfügbar — zeige das Geheimnis an und markiere es von Hand."),
+    (pw_sealed, "Sealed — this session cannot read it", "봉인됨 — 이 세션에서는 읽을 수 없습니다", "封印済み — このセッションでは読めません", "已封存 — 呢個工作階段讀唔到", "Zapečetěno — tato relace to nepřečte", "Sellado: esta sesión no puede leerlo", "已封存 — 此会话无法读取", "Versiegelt — diese Sitzung kann es nicht lesen"),
+    (pw_locked, "Locked", "잠김", "ロック中", "已鎖上", "Zamčeno", "Bloqueado", "已锁定", "Gesperrt"),
+    (pw_locked_desc, "Your secrets are here, sealed. Unlock this device with your recovery phrase to read them.", "비밀은 봉인된 채로 남아 있습니다. 복구 문구로 이 기기를 잠금 해제하면 읽을 수 있습니다.", "シークレットは封印されたままここにあります。リカバリーフレーズでこの端末をロック解除すると読めます。", "你嘅秘密仲喺度，封住咗。用復原字詞解鎖呢部機就睇得到。", "Vaše tajemství tu jsou, zapečetěná. Odemkněte toto zařízení obnovovací frází, abyste je přečetli.", "Tus secretos están aquí, sellados. Desbloquea este dispositivo con tu frase de recuperación para leerlos.", "你的秘密就在这里，处于封存状态。用恢复助记词解锁本机即可读取。", "Deine Geheimnisse sind hier, versiegelt. Entsperre dieses Gerät mit deiner Wiederherstellungsphrase, um sie zu lesen."),
+    (pw_needs_name, "Give it a name first.", "먼저 이름을 입력하세요.", "先に名前を付けてください。", "請先改個名。", "Nejprve mu dejte název.", "Ponle un nombre primero.", "请先起个名字。", "Gib ihm zuerst einen Namen."),
+    (pw_seal_failed, "This device could not seal that — nothing was sent.", "이 기기에서 봉인하지 못했습니다 — 아무것도 전송되지 않았습니다.", "この端末で封印できませんでした — 何も送信していません。", "呢部機封唔到 — 冇送出任何嘢。", "Toto zařízení to nedokázalo zapečetit — nic se neodeslalo.", "Este dispositivo no pudo sellarlo: no se envió nada.", "本机无法封存 — 未发送任何内容。", "Dieses Gerät konnte das nicht versiegeln — es wurde nichts gesendet."),
 }
 
 /// The fast-room descriptions, by index. A set whose *size* is part of the
@@ -1364,6 +1406,15 @@ mod tests {
             // "Server" is the ordinary Czech and German noun too.
             (Lang::Cs, Key::dash_section_server),
             (Lang::De, Key::dash_section_server),
+            // "Skynet Password" is a product name, by the same rule as
+            // "Skynet Dashboard" above. The CJK columns render the second word
+            // natively because the scripts differ enough that leaving it in
+            // Latin letters reads as untranslated UI rather than as a name;
+            // the Latin-script languages keep it whole, as they keep the
+            // "PocketSkynet" wordmark.
+            (Lang::Cs, Key::pw_title),
+            (Lang::Es, Key::pw_title),
+            (Lang::De, Key::pw_title),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

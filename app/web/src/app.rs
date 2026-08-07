@@ -14,8 +14,8 @@ use crate::actions;
 use crate::api::Client;
 use crate::components::{
     bank, boot, burst, chat, dashboard, dialogs, gallery, invitations, invite_landing, knowledge,
-    lightbox, login, members, operator, publish, room_list, settings, shell, shout, spotlight,
-    toast, transfers,
+    lightbox, login, members, operator, passwords, publish, room_list, settings, shell, shout,
+    spotlight, toast, transfers,
 };
 use crate::format;
 use crate::i18n::{t, Key};
@@ -769,6 +769,9 @@ fn root() -> Html {
         },
         Route::Publish => html! {
             <publish::Publish on_navigate={on_navigate.clone()} />
+        },
+        Route::Passwords => html! {
+            <passwords::Passwords on_navigate={on_navigate.clone()} />
         },
         Route::Bank => html! { <bank::Bank /> },
         Route::Operator => html! { <operator::OperatorPage store={store.clone()} /> },

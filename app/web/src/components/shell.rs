@@ -312,6 +312,19 @@ pub fn shell(p: &ShellProps) -> Html {
                     >
                         { icons::globe(18) }
                     </button>
+                    // Skynet Password. Beside Bank rather than in with the
+                    // appearance toggles: it is a destination, and the row is
+                    // grouped destinations-then-tools for exactly that reason.
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet fn-topbar__wide"
+                        aria-label={t(lang, Key::nav_passwords)}
+                        title={t(lang, Key::pw_title)}
+                        aria-current={(p.route.nav_key() == "passwords").then_some("page")}
+                        onclick={go(Route::Passwords, p.on_navigate.clone())}
+                    >
+                        { icons::lock(18) }
+                    </button>
                     // The operator's file. Also in the bottom nav, which the
                     // two-pane tier hides — without this button the whole
                     // section is unreachable on anything wider than a phone.
@@ -560,11 +573,12 @@ pub fn shell(p: &ShellProps) -> Html {
 /// rather than on `Route`, because it is a fact about this five-slot bar and
 /// not about the routes themselves — the two-pane tier shows all of these as
 /// top-bar buttons and has no More at all.
-const IN_MORE: [&str; 6] = [
+const IN_MORE: [&str; 7] = [
     "invites",
     "knowledge",
     "publish",
     "bank",
+    "passwords",
     "dashboard",
     "settings",
 ];

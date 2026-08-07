@@ -10796,3 +10796,241 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
   color: var(--fn-fg-muted);
   white-space: nowrap;
 }
+
+/* ==========================================================================
+   SKYNET PASSWORD — the encrypted key/value store
+   (docs/API.md §18, components/passwords.rs)
+
+   Borrows the hit-card family from Knowledge and Publish, because it is the
+   same object: a row with a title, a timestamp and a set of actions. What is
+   local to this screen is the *secret* line — a monospaced field, masked by
+   default, whose mask is a fixed ten dots regardless of the real length.
+   Password length is worth something to a guesser, and a list where one row's
+   dots run twice as wide as another's publishes it to anyone glancing over.
+   ========================================================================== */
+
+.fn-pw {
+  display: grid;
+  gap: var(--fn-s4);
+  padding: var(--fn-s4);
+  align-content: start;
+}
+
+.fn-pw__hero {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--fn-s3);
+  color: var(--fn-primary-text);
+}
+
+.fn-pw__hero > svg {
+  flex-shrink: 0;
+  margin-block-start: 2px;
+}
+
+.fn-pw__hero p {
+  margin: 0 0 var(--fn-s1);
+  max-inline-size: 56ch;
+}
+
+.fn-pw__promise {
+  font-size: 0.82rem;
+  color: var(--fn-online, var(--fn-primary-text));
+}
+
+/* The recovery story is "there isn't one". It is said on the screen, in the
+   warning colour, above the form — not tucked into a tooltip somebody reads
+   after they have already trusted this with a bank password. */
+.fn-pw__warning {
+  display: flex;
+  align-items: center;
+  gap: var(--fn-s1);
+  font-size: 0.78rem;
+  color: var(--fn-danger-text, #ff6b6b);
+}
+
+.fn-pw__form,
+.fn-pw__list {
+  display: grid;
+  gap: var(--fn-s3);
+}
+
+.fn-pw__addbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fn-s2);
+  justify-self: start;
+}
+
+.fn-pw__draft {
+  display: grid;
+  gap: var(--fn-s3);
+  padding: var(--fn-s3);
+  border: 1px solid var(--fn-border);
+  border-radius: 14px;
+  background: var(--fn-surface-2);
+}
+
+/* Monospaced while composing: a generated password is read character by
+   character when somebody proof-reads it against the field they are pasting
+   into, and a proportional face makes l/1 and O/0 a coin toss. */
+.fn-pw__secretinput {
+  font-family: var(--fn-mono, monospace);
+}
+
+.fn-pw__genrow {
+  display: flex;
+  align-items: center;
+  gap: var(--fn-s2);
+  flex-wrap: wrap;
+}
+
+.fn-pw__bits {
+  font-size: 0.75rem;
+  color: var(--fn-fg-muted);
+  margin-inline-start: auto;
+}
+
+.fn-pw__gen {
+  display: grid;
+  gap: var(--fn-s2);
+  padding: var(--fn-s3);
+  border: 1px dashed var(--fn-border);
+  border-radius: 12px;
+}
+
+.fn-pw__len {
+  display: flex;
+  align-items: center;
+  gap: var(--fn-s2);
+  font-size: 0.82rem;
+}
+
+.fn-pw__len input[type="range"] {
+  flex: 1;
+  min-inline-size: 8rem;
+}
+
+.fn-pw__len output {
+  font-family: var(--fn-mono, monospace);
+  min-inline-size: 3ch;
+  text-align: end;
+}
+
+.fn-pw__classes {
+  display: flex;
+  gap: var(--fn-s2);
+  flex-wrap: wrap;
+}
+
+.fn-pw__class {
+  padding: var(--fn-s1) var(--fn-s3);
+  border: 1px solid var(--fn-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fn-fg-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.fn-pw__class--on {
+  border-color: var(--fn-primary-line);
+  color: var(--fn-primary-text);
+}
+
+.fn-pw__error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--fn-danger-text, #ff6b6b);
+}
+
+.fn-pw__actions {
+  display: flex;
+  gap: var(--fn-s2);
+  justify-content: flex-end;
+}
+
+.fn-pw__filterrow {
+  display: flex;
+  align-items: center;
+  gap: var(--fn-s3);
+}
+
+.fn-pw__count {
+  font-size: 0.75rem;
+  color: var(--fn-fg-muted);
+  white-space: nowrap;
+}
+
+.fn-pw__loading {
+  display: grid;
+  place-items: center;
+  padding: var(--fn-s5) 0;
+}
+
+.fn-pw__rows {
+  display: grid;
+  gap: var(--fn-s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fn-pwcard {
+  display: grid;
+  gap: var(--fn-s2);
+}
+
+.fn-pwcard__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--fn-s3);
+}
+
+.fn-pwcard__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.fn-pwcard__head .fn-hitcard__time {
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
+.fn-pwcard__value {
+  font-family: var(--fn-mono, monospace);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+  /* Selectable on purpose: hand-selecting the revealed secret is the fallback
+     when the clipboard is unavailable, which on a plain-http LAN origin is
+     every time. */
+  user-select: text;
+}
+
+.fn-pwcard__value--masked {
+  letter-spacing: 0.15em;
+  color: var(--fn-fg-muted);
+}
+
+.fn-pwcard__sealed {
+  font-size: 0.8rem;
+  color: var(--fn-fg-muted);
+}
+
+.fn-pwcard__actions {
+  display: flex;
+  gap: var(--fn-s2);
+  flex-wrap: wrap;
+}
+
+.fn-pwcard__actions .topcoat-button,
+.fn-pwcard__actions .topcoat-button--quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fn-s1);
+}
+
+.fn-pwcard__remove--armed {
+  color: var(--fn-danger-text, #ff6b6b);
+  border-color: var(--fn-danger-text, #ff6b6b);
+}

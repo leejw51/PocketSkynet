@@ -156,7 +156,7 @@ impl SessionKeys {
     /// MetaMask or Privy session reaches exactly the same entries — which is
     /// the whole point of deriving rather than generating.
     pub fn vault_key(&self) -> VaultKey {
-        let scalar: [u8; 32] = (*self.encryption.secret_key().to_bytes()).into();
+        let scalar: [u8; 32] = self.encryption.secret_key().to_bytes().into();
         VaultKey::derive(&scalar)
     }
 
