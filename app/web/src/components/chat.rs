@@ -33,6 +33,7 @@ use super::common::{
 use super::composer::{Composer, Picker};
 use super::icons;
 use super::message::{DayMark, MessageRow};
+use super::modal::Modal as ConfirmDialog;
 use super::toast;
 use crate::i18n::{t, Key, Lang};
 
@@ -57,6 +58,17 @@ pub fn chat(p: &ChatProps) -> Html {
     // indicator on (`web/src/ai.rs` awaits the whole answer), so this is the
     // only "something is happening" the room has.
     let jarvis_busy = use_state(|| false);
+    // Which tool Jarvis is running right now, so the activity line can name it
+    // rather than saying "thinking" through a six-second search. `None` while
+    // the model itself is deciding.
+    let jarvis_tool = use_state(|| Option::<String>::None);
+    // A write Jarvis has proposed, waiting on the person. The model cannot
+    // resolve this for itself, which is the point: it is the gate that keeps a
+    // prompt injection in a search result from becoming a sent message.
+    let jarvis_ask = use_state(|| Option::<crate::jarvis_run::Confirm>::None);
+    // Vault access, granted per session and never persisted — a consent that
+    // survives a reload is one nobody remembers giving.
+    let jarvis_vault = use_state(|| false);
     // Search within this room, client-side: the server never indexes
     // ciphertext, so an encrypted room — every built-in room, now — has to be
     // searchable this way or not at all. Scoped to what is already loaded and
@@ -663,6 +675,9 @@ pub fn chat(p: &ChatProps) -> Html {
         let roster = room.members.clone();
         let me_for_send = me.clone();
         let jarvis_busy = jarvis_busy.clone();
+        let jarvis_tool = jarvis_tool.clone();
+        let jarvis_ask = jarvis_ask.clone();
+        let jarvis_vault = jarvis_vault.clone();
         Callback::from(move |text: String| {
             let now = format::now_ms();
             let local_id = crate::state::next_local_id();
@@ -693,6 +708,18 @@ pub fn chat(p: &ChatProps) -> Html {
             // answering.
             let ask = built_in == Some(crate::rooms::StaticRoom::Jarvis);
             let jarvis_busy = jarvis_busy.clone();
+            let jarvis_ui = crate::jarvis_run::Ui {
+                stage: {
+                    let jarvis_tool = jarvis_tool.clone();
+                    Callback::from(move |tool: Option<String>| jarvis_tool.set(tool))
+                },
+                confirm: {
+                    let jarvis_ask = jarvis_ask.clone();
+                    Callback::from(move |c: crate::jarvis_run::Confirm| jarvis_ask.set(Some(c)))
+                },
+                vault_consent: *jarvis_vault,
+            };
+            let jarvis_tool_done = jarvis_tool.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 // The question is kept for the agent turn: `send_message`
                 // consumes `text`, and the reply must see the message that was
@@ -707,8 +734,9 @@ pub fn chat(p: &ChatProps) -> Html {
                 // Jarvis, reading the same room, never actually saw.
                 if let Some(question) = question.filter(|_| sent) {
                     jarvis_busy.set(true);
-                    actions::jarvis_reply(store2, room_id, question).await;
+                    actions::jarvis_reply(store2, room_id, question, jarvis_ui).await;
                     jarvis_busy.set(false);
+                    jarvis_tool_done.set(None);
                 }
             });
         })
@@ -1287,14 +1315,106 @@ pub fn chat(p: &ChatProps) -> Html {
             // in the room yet to show that anything is happening.
             if built_in == Some(crate::rooms::StaticRoom::Jarvis) {
                 if *jarvis_busy {
-                    <div class="fn-banner" role="status" aria-live="polite">
-                        { t(lang, Key::jarvis_thinking) }
+                    <div class="fn-jarvis-activity" role="status" aria-live="polite">
+                        <span class="fn-jarvis-activity__pulse" aria-hidden="true">
+                            <i /><i /><i />
+                        </span>
+                        <span class="fn-jarvis-activity__label">{
+                            match (*jarvis_tool).as_deref() {
+                                // Naming the tool is the difference between a
+                                // spinner and a machine you can see working.
+                                Some(tool) => t(lang, Key::jarvis_using).replace("{tool}", tool),
+                                None => t(lang, Key::jarvis_thinking).to_owned(),
+                            }
+                        }</span>
                     </div>
                 } else if crate::ai::AiSettings::load().text_provider().is_none() {
                     <div class="fn-banner" role="note">
                         { t(lang, Key::jarvis_needs_key) }
                     </div>
                 }
+
+                // Vault access is a switch, not a setting: it lives beside the
+                // composer where it is used, defaults to off, and is forgotten
+                // when the tab closes. Offered only where it could work — a
+                // locked session cannot open an entry however willing the
+                // owner is.
+                if store.auth.can_decrypt() {
+                    <label class="fn-jarvis-vault">
+                        <input type="checkbox" checked={*jarvis_vault}
+                            onchange={{
+                                let jarvis_vault = jarvis_vault.clone();
+                                Callback::from(move |_: Event| jarvis_vault.set(!*jarvis_vault))
+                            }} />
+                        <span class="fn-jarvis-vault__text">
+                            <strong>{ t(lang, Key::jarvis_vault_toggle) }</strong>
+                            <small>{ t(lang, Key::jarvis_vault_note) }</small>
+                        </span>
+                    </label>
+                }
+            }
+
+            // What Jarvis proposed to do, in the owner's own words. Rendered
+            // here rather than inside the agent because the decision is the
+            // one thing in the loop the model must not be able to make.
+            if let Some(c) = (*jarvis_ask).clone() {
+                <ConfirmDialog
+                    title={c.title.clone()}
+                    on_close={{
+                        let jarvis_ask = jarvis_ask.clone();
+                        let decision = c.decision.clone();
+                        Callback::from(move |_: ()| {
+                            // Dismissing is declining. A dialog that resolved
+                            // to "yes" when closed would make the Escape key a
+                            // way to send somebody a message.
+                            *decision.borrow_mut() = Some(false);
+                            jarvis_ask.set(None);
+                        })
+                    }}
+                    footer={{
+                        let yes = {
+                            let jarvis_ask = jarvis_ask.clone();
+                            let decision = c.decision.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                *decision.borrow_mut() = Some(true);
+                                jarvis_ask.set(None);
+                            })
+                        };
+                        let no = {
+                            let jarvis_ask = jarvis_ask.clone();
+                            let decision = c.decision.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                *decision.borrow_mut() = Some(false);
+                                jarvis_ask.set(None);
+                            })
+                        };
+                        html! {
+                            <>
+                                <button type="button" class="topcoat-button" onclick={no}>
+                                    { t(lang, Key::cancel) }
+                                </button>
+                                <button type="button"
+                                        class="topcoat-button--cta topcoat-button--cta-primary"
+                                        onclick={yes}>
+                                    { t(lang, Key::jarvis_approve) }
+                                </button>
+                            </>
+                        }
+                    }}
+                >
+                    <dl class="fn-jarvis-confirm">
+                        { for c.lines.iter().map(|(k, v)| html! {
+                            <>
+                                if !k.is_empty() {
+                                    <dt>{ k }</dt>
+                                }
+                                <dd class={if k.is_empty() { "fn-jarvis-confirm__body" } else { "" }}>
+                                    { v }
+                                </dd>
+                            </>
+                        }) }
+                    </dl>
+                </ConfirmDialog>
             }
 
             <Composer

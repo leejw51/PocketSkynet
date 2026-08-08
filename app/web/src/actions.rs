@@ -152,156 +152,21 @@ pub async fn refresh_rooms(store: Store) {
 
 /// Ask the user's own AI for an answer in "My Jarvis", and post it there.
 ///
-/// # The shape of this, and where each half runs
-///
-/// The model call is made **here, in the browser**, with a key that lives in
-/// this device's `localStorage` and is sent to the provider and to nobody else
-/// — the position `docs/SEARCH.md` §5 already established for every AI surface
-/// in the product. The server's only involvement is writing the answer down
-/// under the agent's address, because a browser cannot claim a `senderAddress`
-/// that is not its own wallet.
-///
-/// # Failures are silent on purpose
-///
-/// Every early return below is a *nothing happens* rather than a toast. Two
-/// reasons. A missing provider key is the ordinary state of a fresh install,
-/// and a toast on every message in a room the user is using as a notepad would
-/// be nagging, not information — the room's own empty state says where to put
-/// a key instead. And a provider error is somebody else's outage: it is worth
-/// a line in the console, but posting "the provider answered HTTP 500" into a
-/// chatroom would leave a permanent message in a persistent transcript that the
-/// user then has to delete.
-///
-/// # Why `question` is passed in rather than read back
-///
-/// This runs inside the `spawn_local` that follows the send, holding the
-/// `Store` handle the enclosing render captured — a *snapshot*, frozen at that
-/// render. The message just sent was dispatched into the reducer, but the
-/// reducer's next state is only visible to a *later* render's handle, never to
-/// this one. So `store.room_state(...)` here does not contain the question, and
-/// an earlier version of this function read that stale history, found its last
-/// turn was the previous agent reply, and silently returned — the agent almost
-/// never answered. The question is therefore handed in explicitly and appended
-/// as the trailing user turn, which is the same trick `banker.rs` uses for its
-/// own post-dispatch snapshot. The surrounding history is still read from the
-/// snapshot, which is correct: it is every message up to but not including this
-/// one, i.e. exactly the context.
-pub async fn jarvis_reply(store: Store, room_id: RoomId, question: String) {
-    let settings = crate::ai::AiSettings::load();
-    let (Some(provider), Some(me)) = (settings.text_provider(), store.me().cloned()) else {
-        return;
-    };
-    let key = settings.key_for(provider).unwrap_or_default().to_owned();
-
-    // The agent's own address, derived the same way the server derives it —
-    // which is what lets the transcript be split into two sides without the
-    // client having to be told which member is the machine.
-    let agent = WalletAddress::agent_of(&me);
-    // My Jarvis keys like any other room now, but there is still only one
-    // real party to it, so this device's own bundle is always the one that
-    // matters — nothing here waits on anybody else's key.
-    let bundle = store.bundle(&room_id).cloned();
-    let mut lines: Vec<crate::jarvis::RoomLine> = match store.room_state(&room_id) {
-        Some(state) => state
-            .ordered(&store.blocks)
-            .iter()
-            .filter(|m| !m.is_deleted)
-            .filter_map(|m| {
-                let text = match &bundle {
-                    Some(bundle) => crypto::decrypt_message(bundle, &room_id, m)
-                        .text()
-                        .map(str::to_owned),
-                    // No bundle on this device yet (key not established, or
-                    // not fetched): a plaintext row still reads fine, a
-                    // sealed one is silently dropped from context rather than
-                    // handed to the model as ciphertext.
-                    None => (!m.is_encrypted).then(|| m.content.clone()),
-                };
-                text.map(|text| crate::jarvis::RoomLine {
-                    from_agent: m.sender_address == agent,
-                    text,
-                })
-            })
-            .collect(),
-        None => Vec::new(),
-    };
-    // The just-sent question, which the snapshot above cannot see. Appended
-    // only when the snapshot does not already end with it, so a stray
-    // re-render that *did* capture it cannot make the model read the question
-    // twice.
-    if lines
-        .last()
-        .map(|l| l.from_agent || l.text != question)
-        .unwrap_or(true)
-    {
-        lines.push(crate::jarvis::RoomLine {
-            from_agent: false,
-            text: question,
-        });
-    }
-
-    let turns = crate::jarvis::turns(&lines);
-    // With the question guaranteed above, the only way the transcript still
-    // ends on a non-user turn is an empty question — nothing to answer.
-    if turns.last().map(|t| !t.user).unwrap_or(true) {
-        return;
-    }
-
-    let system = crate::jarvis::system_prompt(&crate::jarvis::AgentContext {
-        owner: store
-            .room(&room_id)
-            .and_then(|r| r.members.iter().find(|m| m.user_address == me))
-            .map(|m| m.user.display_name())
-            .unwrap_or_else(|| me.abbreviated()),
-        lang: store.language,
-    });
-
-    let raw = match crate::ai::generate_chat(provider, &key, &system, &turns).await {
-        Ok(reply) => reply,
-        Err(e) => {
-            web_sys::console::warn_1(&format!("jarvis: {e}").into());
-            return;
-        }
-    };
-    let Some(text) = crate::jarvis::reply_to_post(&raw) else {
-        return;
-    };
-
-    // Seal the reply exactly as the composer would seal the question — under
-    // the room's current epoch, with the key this same device just read the
-    // transcript with. A room meant to be encrypted (`has_encryption`) but
-    // missing its key on this device is left alone rather than posted in the
-    // clear: silently downgrading an E2EE room is the one outcome the rest of
-    // the product refuses to produce (DESIGN.md §8), and this is that room's
-    // one and only writer.
-    let has_encryption = store.room(&room_id).is_some_and(|r| r.has_encryption);
-    let body = if has_encryption {
-        let Some((version, room_key)) = bundle.as_ref().and_then(|b| b.latest()) else {
-            web_sys::console::warn_1(
-                &"jarvis: room is encrypted but no key is available yet, dropping reply".into(),
-            );
-            return;
-        };
-        match crypto::encrypted_body(room_key, version, &room_id, &text) {
-            Ok(sealed) => crate::api::messages::AgentReplyBody::from(sealed),
-            Err(e) => {
-                web_sys::console::warn_1(&format!("jarvis: couldn't seal reply: {e}").into());
-                return;
-            }
-        }
-    } else {
-        crate::api::messages::AgentReplyBody::from(crypto::plaintext_body(&text))
-    };
-
-    match store.client.agent_reply(&room_id, &body).await {
-        // The reply lands in the room like any other message: same store
-        // action, same rendering, same `/sync` cursor. Nothing downstream has
-        // to know an agent wrote it.
-        Ok(message) => store.dispatch(Action::Sync(room_id, vec![message])),
-        Err(e) => {
-            web_sys::console::warn_1(&format!("jarvis reply rejected: {}", e.user_message()).into())
-        }
-    }
+/// The implementation moved to [`crate::jarvis_run`] when the agent grew
+/// tools: answering is no longer one request but a loop that may search the
+/// owner's rooms, read their note or reach the chain in between. What stayed
+/// behind is the reason it lives on the client at all — the model call is
+/// made in the browser with a key `localStorage` holds and the provider is
+/// the only other party to it (`docs/SEARCH.md` §5), and the server's whole
+/// involvement is writing the answer down under the agent's address, because
+/// a browser cannot claim a `senderAddress` that is not its own wallet.
+pub async fn jarvis_reply(
+    store: Store,
+    room_id: RoomId,
+    question: String,
+    ui: crate::jarvis_run::Ui,
+) {
+    crate::jarvis_run::reply(store, room_id, question, ui).await
 }
 
 /// Redeem an invite-link token into membership and land in the room
