@@ -236,10 +236,23 @@ async fn a_body_larger_than_one_hundred_kilobytes_is_refused() {
     let body = json!({ "content": filler, "msgHash": crypto::sha256_hex(b"x") }).to_string();
     assert!(body.len() > 100 * 1024);
 
-    let resp = alice
+    // Refusal has two correct spellings over a real socket: a 413, or the
+    // connection torn down before the client can read one — the server answers
+    // off `Content-Length` without reading the body, and closing a socket with
+    // unread bytes is an RST on Linux (see `Api::try_post_raw`). Asserting only
+    // the first made this test a coin flip on CI.
+    //
+    // The status itself is pinned deterministically, in process and off the
+    // wire, by `routes::tests::an_oversized_body_is_refused_before_it_is_parsed`.
+    // What is left for this one is the part only a real socket can show: that
+    // when the server *does* answer, it answers 413 and says nothing internal.
+    let Some(resp) = alice
         .api
-        .post_raw(&format!("/api/rooms/{room}/messages"), body)
-        .await;
+        .try_post_raw(&format!("/api/rooms/{room}/messages"), body)
+        .await
+    else {
+        return;
+    };
 
     assert_eq!(
         resp.code(),
@@ -252,17 +265,49 @@ async fn a_body_larger_than_one_hundred_kilobytes_is_refused() {
 }
 
 #[tokio::test]
+async fn a_request_that_never_reaches_a_server_is_reported_not_panicked() {
+    // The safety net under both body-limit tests: `try_post_raw` has to turn a
+    // transport failure into `None`. If it ever goes back to panicking, those
+    // two go back to being coin flips — and since the race only resolves the
+    // losing way on Linux, the next person would watch CI fail on a suite that
+    // passes on their laptop, which is exactly how this one was found.
+    //
+    // A port bound and immediately released is the cheapest guaranteed-dead
+    // address: connecting to it is refused rather than left hanging.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a throwaway port");
+    let port = listener.local_addr().expect("read the port back").port();
+    drop(listener);
+
+    let api = Api::anonymous(&format!("http://127.0.0.1:{port}"));
+
+    assert!(
+        api.try_post_raw("/api/rooms", "{}".to_string())
+            .await
+            .is_none(),
+        "a refused connection must come back as None, not as a Resp or a panic"
+    );
+}
+
+#[tokio::test]
 async fn an_oversized_body_does_not_break_the_connection_for_later_requests() {
     let server = TestServer::start().await;
     let alice = new_user(&server, "alice").await;
     let room = create_room(&alice.api, "recovery").await;
     let huge = json!({ "content": "x".repeat(200 * 1024), "msgHash": crypto::sha256_hex(b"x") });
 
-    alice
+    // Whatever this returns is deliberately discarded, including the case
+    // where it returns nothing at all: the server is entitled to refuse an
+    // oversized body by resetting the connection rather than by answering on
+    // it, and this test is not the one that decides which. Panicking on that
+    // reset — which `post_raw` does — asserted a property the test never
+    // meant to make, and failed on CI for it.
+    let _ = alice
         .api
-        .post_raw(&format!("/api/rooms/{room}/messages"), huge.to_string())
+        .try_post_raw(&format!("/api/rooms/{room}/messages"), huge.to_string())
         .await;
 
+    // The actual claim, and the whole reason this test exists: whatever
+    // happened to *that* connection, the next request still gets through.
     send_message(&alice.api, &room, "still working").await;
 }
 
