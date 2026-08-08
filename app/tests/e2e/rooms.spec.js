@@ -26,8 +26,7 @@ const { BASE, signIn, channel, walletFor } = require("./helpers");
 // A fresh label per run, so a rerun never signs in as a user another run
 // already gave rooms — the sidebar counts have to be facts, not leftovers.
 let counter = 0;
-const freshLabel = (tag) =>
-  `${tag}-${Date.now().toString(36)}-${counter++}`;
+const freshLabel = (tag) => `${tag}-${Date.now().toString(36)}-${counter++}`;
 
 // Reused from rerender.spec.js — the real sign-in flow, no shortcut. Optionally
 // seeds localStorage before the app boots, which is how the AI key gets in
@@ -91,10 +90,14 @@ test.describe("built-in rooms", () => {
 
     // All three arrive without anybody creating them.
     for (const name of ["My Note", "My Jarvis", "My Lobby"]) {
-      await expect(roomList(page).locator(`[data-name="${name}"]`)).toHaveCount(1);
+      await expect(roomList(page).locator(`[data-name="${name}"]`)).toHaveCount(
+        1,
+      );
     }
     // …and so does the channel.
-    await expect(roomList(page).locator(`[data-name="${chanName}"]`)).toHaveCount(1);
+    await expect(
+      roomList(page).locator(`[data-name="${chanName}"]`),
+    ).toHaveCount(1);
 
     // The built-in three are pinned first, ahead of the channel.
     // `data-name` is on the option element itself, not a descendant.
@@ -112,9 +115,9 @@ test.describe("built-in rooms", () => {
     // is uppercased by CSS `text-transform`, which `innerText` reflects: the
     // content is "My rooms", the render is "MY ROOMS", and it is the content
     // this test is about.
-    const headingText = (await page.locator(".fn-room-section").allInnerTexts()).map(
-      (h) => h.toLowerCase(),
-    );
+    const headingText = (
+      await page.locator(".fn-room-section").allInnerTexts()
+    ).map((h) => h.toLowerCase());
     expect(headingText[0]).toBe("my rooms");
     expect(headingText).toContain("channels");
   });
@@ -241,7 +244,9 @@ test.describe("built-in rooms", () => {
     const replyRow = page
       .locator(".fn-msg")
       .filter({ has: page.locator(".fn-bubble", { hasText: answer }) });
-    await expect(replyRow.locator(".fn-badge", { hasText: "AI" })).toBeVisible();
+    await expect(
+      replyRow.locator(".fn-badge", { hasText: "AI" }),
+    ).toBeVisible();
 
     // (d) THE REGRESSION GUARD. The stale-snapshot bug asked the model the
     // wrong turn. The last user message in the request the client actually sent
@@ -278,6 +283,8 @@ test.describe("built-in rooms", () => {
       page.locator(".fn-bubble").getByText(line, { exact: true }),
     ).toBeVisible({ timeout: 10_000 });
     await page.waitForTimeout(1500);
-    await expect(page.locator(".fn-msg .fn-badge", { hasText: "AI" })).toHaveCount(0);
+    await expect(
+      page.locator(".fn-msg .fn-badge", { hasText: "AI" }),
+    ).toHaveCount(0);
   });
 });
