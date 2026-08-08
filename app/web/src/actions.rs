@@ -1213,12 +1213,12 @@ pub fn sign_out(store: &Store) {
 /// `Blob::size` hands back for the same reason.
 pub const MAX_ATTACHMENT_BYTES: f64 = crate::api::uploads::MAX_UPLOAD_BYTES;
 
-/// Attach a file to a room.
-///
-/// `caption` is whatever was in the composer when the file was picked — that is
-/// how an attachment gets its `#hashtags`, and it is why there is no separate
-/// tagging dialog. An empty caption is fine: the filename is indexed too, so an
-/// untagged attachment is still findable.
+/// How many files one pick may carry into a single message. Chosen to keep a
+/// message's attachment list readable, and to stay comfortably under the
+/// server's `MAX_OPEN_SESSIONS` (8 open uploads per wallet at once —
+/// `routes/uploads.rs`), since uploads here run one at a time anyway.
+pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;
+
 /// Save an attachment to disk, by handing the browser a URL it can fetch
 /// itself.
 ///
@@ -1393,106 +1393,154 @@ fn end_transfer(store: &Store, id: u64, succeeded: bool) {
     });
 }
 
-/// Takes the `web_sys::File` **handle**, not its bytes, and that is the whole
+/// Takes `web_sys::File` **handles**, not their bytes, and that is the whole
 /// change: a handle is a reference to something on disk, so nothing here ever
-/// holds the file. `upload_in_chunks` reads it a slice at a time.
-pub async fn attach_file(store: Store, room_id: RoomId, picked: web_sys::File, caption: String) {
+/// holds a file. `upload_in_chunks` reads each one a slice at a time.
+///
+/// `caption` is whatever was in the composer when the files were picked —
+/// that is how an attachment gets its `#hashtags`, and it is why there is no
+/// separate tagging dialog. An empty caption is fine: the filename is
+/// indexed too, so an untagged attachment is still findable. Shared by every
+/// file in this pick, and applied both to each file's own metadata and once
+/// to the front of the message body they end up in.
+///
+/// Uploads run one at a time, in pick order — not concurrently — which keeps
+/// this under the server's per-wallet open-session cap (see
+/// [`MAX_ATTACHMENTS_PER_MESSAGE`]) and gives the transfer rail a stable,
+/// readable order rather than N bars racing.
+pub async fn attach_files(
+    store: Store,
+    room_id: RoomId,
+    mut picked: Vec<web_sys::File>,
+    caption: String,
+) {
     let lang = store.language;
-    let filename = picked.name();
-    let size = picked.size();
 
-    if size <= 0.0 {
-        toast::error(&store, t(lang, Key::attach_read_failed), None);
-        return;
-    }
-    if size > MAX_ATTACHMENT_BYTES {
-        // Checked before the request: the server would refuse it anyway, but
-        // only after the upload had finished, which is the worst moment to be
-        // told a file was never going to work.
-        toast::error(&store, t(lang, Key::attach_too_large), None);
-        return;
+    if picked.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+        picked.truncate(MAX_ATTACHMENTS_PER_MESSAGE);
+        toast::error(
+            &store,
+            t(lang, Key::attach_too_many)
+                .replace("{max}", &MAX_ATTACHMENTS_PER_MESSAGE.to_string()),
+            None,
+        );
     }
 
-    let transfer_id = crate::state::next_local_id();
-    store.dispatch(Action::TransferStarted(crate::state::Transfer {
-        id: transfer_id,
-        name: filename.clone(),
-        direction: crate::state::TransferDirection::Upload,
-        stage: crate::state::TransferStage::Checksum,
-        done: 0.0,
-        total: size,
-    }));
+    let mut urls = Vec::with_capacity(picked.len());
+    for file in picked {
+        let filename = file.name();
+        let size = file.size();
 
-    let progress_store = store.clone();
-    let result = store
-        .client
-        .upload_in_chunks(
-            &picked,
-            crate::api::uploads::Target::File {
-                room_id: room_id.as_str().to_owned(),
-                caption: caption.clone(),
-            },
-            move |p| {
-                progress_store.dispatch(Action::TransferProgress {
-                    id: transfer_id,
-                    done: p.done,
-                    stage: match p.phase {
-                        crate::api::uploads::Phase::Checksum => {
-                            crate::state::TransferStage::Checksum
-                        }
-                        crate::api::uploads::Phase::Upload => crate::state::TransferStage::Moving,
-                    },
-                });
-            },
-        )
-        .await;
-
-    // The bar comes down on every path, including the failures. A progress row
-    // that outlives its transfer is worse than none: it says something is still
-    // happening when nothing is.
-    end_transfer(&store, transfer_id, result.is_ok());
-
-    let file = match result.and_then(|v| {
-        serde_json::from_value::<crate::api::types::FileMeta>(v)
-            .map_err(|e| crate::api::ApiError::Decode(e.to_string()))
-    }) {
-        Ok(file) => file,
-        Err(e) => {
-            toast::error(&store, e.user_message(), None);
-            return;
+        if size <= 0.0 {
+            toast::error(&store, t(lang, Key::attach_read_failed), None);
+            continue;
         }
-    };
-
-    toast::success(
-        &store,
-        t(lang, Key::attach_uploaded).replace("{name}", &file.filename),
-    );
-
-    // A video gets its poster frame here, captured from the same handle that
-    // was just uploaded — the browser has the codec, the server deliberately
-    // does not (`capture.rs`). *Before* the message is posted, so the bubble's
-    // first render already finds the thumbnail; and entirely best-effort, so
-    // a codec the browser cannot seek costs nothing but the poster.
-    if crate::capture::is_video_file(&picked) {
-        if let Some(frame) = crate::capture::video_frame(&picked).await {
-            let _ = store.client.upload_thumbnail(&file.id, frame).await;
+        if size > MAX_ATTACHMENT_BYTES {
+            // Checked before the request: the server would refuse it anyway,
+            // but only after the upload had finished, which is the worst
+            // moment to be told a file was never going to work.
+            toast::error(&store, t(lang, Key::attach_too_large), None);
+            continue;
         }
+
+        let transfer_id = crate::state::next_local_id();
+        store.dispatch(Action::TransferStarted(crate::state::Transfer {
+            id: transfer_id,
+            name: filename.clone(),
+            direction: crate::state::TransferDirection::Upload,
+            stage: crate::state::TransferStage::Checksum,
+            done: 0.0,
+            total: size,
+        }));
+
+        let progress_store = store.clone();
+        let result = store
+            .client
+            .upload_in_chunks(
+                &file,
+                crate::api::uploads::Target::File {
+                    room_id: room_id.as_str().to_owned(),
+                    caption: caption.clone(),
+                },
+                move |p| {
+                    progress_store.dispatch(Action::TransferProgress {
+                        id: transfer_id,
+                        done: p.done,
+                        stage: match p.phase {
+                            crate::api::uploads::Phase::Checksum => {
+                                crate::state::TransferStage::Checksum
+                            }
+                            crate::api::uploads::Phase::Upload => {
+                                crate::state::TransferStage::Moving
+                            }
+                        },
+                    });
+                },
+            )
+            .await;
+
+        // The bar comes down on every path, including the failures. A
+        // progress row that outlives its transfer is worse than none: it
+        // says something is still happening when nothing is.
+        end_transfer(&store, transfer_id, result.is_ok());
+
+        let meta = match result.and_then(|v| {
+            serde_json::from_value::<crate::api::types::FileMeta>(v)
+                .map_err(|e| crate::api::ApiError::Decode(e.to_string()))
+        }) {
+            Ok(meta) => meta,
+            Err(e) => {
+                toast::error(&store, e.user_message(), None);
+                continue;
+            }
+        };
+
+        toast::success(
+            &store,
+            t(lang, Key::attach_uploaded).replace("{name}", &meta.filename),
+        );
+
+        // A video gets its poster frame here, captured from the same handle
+        // that was just uploaded — the browser has the codec, the server
+        // deliberately does not (`capture.rs`). *Before* the message is
+        // posted, so the bubble's first render already finds the thumbnail;
+        // and entirely best-effort, so a codec the browser cannot seek costs
+        // nothing but the poster.
+        if crate::capture::is_video_file(&file) {
+            if let Some(frame) = crate::capture::video_frame(&file).await {
+                let _ = store.client.upload_thumbnail(&meta.id, frame).await;
+            }
+        }
+
+        urls.push(meta.url);
+    }
+
+    // Nothing made it through — every pick failed a check above, and each of
+    // those already toasted its own reason. Nothing left to post.
+    if urls.is_empty() {
+        return;
     }
 
     // Post it into the room, which is the whole point: an attachment that only
     // exists in the Files drawer is invisible from the conversation, and the
     // first thing anyone reported was "I attached a video and nothing
     // happened". The body is the caption (so its #hashtags stay clickable in
-    // chat) followed by the attachment's own path, which `message.rs` turns
-    // into a card and which is also literally readable — a client that has
-    // never heard of attachments still shows something meaningful.
+    // chat) followed by every attachment's own path, space-separated, which
+    // `message.rs` turns into one card per URL and which is also literally
+    // readable — a client that has never heard of attachments still shows
+    // something meaningful.
+    //
+    // One message for the whole pick, not one per file: ten photos from one
+    // pick belong together in the conversation the way they belonged together
+    // in the picker.
     //
     // Sent through the normal optimistic path, so it queues offline, retries,
     // and encrypts in an encrypted room exactly like any other message.
+    let joined = urls.join(" ");
     let body = if caption.is_empty() {
-        file.url.clone()
+        joined
     } else {
-        format!("{caption} {}", file.url)
+        format!("{caption} {joined}")
     };
     let local_id = crate::state::next_local_id();
     let now = crate::format::now_ms();

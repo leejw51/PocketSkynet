@@ -44,15 +44,17 @@ pub struct ComposerProps {
     /// Opens the AI assistant dialog for this room.
     #[prop_or_default]
     pub on_open_assistant: Callback<()>,
-    /// A file was picked: the browser's handle to it, and whatever was in the
-    /// field at the time, which becomes the caption.
+    /// One or more files were picked: the browser's handles to them, and
+    /// whatever was in the field at the time, which becomes their shared
+    /// caption.
     ///
-    /// The **handle**, deliberately — this used to hand up a `Vec<u8>` so that
-    /// nothing outside the composer touched `web_sys::File`. That encapsulation
-    /// cost the whole file in memory, twice, which a 4 GB cap cannot afford; the
-    /// upload layer now reads it in slices and never holds more than one.
+    /// The **handles**, deliberately — this used to hand up a `Vec<u8>` so
+    /// that nothing outside the composer touched `web_sys::File`. That
+    /// encapsulation cost the whole file in memory, twice, which a 4 GB cap
+    /// cannot afford; the upload layer now reads each one in slices and never
+    /// holds more than one at a time.
     #[prop_or_default]
-    pub on_attach: Callback<(web_sys::File, String)>,
+    pub on_attach: Callback<(Vec<web_sys::File>, String)>,
     /// Opens the Files drawer for this room.
     #[prop_or_default]
     pub on_open_files: Callback<()>,
@@ -269,29 +271,38 @@ pub fn composer(p: &ComposerProps) -> Html {
             let Some(input) = file_input.cast::<web_sys::HtmlInputElement>() else {
                 return;
             };
-            let Some(file) = input.files().and_then(|list| list.get(0)) else {
+            let Some(list) = input.files() else {
                 return;
             };
-            // Clear the input *now*, so picking the same file twice in a row
+            // However many were picked — one or, with `multiple` on the input,
+            // up to a browser-chosen batch; `attach_files` enforces the actual
+            // per-message cap and tells the user if it trimmed the selection.
+            let files: Vec<web_sys::File> =
+                (0..list.length()).filter_map(|i| list.get(i)).collect();
+            if files.is_empty() {
+                return;
+            }
+            // Clear the input *now*, so picking the same file(s) twice in a row
             // still fires `change` the second time.
             input.set_value("");
 
-            // Whatever is in the field becomes the caption, and the field
-            // clears. This is the only way to tag an attachment, and making it
-            // the composer rather than a second dialog is deliberate: type
-            // "#q3 #finance", attach, done. A modal asking for tags after every
-            // pick would be answered with an empty box nine times in ten.
+            // Whatever is in the field becomes the caption, shared by every
+            // file in this pick, and the field clears. This is the only way to
+            // tag an attachment, and making it the composer rather than a
+            // second dialog is deliberate: type "#q3 #finance", attach, done. A
+            // modal asking for tags after every pick would be answered with an
+            // empty box nine times in ten.
             let caption = text.trim().to_owned();
             text.set(String::new());
 
-            // The handle goes up, not the bytes. `array_buffer()` on the whole
+            // The handles go up, not the bytes. `array_buffer()` on the whole
             // file used to happen here, which put the entire attachment in the
             // wasm heap — and then `Uint8Array::from` put a second copy beside
             // it. At 25 MB that was merely wasteful; the cap is 4 GB now, which
-            // is the *entire* wasm32 address space, so reading the file here
+            // is the *entire* wasm32 address space, so reading a file here
             // would be the one line that makes a large upload impossible.
-            // `crate::api::uploads` reads it a slice at a time instead.
-            on_attach.emit((file, caption));
+            // `crate::api::uploads` reads each one a slice at a time instead.
+            on_attach.emit((files, caption));
         })
     };
 
@@ -403,6 +414,7 @@ pub fn composer(p: &ComposerProps) -> Html {
             <input
                 ref={file_input.clone()}
                 type="file"
+                multiple=true
                 class="fn-sr-only"
                 tabindex="-1"
                 aria-hidden="true"
