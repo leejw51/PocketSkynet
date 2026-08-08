@@ -1,17 +1,30 @@
 //! Skynet Password — the encrypted key/value store (docs/API.md §18).
 //!
-//! A list, a form and a generator. Everything the screen shows was decrypted
-//! here, in this tab, from a key derived off the session's E2EE identity; the
+//! A list, a form and a generator. The list shows each entry's **label**,
+//! decrypted here from a key derived off the session's E2EE identity; the
 //! server saw six opaque strings per row and nothing else. The honest account
 //! of what that does and does not buy lives in [`crate::secrets`] and in
 //! `core/src/secrets.rs` — this module is the part people touch.
 //!
+//! # Decrypted values are opened late and dropped early
+//!
+//! The security rule this component is shaped around (see [`crate::secrets`]):
+//! a decrypted *value* is never cached, never held in a list, never persisted.
+//! So the list is built from **labels only**, and the label pass is memoised so
+//! it runs once per fetch rather than once per keystroke. A **value** is opened
+//! only at the instant the user reveals or copies one entry, and the plaintext
+//! is dropped the moment the reveal is collapsed or the copy completes — it is
+//! never stored beside the label. The residue that cannot be removed — a value
+//! briefly in the heap while it is on screen, and the plaintext in the input
+//! field while it is being typed — is exactly that; everything else is
+//! minimized.
+//!
 //! # Three decisions worth stating
 //!
-//! **Secrets are masked until asked for.** A password manager whose list shows
+//! **Values are masked until asked for.** A password manager whose list shows
 //! every password is a screenshot waiting to happen, and the person most likely
 //! to read yours is standing behind you, not attacking your server. Reveal is
-//! per entry and resets on any other action.
+//! per entry and single-valued: showing one hides the last.
 //!
 //! **The generator can refuse.** If the browser has no CSPRNG,
 //! [`pocketskynet_core::password::generate`] returns an error and this screen
@@ -27,6 +40,7 @@
 //! never happened.
 
 use pocketskynet_core::password::{self, Recipe, MAX_LENGTH, MIN_LENGTH};
+use pocketskynet_core::secrets::{VaultKey, MAX_SECRET_BYTES};
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
@@ -34,10 +48,10 @@ use crate::api::passwords::PasswordEntry;
 use crate::format;
 use crate::i18n::{t, Key, Lang};
 use crate::route::Route;
-use crate::secrets::{Opened, SecretEntry, Vault};
+use crate::secrets::{sealed_labels, Opened, SealError, SecretLabel, Vault};
 use crate::state::use_store;
 
-use super::common::{Back, Empty};
+use super::common::{Back, Empty, Spinner};
 use super::icons;
 use super::toast;
 
@@ -82,9 +96,9 @@ pub fn passwords(p: &PasswordsProps) -> Html {
     let store = use_store();
     let lang = store.language;
 
-    // The rows as the server holds them. Kept sealed in state and opened on
-    // render, so a lock/unlock in another tab changes what is readable without
-    // this component having to re-fetch.
+    // The rows as the server holds them — ciphertext, and only ciphertext, in
+    // state. Opening them into labels happens in the memo below; opening a
+    // value happens on demand, in a handler, and is never stored here.
     let rows = use_state(Vec::<PasswordEntry>::new);
     let loading = use_state(|| true);
     let filter = use_state(String::new);
@@ -95,10 +109,11 @@ pub fn passwords(p: &PasswordsProps) -> Html {
     let busy = use_state(|| false);
     let error = use_state(|| Option::<String>::None);
 
-    // Which entry's secret is on screen, and which one's Remove is armed. Both
-    // are single-valued: revealing a second secret hides the first, which is
-    // the behaviour somebody reading over your shoulder is least helped by.
-    let revealed = use_state(|| Option::<String>::None);
+    // The one revealed value, decrypted on demand and held only while it is on
+    // screen. `(id, opened)` — single-valued, so revealing a second entry drops
+    // the first's plaintext, and collapsing sets it back to `None`. This is the
+    // *only* place a decrypted value lives, and it lives here transiently.
+    let revealed = use_state(|| Option::<(String, Opened)>::None);
     let arming = use_state(|| Option::<String>::None);
 
     let gen_open = use_state(|| false);
@@ -134,20 +149,31 @@ pub fn passwords(p: &PasswordsProps) -> Html {
         });
     }
 
-    // The vault exists only while the session is unlocked. `None` is the
-    // locked state: the rows are still fetched and still listed, they simply
-    // cannot be opened — the same shape an encrypted room's sealed bubbles
-    // take, and for the same reason (`crate::session`).
-    let vault = store
-        .auth
-        .session()
-        .map(|s| Vault::for_session(&s.keys.borrow()));
+    // The vault key for this session, or `None` when locked. Cloned once here
+    // rather than re-borrowed per handler — it is two subkeys, held in process
+    // memory for the tab's life and never persisted (`crate::session`).
+    let vault_key: Option<VaultKey> = store.auth.session().map(|s| s.keys.borrow().vault_key());
+    let locked = vault_key.is_none();
 
-    let entries: Vec<SecretEntry> = match &vault {
-        Some(v) => v.open_all(&rows),
-        None => Vec::new(),
+    // Decrypt the labels once per fetch, not once per render.
+    //
+    // Every keystroke in the filter or the form re-renders this component. The
+    // label pass is behind `use_memo` keyed on the rows' identity (id +
+    // `updated_at`, which an edit advances) and the lock state, so it reruns
+    // only when the list actually changes or the session unlocks — not on every
+    // character typed. Values are deliberately *not* in here; see the module
+    // docs.
+    let fingerprint: Vec<(String, i64)> =
+        rows.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
+    let labels = {
+        let rows = rows.clone();
+        let vault_key = vault_key.clone();
+        use_memo((fingerprint, locked), move |_| match &vault_key {
+            Some(k) => Vault::from_key(k.clone()).labels(&rows),
+            None => sealed_labels(&rows),
+        })
     };
-    let visible: Vec<&SecretEntry> = entries.iter().filter(|e| e.matches(&filter)).collect();
+    let visible: Vec<&SecretLabel> = labels.iter().filter(|l| l.matches(&filter)).collect();
 
     let close_draft = {
         let draft = draft.clone();
@@ -183,18 +209,33 @@ pub fn passwords(p: &PasswordsProps) -> Html {
     };
 
     let start_edit = {
+        let store = store.clone();
+        let rows = rows.clone();
+        let vault_key = vault_key.clone();
         let draft = draft.clone();
         let draft_name = draft_name.clone();
         let draft_secret = draft_secret.clone();
         let error = error.clone();
         let revealed = revealed.clone();
-        Callback::from(move |e: SecretEntry| {
-            // Only a readable entry can be edited into: pre-filling the form
-            // with empty strings for a sealed row and saving it would replace
-            // a secret this session cannot read with nothing at all.
-            draft_name.set(e.key.text_or_empty().to_owned());
-            draft_secret.set(e.value.text_or_empty().to_owned());
-            draft.set(Draft::Editing(e.id.clone()));
+        Callback::from(move |id: String| {
+            let (Some(k), Some(row)) = (vault_key.as_ref(), rows.iter().find(|r| r.id == id))
+            else {
+                return;
+            };
+            let vault = Vault::from_key(k.clone());
+            // Both halves must be readable to edit into the form. Prefilling an
+            // unreadable value with the empty string and saving would replace a
+            // secret this session cannot read with nothing at all — so an
+            // unreadable half refuses the edit rather than risking that.
+            let (Opened::Text(name), Opened::Text(secret)) =
+                (vault.open_label(row).key, vault.open_value(row))
+            else {
+                toast::warn(&store, t(store.language, Key::pw_sealed), None);
+                return;
+            };
+            draft_name.set(name);
+            draft_secret.set(secret);
+            draft.set(Draft::Editing(row.id.clone()));
             error.set(None);
             revealed.set(None);
         })
@@ -219,15 +260,21 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                 Err(password::PasswordError::Randomness) => {
                     error.set(Some(t(lang, Key::pw_gen_failed).to_owned()))
                 }
-                Err(password::PasswordError::Length) => {
-                    error.set(Some(t(lang, Key::pw_gen_no_classes).to_owned()))
-                }
+                // Unreachable from this UI — the slider clamps to the valid
+                // range — but if it ever fired, the message has to be about
+                // length, not about character classes.
+                Err(password::PasswordError::Length) => error.set(Some(
+                    t(lang, Key::pw_gen_length_bad)
+                        .replace("{min}", &MIN_LENGTH.to_string())
+                        .replace("{max}", &MAX_LENGTH.to_string()),
+                )),
             }
         })
     };
 
     let save = {
         let store = store.clone();
+        let vault_key = vault_key.clone();
         let draft = draft.clone();
         let draft_name = draft_name.clone();
         let draft_secret = draft_secret.clone();
@@ -248,12 +295,12 @@ pub fn passwords(p: &PasswordsProps) -> Html {
             let editing = draft.editing_id().map(str::to_owned);
 
             // Sealing needs the session keys, which a locked tab does not have.
-            // The button is disabled in that state; this is the backstop.
-            let Some(session) = store.auth.session() else {
+            // The form is not shown when locked; this is the backstop.
+            let Some(k) = vault_key.as_ref() else {
                 error.set(Some(t(lang, Key::pw_locked_desc).to_owned()));
                 return;
             };
-            let vault = Vault::for_session(&session.keys.borrow());
+            let vault = Vault::from_key(k.clone());
 
             let id = match &editing {
                 Some(id) => id.clone(),
@@ -268,9 +315,21 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                 },
             };
 
-            let Ok((sealed_key, sealed_value)) = vault.seal(&id, &name, &secret) else {
-                error.set(Some(t(lang, Key::pw_seal_failed).to_owned()));
-                return;
+            let (sealed_key, sealed_value) = match vault.seal(&id, &name, &secret) {
+                Ok(pair) => pair,
+                // The size cap has its own message — a 5 KB paste is the user's
+                // to shorten, not a broken device.
+                Err(SealError::TooLong) => {
+                    error.set(Some(
+                        t(lang, Key::pw_secret_too_long)
+                            .replace("{max}", &MAX_SECRET_BYTES.to_string()),
+                    ));
+                    return;
+                }
+                Err(SealError::Failed) => {
+                    error.set(Some(t(lang, Key::pw_seal_failed).to_owned()));
+                    return;
+                }
             };
 
             busy.set(true);
@@ -285,23 +344,13 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                     Some(id) => {
                         store
                             .client
-                            .update_password(
-                                id,
-                                &sealed_key,
-                                &sealed_value,
-                                crate::secrets::ENC_VER,
-                            )
+                            .update_password(id, &sealed_key, &sealed_value)
                             .await
                     }
                     None => {
                         store
                             .client
-                            .create_password(
-                                &id,
-                                &sealed_key,
-                                &sealed_value,
-                                crate::secrets::ENC_VER,
-                            )
+                            .create_password(&id, &sealed_key, &sealed_value)
                             .await
                     }
                 };
@@ -328,10 +377,59 @@ pub fn passwords(p: &PasswordsProps) -> Html {
         })
     };
 
-    let remove = {
+    let reveal = {
+        let rows = rows.clone();
+        let vault_key = vault_key.clone();
+        let revealed = revealed.clone();
+        Callback::from(move |id: String| {
+            // Toggle: a second click on the shown entry hides it and drops the
+            // plaintext.
+            if revealed.as_ref().map(|(i, _)| i.as_str()) == Some(id.as_str()) {
+                revealed.set(None);
+                return;
+            }
+            let (Some(k), Some(row)) = (vault_key.as_ref(), rows.iter().find(|r| r.id == id))
+            else {
+                return;
+            };
+            // Decrypt here, at the moment of reveal — not earlier, and not for
+            // any other row.
+            let opened = Vault::from_key(k.clone()).open_value(row);
+            revealed.set(Some((id, opened)));
+        })
+    };
+
+    let copy = {
         let store = store.clone();
         let rows = rows.clone();
+        let vault_key = vault_key.clone();
+        Callback::from(move |id: String| {
+            let (Some(k), Some(row)) = (vault_key.as_ref(), rows.iter().find(|r| r.id == id))
+            else {
+                return;
+            };
+            match Vault::from_key(k.clone()).open_value(row) {
+                Opened::Text(value) => {
+                    let store = store.clone();
+                    // `value` moves into the closure and is dropped once the
+                    // copy settles — never stored.
+                    super::common::copy_then(&value, move |ok| {
+                        if ok {
+                            toast::success(&store, t(store.language, Key::pw_copied));
+                        } else {
+                            toast::warn(&store, t(store.language, Key::pw_copy_failed), None);
+                        }
+                    });
+                }
+                Opened::Sealed => toast::warn(&store, t(store.language, Key::pw_sealed), None),
+            }
+        })
+    };
+
+    let remove = {
+        let store = store.clone();
         let arming = arming.clone();
+        let reload = reload.clone();
         Callback::from(move |id: String| {
             // First click arms, second fires — the same two-step the Publish
             // wall uses. A modal for a one-row delete is heavier than the act.
@@ -341,12 +439,16 @@ pub fn passwords(p: &PasswordsProps) -> Html {
             }
             arming.set(None);
             let store = store.clone();
-            let rows = rows.clone();
+            let reload = reload.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match store.client.delete_password(&id).await {
                     Ok(()) => {
                         toast::neutral(&store, t(store.language, Key::pw_removed));
-                        rows.set(rows.iter().filter(|r| r.id != id).cloned().collect());
+                        // Refetch rather than splice the pre-await snapshot: two
+                        // overlapping deletes would each rewrite a stale list
+                        // and one could reappear. The authoritative list is one
+                        // request away, and the server is already correct.
+                        reload.emit(());
                     }
                     Err(e) => toast::error(
                         &store,
@@ -358,23 +460,6 @@ pub fn passwords(p: &PasswordsProps) -> Html {
         })
     };
 
-    let copy = {
-        let store = store.clone();
-        Callback::from(move |text: String| {
-            let store = store.clone();
-            super::common::copy_then(&text, move |ok| {
-                if ok {
-                    toast::success(&store, t(store.language, Key::pw_copied));
-                } else {
-                    // No clipboard here. Do not claim one — point at the
-                    // reveal button, which always works.
-                    toast::warn(&store, t(store.language, Key::pw_copy_failed), None);
-                }
-            });
-        })
-    };
-
-    let locked = vault.is_none();
     let now = format::now_ms();
 
     html! {
@@ -405,11 +490,14 @@ pub fn passwords(p: &PasswordsProps) -> Html {
             </div>
 
             if locked {
-                <Empty
-                    art="🔒"
-                    title={t(lang, Key::pw_locked)}
-                    description={t(lang, Key::pw_locked_desc)}
-                />
+                // Locked is a *listing*, not a wall: the rows below still show,
+                // sealed, with delete. This banner explains why, and how to
+                // turn the seals into text.
+                <p class="fn-pw__lockednote">
+                    { icons::lock(14) }
+                    { " " }
+                    { t(lang, Key::pw_locked_desc) }
+                </p>
             } else {
                 <section class="fn-pw__form" aria-label={t(lang, Key::pw_add)}>
                     if draft.is_open() {
@@ -428,44 +516,45 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                         </button>
                     }
                 </section>
-
-                <section class="fn-pw__list" aria-label={t(lang, Key::pw_title)}>
-                    <div class="fn-pw__filterrow">
-                        <input
-                            class="topcoat-search-input fn-grow"
-                            type="search"
-                            placeholder={t(lang, Key::pw_filter)}
-                            value={(*filter).clone()}
-                            oninput={{
-                                let filter = filter.clone();
-                                Callback::from(move |e: InputEvent| {
-                                    let el: HtmlInputElement = e.target_unchecked_into();
-                                    filter.set(el.value());
-                                })
-                            }}
-                        />
-                        <span class="fn-pw__count">
-                            { t(lang, Key::pw_count).replace("{n}", &entries.len().to_string()) }
-                        </span>
-                    </div>
-
-                    if *loading {
-                        <div class="fn-pw__loading"><span class="fn-spinner" aria-hidden="true" /></div>
-                    } else if visible.is_empty() {
-                        <Empty
-                            art="🔑"
-                            title={t(lang, Key::pw_empty)}
-                            description={t(lang, Key::pw_empty_desc)}
-                        />
-                    } else {
-                        <ul class="fn-pw__rows">
-                            { for visible.iter().map(|e| entry_card(
-                                lang, e, now, &revealed, &arming, &remove, &copy, &start_edit,
-                            )) }
-                        </ul>
-                    }
-                </section>
             }
+
+            <section class="fn-pw__list" aria-label={t(lang, Key::pw_title)}>
+                <div class="fn-pw__filterrow">
+                    <input
+                        class="topcoat-search-input fn-grow"
+                        type="search"
+                        placeholder={t(lang, Key::pw_filter)}
+                        value={(*filter).clone()}
+                        oninput={{
+                            let filter = filter.clone();
+                            Callback::from(move |e: InputEvent| {
+                                let el: HtmlInputElement = e.target_unchecked_into();
+                                filter.set(el.value());
+                            })
+                        }}
+                    />
+                    <span class="fn-pw__count">
+                        { t(lang, Key::pw_count).replace("{n}", &labels.len().to_string()) }
+                    </span>
+                </div>
+
+                if *loading {
+                    <div class="fn-pw__loading"><Spinner /></div>
+                } else if visible.is_empty() {
+                    <Empty
+                        art="🔑"
+                        title={t(lang, Key::pw_empty)}
+                        description={t(lang, Key::pw_empty_desc)}
+                    />
+                } else {
+                    <ul class="fn-pw__rows">
+                        { for visible.iter().map(|label| entry_card(
+                            lang, label, now, &revealed, &arming,
+                            &remove, &copy, &reveal, &start_edit,
+                        )) }
+                    </ul>
+                }
+            </section>
         </div>
         </>
     }
@@ -497,6 +586,7 @@ fn draft_form(
                     class="topcoat-text-input fn-grow"
                     type="text"
                     autocomplete="off"
+                    maxlength={MAX_SECRET_BYTES.to_string()}
                     placeholder={t(lang, Key::pw_name_placeholder)}
                     value={(**name).clone()}
                     disabled={**busy}
@@ -523,6 +613,10 @@ fn draft_form(
                     autocomplete="off"
                     spellcheck="false"
                     autocapitalize="off"
+                    // A soft cap matching the seal's byte limit. The seal
+                    // re-checks bytes (a maxlength counts UTF-16 units), so this
+                    // only spares the common case a round trip to a refusal.
+                    maxlength={MAX_SECRET_BYTES.to_string()}
                     placeholder={t(lang, Key::pw_secret_placeholder)}
                     value={(**secret).clone()}
                     disabled={**busy}
@@ -656,27 +750,35 @@ fn class_toggle(
     }
 }
 
-/// One stored entry.
+/// One stored entry, rendered from its label.
+///
+/// The value is not on the label — it is decrypted on demand into `revealed`
+/// when this entry is shown, and read from there. An entry whose label is
+/// sealed (a foreign wallet's row, or a locked session) offers only delete.
 #[allow(clippy::too_many_arguments)]
 fn entry_card(
     lang: Lang,
-    entry: &SecretEntry,
+    label: &SecretLabel,
     now: i64,
-    revealed: &UseStateHandle<Option<String>>,
+    revealed: &UseStateHandle<Option<(String, Opened)>>,
     arming: &UseStateHandle<Option<String>>,
     remove: &Callback<String>,
     copy: &Callback<String>,
-    start_edit: &Callback<SecretEntry>,
+    reveal: &Callback<String>,
+    start_edit: &Callback<String>,
 ) -> Html {
-    let is_revealed = revealed.as_ref() == Some(&entry.id);
-    let armed = arming.as_ref() == Some(&entry.id);
-    let readable = entry.is_readable();
+    let is_revealed = revealed.as_ref().map(|(i, _)| i.as_str()) == Some(label.id.as_str());
+    let revealed_value = is_revealed
+        .then(|| revealed.as_ref().map(|(_, o)| o.clone()))
+        .flatten();
+    let armed = arming.as_ref() == Some(&label.id);
+    let readable = label.is_readable();
 
     html! {
-        <li class="fn-hitcard fn-pwcard" key={entry.id.clone()}>
+        <li class="fn-hitcard fn-pwcard" key={label.id.clone()}>
             <div class="fn-pwcard__head">
                 <span class="fn-pwcard__name">
-                    { match &entry.key {
+                    { match &label.key {
                         Opened::Text(k) => html! { { k.clone() } },
                         Opened::Sealed => html! {
                             <em class="fn-pwcard__sealed">{ t(lang, Key::pw_sealed) }</em>
@@ -684,20 +786,27 @@ fn entry_card(
                     } }
                 </span>
                 <time class="fn-hitcard__time">
-                    { format::relative_time(entry.updated_at, now) }
+                    { format::relative_time(label.updated_at, now) }
                 </time>
             </div>
 
             <div class="fn-pwcard__secret">
-                { match (&entry.value, is_revealed) {
-                    (Opened::Text(v), true) => html! {
-                        <code class="fn-pwcard__value">{ v.clone() }</code>
+                { match (readable, revealed_value) {
+                    // Revealed and decrypted: show it.
+                    (true, Some(Opened::Text(v))) => html! {
+                        <code class="fn-pwcard__value">{ v }</code>
                     },
-                    (Opened::Text(_), false) => html! {
+                    // Revealed but the value itself is corrupt.
+                    (true, Some(Opened::Sealed)) => html! {
+                        <em class="fn-pwcard__sealed">{ t(lang, Key::pw_sealed) }</em>
+                    },
+                    // Readable label, value not revealed: a fixed-width mask.
+                    (true, None) => html! {
                         <code class="fn-pwcard__value fn-pwcard__value--masked"
                               aria-label={t(lang, Key::pw_secret_label)}>{ MASK }</code>
                     },
-                    (Opened::Sealed, _) => html! {
+                    // Label sealed (foreign wallet or locked): nothing to show.
+                    (false, _) => html! {
                         <em class="fn-pwcard__sealed">{ t(lang, Key::pw_sealed) }</em>
                     },
                 } }
@@ -709,15 +818,9 @@ fn entry_card(
                         type="button"
                         class="topcoat-button fn-pwcard__reveal"
                         onclick={{
-                            let revealed = revealed.clone();
-                            let id = entry.id.clone();
-                            Callback::from(move |_: MouseEvent| {
-                                revealed.set(if revealed.as_ref() == Some(&id) {
-                                    None
-                                } else {
-                                    Some(id.clone())
-                                });
-                            })
+                            let reveal = reveal.clone();
+                            let id = label.id.clone();
+                            Callback::from(move |_: MouseEvent| reveal.emit(id.clone()))
                         }}
                     >
                         { if is_revealed { icons::eye_off(14) } else { icons::eye(14) } }
@@ -730,8 +833,8 @@ fn entry_card(
                         title={t(lang, Key::pw_copy)}
                         onclick={{
                             let copy = copy.clone();
-                            let value = entry.value.text_or_empty().to_owned();
-                            Callback::from(move |_: MouseEvent| copy.emit(value.clone()))
+                            let id = label.id.clone();
+                            Callback::from(move |_: MouseEvent| copy.emit(id.clone()))
                         }}
                     >
                         { icons::copy(14) }
@@ -743,8 +846,8 @@ fn entry_card(
                         class="topcoat-button fn-pwcard__edit"
                         onclick={{
                             let start_edit = start_edit.clone();
-                            let entry = entry.clone();
-                            Callback::from(move |_: MouseEvent| start_edit.emit(entry.clone()))
+                            let id = label.id.clone();
+                            Callback::from(move |_: MouseEvent| start_edit.emit(id.clone()))
                         }}
                     >
                         { t(lang, Key::edit) }
@@ -761,7 +864,7 @@ fn entry_card(
                     )}
                     onclick={{
                         let remove = remove.clone();
-                        let id = entry.id.clone();
+                        let id = label.id.clone();
                         Callback::from(move |_: MouseEvent| remove.emit(id.clone()))
                     }}
                 >
@@ -847,13 +950,28 @@ mod tests {
         // to copy that tells the user what to do about it — collapsing them
         // into one string is how "your browser has no CSPRNG" ends up reading
         // as "you ticked the wrong box".
-        use crate::i18n::Lang;
         let no_classes = t(Lang::En, Key::pw_gen_no_classes);
         let randomness = t(Lang::En, Key::pw_gen_failed);
+        let length = t(Lang::En, Key::pw_gen_length_bad);
+        // All three distinct — including Length, which used to alias the
+        // "no character classes" string.
         assert_ne!(no_classes, randomness);
-        assert!(!no_classes.is_empty() && !randomness.is_empty());
+        assert_ne!(no_classes, length);
+        assert_ne!(randomness, length);
+        assert!(length.to_lowercase().contains("length"));
         // And the randomness one must say nothing was generated, because the
         // field staying empty is otherwise indistinguishable from a bug.
         assert!(randomness.to_lowercase().contains("nothing was generated"));
+    }
+
+    #[test]
+    fn the_oversize_message_names_the_cap_and_is_not_the_device_failure() {
+        // Fix #5: a value past the cap is the user's to shorten, and must read
+        // differently from a CSPRNG death ("this device could not seal that").
+        let too_long =
+            t(Lang::En, Key::pw_secret_too_long).replace("{max}", &MAX_SECRET_BYTES.to_string());
+        let device = t(Lang::En, Key::pw_seal_failed);
+        assert_ne!(too_long, device);
+        assert!(too_long.contains(&MAX_SECRET_BYTES.to_string()));
     }
 }

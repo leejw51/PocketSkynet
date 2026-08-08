@@ -274,7 +274,14 @@ mod tests {
 
         let mut no_ver = entry("sec_cccccccccccccccc");
         no_ver.as_object_mut().unwrap().remove("encVer");
-        let defaulted = send(&router, "POST", "/api/passwords", Some(&token), Some(no_ver)).await;
+        let defaulted = send(
+            &router,
+            "POST",
+            "/api/passwords",
+            Some(&token),
+            Some(no_ver),
+        )
+        .await;
         assert_eq!(defaulted.status, StatusCode::OK);
         assert_eq!(defaulted.json()["encVer"], 1);
 
