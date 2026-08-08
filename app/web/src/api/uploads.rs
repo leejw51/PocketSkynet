@@ -141,6 +141,18 @@ const FLOOR_BYTES_PER_MS: f64 = 131.0;
 /// finish one inside its budget; large enough that progress is still real.
 const MIN_CHUNK: f64 = 512.0 * 1024.0;
 
+/// Where a transfer starts, before the link has proven anything: TCP's slow
+/// start, applied a layer up.
+///
+/// The first chunks of an upload are probes as much as payload — a phone that
+/// is about to lose its connection should find that out having risked 2 MB,
+/// not 8. Each chunk that lands doubles the next (capped at the server's
+/// suggested size), so a healthy link is carrying full-size chunks by the
+/// third request and pays the small start almost nothing; a struggling one
+/// stays where its budget is short and its retries are cheap. The shrink half
+/// of the same idea lives at the timeout branch in [`upload_in_chunks`].
+const INITIAL_CHUNK: f64 = 2.0 * 1024.0 * 1024.0;
+
 /// The message every timed-out request carries, and the marker
 /// [`upload_in_chunks`] checks to tell "the link is slow" from an ordinary
 /// refusal — only the former should shrink the next chunk.
@@ -262,11 +274,14 @@ impl Client {
                 started
             }
         };
-        let mut chunk = if session.chunk_size > 0.0 {
+        // The server's suggestion is the ceiling, not the opening bid — the
+        // transfer works up to it chunk by chunk (see [`INITIAL_CHUNK`]).
+        let ceiling = if session.chunk_size > 0.0 {
             session.chunk_size
         } else {
             FALLBACK_CHUNK
         };
+        let mut chunk = ceiling.min(INITIAL_CHUNK);
 
         let mut offset = session.offset;
         on_progress(Progress {
@@ -305,7 +320,12 @@ impl Client {
 
             use futures::future::{select, Either};
             match select(Box::pin(append), Box::pin(probe)).await {
-                Either::Left((Ok(next), _)) => offset = next,
+                Either::Left((Ok(next), _)) => {
+                    offset = next;
+                    // The additive-increase half: a chunk that landed earns a
+                    // bigger next one, up to the server's ceiling.
+                    chunk = (chunk * 2.0).min(ceiling);
+                }
                 Either::Left((Err(e), _)) => {
                     // A timeout means the link could not move this much inside
                     // its budget, so the next attempt asks less of it. The
@@ -704,6 +724,25 @@ mod tests {
         // real: a first retry already sends less than the first attempt did.
         let halved = (FALLBACK_CHUNK / 2.0).max(MIN_CHUNK);
         assert!(halved < FALLBACK_CHUNK);
+    }
+
+    #[test]
+    fn a_transfer_ramps_up_to_the_ceiling_and_not_past_it() {
+        // Slow start: the opening chunk is the small probe, not the ceiling…
+        let ceiling = FALLBACK_CHUNK;
+        let mut chunk = ceiling.min(INITIAL_CHUNK);
+        assert_eq!(chunk, INITIAL_CHUNK);
+        // …two landed chunks later a healthy link is at full size…
+        chunk = (chunk * 2.0).min(ceiling);
+        chunk = (chunk * 2.0).min(ceiling);
+        assert_eq!(chunk, ceiling);
+        // …and success past that point never grows beyond what the server
+        // suggested.
+        chunk = (chunk * 2.0).min(ceiling);
+        assert_eq!(chunk, ceiling);
+        // A server suggesting less than the opening probe wins outright.
+        let small_ceiling = INITIAL_CHUNK / 4.0;
+        assert_eq!(small_ceiling.min(INITIAL_CHUNK), small_ceiling);
     }
 
     #[test]
