@@ -126,6 +126,13 @@ features = [
     # works on an insecure origin, which is every LAN address this app is meant
     # to be opened on.
     "HtmlDocument",
+    # A chunk upload request racing a timer (api/uploads.rs): a dead mobile
+    # connection often stops answering rather than erroring, and `fetch`'s
+    # promise then never settles either way. Aborting it on the clock is what
+    # turns that into an ordinary network error the existing retry already
+    # knows how to recover from.
+    "AbortController",
+    "AbortSignal",
 ]
 
 [dev-dependencies]

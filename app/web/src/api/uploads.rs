@@ -104,6 +104,138 @@ const FALLBACK_CHUNK: f64 = 8.0 * 1024.0 * 1024.0;
 /// it actually is, and the loop re-reads the offset and continues from there.
 const CHUNK_ATTEMPTS: u32 = 4;
 
+/// How long `begin` and `upload_status` may run before they are treated as
+/// failed and retried. `append` gets this *plus* time for its body — see
+/// [`append_timeout_ms`].
+///
+/// The gap this closes: a dead mobile connection often stops answering rather
+/// than erroring, and a `fetch` in that state resolves neither `Ok` nor `Err`
+/// — it just never settles. Without a bound on it, `recover`'s retry loop
+/// never engages, because there is never an `Err` to trigger it, and the
+/// transfer sits exactly where the transfer rail's own stall timer
+/// (`components/transfers.rs::STALL_AFTER_MS`) finds it: stuck at one byte
+/// count, forever, with cancel-and-reattach as the only way out. Seen in the
+/// field as a phone stalled at exactly one chunk boundary while the server's
+/// session row said the next chunk had fully landed — the chunk arrived, the
+/// *response* was lost, and the request that would never settle was the only
+/// thing the client was waiting on.
+///
+/// `finish` is deliberately not raced against any clock: the server re-hashes
+/// the whole file there, and a multi-gigabyte upload can legitimately hold it
+/// well past any bound that would still catch a dead control request promptly.
+const REQUEST_TIMEOUT_MS: u32 = 45_000;
+
+/// The floor transfer rate an `append` is budgeted against, in bytes per
+/// millisecond (128 KB/s).
+///
+/// A chunk's timeout is [`REQUEST_TIMEOUT_MS`] plus its size at this rate, so
+/// an 8 MB chunk gets ~109 s before it is called dead. Deliberately far below
+/// any usable link — even a relayed Tailscale path clears it easily — because
+/// this only exists to separate "slow" from "never", and a link genuinely
+/// under it still converges: every timed-out chunk halves the next attempt
+/// (see [`MIN_CHUNK`]), so the budget shrinks toward one a struggling link can
+/// meet.
+const FLOOR_BYTES_PER_MS: f64 = 131.0;
+
+/// Where the halving stops. Small enough that a link this side of unusable can
+/// finish one inside its budget; large enough that progress is still real.
+const MIN_CHUNK: f64 = 512.0 * 1024.0;
+
+/// Where a transfer starts, before the link has proven anything: TCP's slow
+/// start, applied a layer up.
+///
+/// The first chunks of an upload are probes as much as payload — a phone that
+/// is about to lose its connection should find that out having risked 2 MB,
+/// not 8. Each chunk that lands doubles the next (capped at the server's
+/// suggested size), so a healthy link is carrying full-size chunks by the
+/// third request and pays the small start almost nothing; a struggling one
+/// stays where its budget is short and its retries are cheap. The shrink half
+/// of the same idea lives at the timeout branch in [`upload_in_chunks`].
+const INITIAL_CHUNK: f64 = 2.0 * 1024.0 * 1024.0;
+
+/// The message every timed-out request carries, and the marker
+/// [`upload_in_chunks`] checks to tell "the link is slow" from an ordinary
+/// refusal — only the former should shrink the next chunk.
+const TIMED_OUT: &str = "The request timed out";
+
+/// How often, while an `append` is in flight, the server is asked where it
+/// actually is.
+///
+/// This exists for one observed failure, seen twice in the field from a phone
+/// walking around on Tailscale: the chunk arrives in full, the server writes
+/// it and answers — and the answer never reaches the browser, because the
+/// connection died somewhere behind the phone's back after the last byte went
+/// out. Waiting out the append's whole clock for that case costs minutes per
+/// chunk; asking costs one tiny GET, and the moment the server's offset shows
+/// the chunk landed, the hung request can be abandoned and the loop moves on.
+///
+/// Safe against half-arrived chunks by the server's own design: the body is
+/// buffered in full before the offset ever advances (`routes/uploads.rs`), so
+/// an offset at or past this chunk's end means the bytes are already on the
+/// server whatever happens to this request from here. And a probe that
+/// answers *slowly* costs accuracy, not correctness — the worst it can do is
+/// leave the append racing its own clock, which is where it already was.
+const PROBE_INTERVAL_MS: u32 = 15_000;
+
+/// The clock an `append` of `bytes` races: the control-request bound plus the
+/// body itself at the floor rate.
+fn append_timeout_ms(bytes: f64) -> u32 {
+    REQUEST_TIMEOUT_MS.saturating_add((bytes / FLOOR_BYTES_PER_MS) as u32)
+}
+
+/// The floor rate `finish`'s clock budgets the server's re-hash at, in bytes
+/// per millisecond (10 MB/s). Far under what any disk actually hashes at, for
+/// the same reason [`FLOOR_BYTES_PER_MS`] sits far under any usable link:
+/// this separates "still hashing" from "never answering", nothing finer.
+const HASH_FLOOR_BYTES_PER_MS: f64 = 10_485.0;
+
+/// How many times `finish` is attempted before the upload reports failure.
+/// Small: by the second lost answer the probe has almost certainly seen the
+/// session vanish and adopted the commit instead.
+const FINISH_ATTEMPTS: u32 = 3;
+
+/// The clock a `finish` of a `size`-byte upload races: the control bound plus
+/// the server's re-hash of the whole file at the floor rate.
+fn finish_timeout_ms(size: f64) -> u32 {
+    REQUEST_TIMEOUT_MS.saturating_add((size / HASH_FLOOR_BYTES_PER_MS) as u32)
+}
+
+/// Race a request that already carries `controller`'s abort signal against
+/// `timeout_ms`, aborting it on the clock rather than leaving it to hang. The
+/// controller must be the one whose signal was attached when the request was
+/// built — aborting any other one does nothing to this request.
+async fn send_with_timeout(
+    req: gloo_net::http::Request,
+    controller: web_sys::AbortController,
+    timeout_ms: u32,
+) -> ApiResult<gloo_net::http::Response> {
+    use futures::future::{select, Either};
+    match select(
+        Box::pin(req.send()),
+        Box::pin(gloo_timers::future::TimeoutFuture::new(timeout_ms)),
+    )
+    .await
+    {
+        Either::Left((result, _)) => result.map_err(|e| ApiError::Network(e.to_string())),
+        Either::Right(_) => {
+            // Stops the browser doing the work for a response nothing is
+            // waiting for any more, and — for `append` specifically — is what
+            // lets the *next* attempt at this same offset land cleanly rather
+            // than racing a chunk this attempt is still, unknown to it, in the
+            // middle of sending.
+            controller.abort();
+            Err(ApiError::Network(TIMED_OUT.to_owned()))
+        }
+    }
+}
+
+/// A fresh [`web_sys::AbortController`], as the one map-error site for the
+/// constructor every timed request needs.
+fn abort_controller() -> ApiResult<web_sys::AbortController> {
+    web_sys::AbortController::new()
+        .map_err(|_| ApiError::Network("Could not prepare the request".to_owned()))
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionView {
@@ -159,11 +291,14 @@ impl Client {
                 started
             }
         };
-        let chunk = if session.chunk_size > 0.0 {
+        // The server's suggestion is the ceiling, not the opening bid — the
+        // transfer works up to it chunk by chunk (see [`INITIAL_CHUNK`]).
+        let ceiling = if session.chunk_size > 0.0 {
             session.chunk_size
         } else {
             FALLBACK_CHUNK
         };
+        let mut chunk = ceiling.min(INITIAL_CHUNK);
 
         let mut offset = session.offset;
         on_progress(Progress {
@@ -178,14 +313,56 @@ impl Client {
             // slice itself (rather than reading it first) is load-bearing.
             let part = slice_blob(&blob, offset, end)?;
 
-            match self.append(&session.id, offset, &part).await {
-                Ok(next) => offset = next,
-                Err(e) => {
+            // The append races two things beside its own clock: the probe
+            // (below), which notices a chunk whose *response* was lost the
+            // moment the server's offset shows it landed, and the timeout
+            // inside `append` itself, which catches a request that will never
+            // answer at all.
+            let controller = abort_controller()?;
+            let append = self.append(&session.id, offset, &part, &controller);
+            let probe = async {
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(PROBE_INTERVAL_MS).await;
+                    // A failed probe proves nothing about the append — the
+                    // link may be busy carrying the chunk — so it is ignored
+                    // rather than escalated; the append's own clock covers
+                    // the case where everything is dead.
+                    if let Ok(s) = self.upload_status(&session.id).await {
+                        if s.offset >= end {
+                            return s.offset;
+                        }
+                    }
+                }
+            };
+
+            use futures::future::{select, Either};
+            match select(Box::pin(append), Box::pin(probe)).await {
+                Either::Left((Ok(next), _)) => {
+                    offset = next;
+                    // The additive-increase half: a chunk that landed earns a
+                    // bigger next one, up to the server's ceiling.
+                    chunk = (chunk * 2.0).min(ceiling);
+                }
+                Either::Left((Err(e), _)) => {
+                    // A timeout means the link could not move this much inside
+                    // its budget, so the next attempt asks less of it. The
+                    // server does not care that chunks stop being uniform, and
+                    // without this a link slower than the budget's floor rate
+                    // would retry the same too-big chunk forever.
+                    if matches!(&e, ApiError::Network(m) if m == TIMED_OUT) {
+                        chunk = (chunk / 2.0).max(MIN_CHUNK);
+                    }
                     // Ask the server where it really is and carry on from
                     // there. This covers the common case — the chunk landed
                     // and the response was lost — and it covers a genuine
                     // failure by looping until the attempts run out.
                     offset = self.recover(&session.id, offset, e).await?;
+                }
+                Either::Right((landed, _)) => {
+                    // The chunk is on the server; only this request's answer
+                    // went missing. Nothing more to wait for.
+                    controller.abort();
+                    offset = landed;
                 }
             }
             on_progress(Progress {
@@ -195,7 +372,7 @@ impl Client {
             });
         }
 
-        let done = self.finish(&session.id).await;
+        let done = self.finish(&session.id, size, &filename, &target).await;
         // The session is over either way once `finish` has spoken: on success
         // it no longer exists, and on a *commit* failure (a full room, an
         // unpayable site) the server keeps the bytes but retrying is a fresh
@@ -266,12 +443,29 @@ impl Client {
                 "sha256": digest,
             }),
         };
-        self.send_json(Method::POST, "/api/uploads", &body).await
+        let controller = abort_controller()?;
+        let req = self
+            .build(Method::POST, "/api/uploads")
+            .abort_signal(Some(&controller.signal()))
+            .json(&body)
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp = send_with_timeout(req, controller, REQUEST_TIMEOUT_MS).await?;
+        super::decode(resp).await
     }
 
     /// Send one chunk — as a `Blob` slice, never as bytes the wasm side has
     /// read. Returns the offset the server is now at.
-    async fn append(&self, id: &str, offset: f64, part: &web_sys::Blob) -> ApiResult<f64> {
+    ///
+    /// The controller comes from the caller because the caller has a second
+    /// reason to abort this request that this function cannot know about: the
+    /// probe discovering the chunk already landed (see `upload_in_chunks`).
+    async fn append(
+        &self,
+        id: &str,
+        offset: f64,
+        part: &web_sys::Blob,
+        controller: &web_sys::AbortController,
+    ) -> ApiResult<f64> {
         #[derive(serde::Deserialize)]
         struct Ack {
             offset: f64,
@@ -285,12 +479,11 @@ impl Client {
         let req = self
             .build(Method::PATCH, &path)
             .header("Content-Type", "application/octet-stream")
+            .abort_signal(Some(&controller.signal()))
             .body(part)
             .map_err(|e| ApiError::Network(e.to_string()))?;
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp =
+            send_with_timeout(req, controller.clone(), append_timeout_ms(part.size())).await?;
         let ack: Ack = super::decode(resp).await?;
         Ok(ack.offset)
     }
@@ -315,16 +508,125 @@ impl Client {
     }
 
     async fn upload_status(&self, id: &str) -> ApiResult<SessionView> {
-        self.send(Method::GET, &format!("/api/uploads/{id}")).await
+        let controller = abort_controller()?;
+        let req = self
+            .build(Method::GET, &format!("/api/uploads/{id}"))
+            .abort_signal(Some(&controller.signal()))
+            .build()
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp = send_with_timeout(req, controller, REQUEST_TIMEOUT_MS).await?;
+        super::decode(resp).await
     }
 
-    async fn finish(&self, id: &str) -> ApiResult<serde_json::Value> {
-        self.send_json(
-            Method::POST,
-            &format!("/api/uploads/{id}/finish"),
-            &serde_json::json!({}),
-        )
-        .await
+    /// Commit the upload — bounded, probed, and able to adopt a commit whose
+    /// answer never arrived.
+    ///
+    /// `finish` was the last request on this path allowed to run unbounded,
+    /// on the grounds that the server legitimately holds it while re-hashing
+    /// the whole file. The field found the hole in that reasoning: on a
+    /// connection that eats responses, a 267 KB upload sat at 100% forever,
+    /// because the commit happened and its answer died. So `finish` now gets
+    /// the same treatment as `append`, scaled to what the server actually
+    /// does with it (see [`finish_timeout_ms`]) — plus a probe with a twist:
+    /// the session row *disappearing* is how the server says the commit went
+    /// through, so a probe that starts answering 404 means success, not
+    /// failure.
+    ///
+    /// When the answer is known lost (probe saw the session vanish, or a
+    /// timed-out attempt is followed by a 404), the result the caller needed
+    /// is recovered from the room's own file list — the upload is looked up
+    /// by name and size and adopted. That recovery exists for room
+    /// attachments; an image or site upload in the same situation surfaces
+    /// the error instead, because neither has a listing to adopt from and
+    /// re-uploading either is cheap by design (images dedupe by content
+    /// hash).
+    async fn finish(
+        &self,
+        id: &str,
+        size: f64,
+        filename: &str,
+        target: &Target,
+    ) -> ApiResult<serde_json::Value> {
+        use futures::future::{select, Either};
+
+        // Set when an attempt's answer may have been delivered to a dead
+        // connection — the one case where a later 404 means "already done".
+        let mut answer_lost = false;
+
+        for _ in 0..FINISH_ATTEMPTS {
+            let controller = abort_controller()?;
+            let req = self
+                .build(Method::POST, &format!("/api/uploads/{id}/finish"))
+                .abort_signal(Some(&controller.signal()))
+                .json(&serde_json::json!({}))
+                .map_err(|e| ApiError::Network(e.to_string()))?;
+            let race_controller = controller.clone();
+            let attempt = async move {
+                let resp = send_with_timeout(req, race_controller, finish_timeout_ms(size)).await?;
+                super::decode::<serde_json::Value>(resp).await
+            };
+            // The commit's own success signal, watched from the side: the
+            // server deletes the session row when `finish` goes through, so
+            // a status probe that starts answering 404 has seen the commit
+            // land even if the response never arrives here.
+            let probe = async {
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(PROBE_INTERVAL_MS).await;
+                    if let Err(ApiError::Status(s)) = self.upload_status(id).await {
+                        if s.status == 404 {
+                            return;
+                        }
+                    }
+                }
+            };
+
+            match select(Box::pin(attempt), Box::pin(probe)).await {
+                Either::Left((Ok(v), _)) => return Ok(v),
+                Either::Left((Err(e), _)) => match e {
+                    // The request died without an answer — the commit may or
+                    // may not have happened. Try again; a 404 from here on
+                    // means it had.
+                    ApiError::Network(_) => answer_lost = true,
+                    ApiError::Status(ref s) if s.status == 404 && answer_lost => {
+                        return self.adopt_committed(target, filename, size).await;
+                    }
+                    // A genuine refusal — a full room, an unpayable site —
+                    // is an answer, and retrying is not this function's call.
+                    other => return Err(other),
+                },
+                Either::Right(_) => {
+                    controller.abort();
+                    return self.adopt_committed(target, filename, size).await;
+                }
+            }
+        }
+        Err(ApiError::Network(TIMED_OUT.to_owned()))
+    }
+
+    /// Find the file a lost `finish` answer was carrying, in the room's own
+    /// listing — the newest row matching this upload's name and size.
+    async fn adopt_committed(
+        &self,
+        target: &Target,
+        filename: &str,
+        size: f64,
+    ) -> ApiResult<serde_json::Value> {
+        let Target::File { room_id, .. } = target else {
+            return Err(ApiError::Network(
+                "The upload finished, but its answer was lost — please try again".to_owned(),
+            ));
+        };
+        let files = self.list_files(room_id, None).await?;
+        files
+            .into_iter()
+            .filter(|f| f.filename == filename && f.size_bytes as f64 == size)
+            .max_by(|a, b| a.created_at.cmp(&b.created_at))
+            .map(|f| serde_json::to_value(f).unwrap_or_default())
+            .ok_or_else(|| {
+                ApiError::Network(
+                    "The upload finished, but its record could not be found".to_owned(),
+                )
+            })
     }
 
     /// Abandon a session and let the server reclaim its disk now rather than
@@ -523,6 +825,43 @@ mod tests {
             )
         };
         assert_eq!(site("0xdead"), site("0xbeef"));
+    }
+
+    #[test]
+    fn a_chunks_clock_scales_with_its_size() {
+        // The control bound alone for an empty body…
+        assert_eq!(append_timeout_ms(0.0), REQUEST_TIMEOUT_MS);
+        // …an 8 MB chunk gets over a minute on top of it…
+        let eight_mb = append_timeout_ms(8.0 * 1024.0 * 1024.0);
+        assert!(eight_mb > REQUEST_TIMEOUT_MS + 60_000, "{eight_mb}");
+        // …and the floor rate is far below any usable link, so a live
+        // connection clears the budget with room to spare: even at ten times
+        // the floor, an 8 MB chunk finishes inside a fifth of its clock.
+        let at_ten_times_floor = (8.0 * 1024.0 * 1024.0 / (FLOOR_BYTES_PER_MS * 10.0)) as u32;
+        assert!(at_ten_times_floor < eight_mb / 5, "{at_ten_times_floor}");
+        // The halving floor stays under the fallback chunk, so shrinking is
+        // real: a first retry already sends less than the first attempt did.
+        let halved = (FALLBACK_CHUNK / 2.0).max(MIN_CHUNK);
+        assert!(halved < FALLBACK_CHUNK);
+    }
+
+    #[test]
+    fn a_transfer_ramps_up_to_the_ceiling_and_not_past_it() {
+        // Slow start: the opening chunk is the small probe, not the ceiling…
+        let ceiling = FALLBACK_CHUNK;
+        let mut chunk = ceiling.min(INITIAL_CHUNK);
+        assert_eq!(chunk, INITIAL_CHUNK);
+        // …two landed chunks later a healthy link is at full size…
+        chunk = (chunk * 2.0).min(ceiling);
+        chunk = (chunk * 2.0).min(ceiling);
+        assert_eq!(chunk, ceiling);
+        // …and success past that point never grows beyond what the server
+        // suggested.
+        chunk = (chunk * 2.0).min(ceiling);
+        assert_eq!(chunk, ceiling);
+        // A server suggesting less than the opening probe wins outright.
+        let small_ceiling = INITIAL_CHUNK / 4.0;
+        assert_eq!(small_ceiling.min(INITIAL_CHUNK), small_ceiling);
     }
 
     #[test]
