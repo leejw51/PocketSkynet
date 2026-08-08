@@ -146,6 +146,25 @@ const MIN_CHUNK: f64 = 512.0 * 1024.0;
 /// refusal — only the former should shrink the next chunk.
 const TIMED_OUT: &str = "The request timed out";
 
+/// How often, while an `append` is in flight, the server is asked where it
+/// actually is.
+///
+/// This exists for one observed failure, seen twice in the field from a phone
+/// walking around on Tailscale: the chunk arrives in full, the server writes
+/// it and answers — and the answer never reaches the browser, because the
+/// connection died somewhere behind the phone's back after the last byte went
+/// out. Waiting out the append's whole clock for that case costs minutes per
+/// chunk; asking costs one tiny GET, and the moment the server's offset shows
+/// the chunk landed, the hung request can be abandoned and the loop moves on.
+///
+/// Safe against half-arrived chunks by the server's own design: the body is
+/// buffered in full before the offset ever advances (`routes/uploads.rs`), so
+/// an offset at or past this chunk's end means the bytes are already on the
+/// server whatever happens to this request from here. And a probe that
+/// answers *slowly* costs accuracy, not correctness — the worst it can do is
+/// leave the append racing its own clock, which is where it already was.
+const PROBE_INTERVAL_MS: u32 = 15_000;
+
 /// The clock an `append` of `bytes` races: the control-request bound plus the
 /// body itself at the floor rate.
 fn append_timeout_ms(bytes: f64) -> u32 {
@@ -262,9 +281,32 @@ impl Client {
             // slice itself (rather than reading it first) is load-bearing.
             let part = slice_blob(&blob, offset, end)?;
 
-            match self.append(&session.id, offset, &part).await {
-                Ok(next) => offset = next,
-                Err(e) => {
+            // The append races two things beside its own clock: the probe
+            // (below), which notices a chunk whose *response* was lost the
+            // moment the server's offset shows it landed, and the timeout
+            // inside `append` itself, which catches a request that will never
+            // answer at all.
+            let controller = abort_controller()?;
+            let append = self.append(&session.id, offset, &part, &controller);
+            let probe = async {
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(PROBE_INTERVAL_MS).await;
+                    // A failed probe proves nothing about the append — the
+                    // link may be busy carrying the chunk — so it is ignored
+                    // rather than escalated; the append's own clock covers
+                    // the case where everything is dead.
+                    if let Ok(s) = self.upload_status(&session.id).await {
+                        if s.offset >= end {
+                            return s.offset;
+                        }
+                    }
+                }
+            };
+
+            use futures::future::{select, Either};
+            match select(Box::pin(append), Box::pin(probe)).await {
+                Either::Left((Ok(next), _)) => offset = next,
+                Either::Left((Err(e), _)) => {
                     // A timeout means the link could not move this much inside
                     // its budget, so the next attempt asks less of it. The
                     // server does not care that chunks stop being uniform, and
@@ -278,6 +320,12 @@ impl Client {
                     // and the response was lost — and it covers a genuine
                     // failure by looping until the attempts run out.
                     offset = self.recover(&session.id, offset, e).await?;
+                }
+                Either::Right((landed, _)) => {
+                    // The chunk is on the server; only this request's answer
+                    // went missing. Nothing more to wait for.
+                    controller.abort();
+                    offset = landed;
                 }
             }
             on_progress(Progress {
@@ -370,7 +418,17 @@ impl Client {
 
     /// Send one chunk — as a `Blob` slice, never as bytes the wasm side has
     /// read. Returns the offset the server is now at.
-    async fn append(&self, id: &str, offset: f64, part: &web_sys::Blob) -> ApiResult<f64> {
+    ///
+    /// The controller comes from the caller because the caller has a second
+    /// reason to abort this request that this function cannot know about: the
+    /// probe discovering the chunk already landed (see `upload_in_chunks`).
+    async fn append(
+        &self,
+        id: &str,
+        offset: f64,
+        part: &web_sys::Blob,
+        controller: &web_sys::AbortController,
+    ) -> ApiResult<f64> {
         #[derive(serde::Deserialize)]
         struct Ack {
             offset: f64,
@@ -379,7 +437,6 @@ impl Client {
         // a fraction today, but the server parses this as an integer and a
         // formatting change would be a 400 rather than a compile error.
         let path = format!("/api/uploads/{id}?offset={}", offset as u64);
-        let controller = abort_controller()?;
         // The explicit header wins over the Blob's own (empty) type, so the
         // server sees the same request it always did.
         let req = self
@@ -388,7 +445,8 @@ impl Client {
             .abort_signal(Some(&controller.signal()))
             .body(part)
             .map_err(|e| ApiError::Network(e.to_string()))?;
-        let resp = send_with_timeout(req, controller, append_timeout_ms(part.size())).await?;
+        let resp =
+            send_with_timeout(req, controller.clone(), append_timeout_ms(part.size())).await?;
         let ack: Ack = super::decode(resp).await?;
         Ok(ack.offset)
     }
