@@ -192,6 +192,17 @@ impl From<pocketskynet_core::IdError> for ApiError {
     }
 }
 
+/// A refusal from the OS CSPRNG (`pocketskynet_core::random`) is never the
+/// caller's fault and never actionable by them, so it collapses to the same
+/// opaque 500 as a database error — cause logged, nothing leaked. It exists so
+/// entropy-drawing routes can `?` instead of hand-rolling the wrap, which kept
+/// them from all agreeing on the context string.
+impl From<pocketskynet_core::CryptoError> for ApiError {
+    fn from(e: pocketskynet_core::CryptoError) -> Self {
+        Self::Internal(anyhow::Error::new(e).context("entropy"))
+    }
+}
+
 pub type ApiResult<T> = Result<T, ApiError>;
 
 #[cfg(test)]

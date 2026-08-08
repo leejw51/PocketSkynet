@@ -391,12 +391,28 @@ pub fn verify_challenge_signature(
     }
 }
 
-/// 32 bytes of CSPRNG output as lowercase hex — the challenge nonce and the
-/// SSE ticket both use this.
-pub fn random_hex_32() -> String {
-    let mut buf = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
-    hex::encode(buf)
+/// A **bearer token**: 32 bytes of CSPRNG output as lowercase hex.
+///
+/// Every unguessable *token* this server hands out is this function with a
+/// prefix on the front, and there are exactly four: the login challenge nonce
+/// (`routes/auth`), the SSE ticket (`routes/realtime`), the invite link
+/// (`db::invites::mint_token`) and the webhook token (`routes/webhooks`). Each
+/// is a bearer credential — whoever holds one is, for that purpose, whoever it
+/// was issued to — so they share one generator, named for what they are.
+///
+/// The per-account encryption salt is *not* on this list even though it is the
+/// same 64 hex characters: it is key-derivation input, not a credential
+/// anybody presents, so it draws from [`pocketskynet_core::random::hex_32`]
+/// directly rather than borrowing the bearer-token name. Keeping it off this
+/// roster is what lets the roster be exact.
+///
+/// The bytes come from [`pocketskynet_core::random`] — see that module for why
+/// the whole system has one entropy source and why a refusal is an error, not a
+/// silent constant. Here that error is an [`ApiError::Internal`] via the `?`
+/// below: the request becomes a 500 with the cause logged and nothing leaked,
+/// and — the point — no token is minted.
+pub fn random_hex_32() -> ApiResult<String> {
+    Ok(pocketskynet_core::random::hex_32()?)
 }
 
 #[cfg(test)]
@@ -650,12 +666,20 @@ mod tests {
         ));
     }
 
+    /// What this layer uniquely owns: the *shape* of a token — exactly 64
+    /// lowercase hex characters — and that two successive mints differ. The
+    /// generator's quality, the sixteen-draw sweep and the never-zero and
+    /// never-repeat guarantees live in `core::random`'s own tests, on the
+    /// `hex_32` this delegates to; re-running them here would just be a second,
+    /// drifting copy of the same loop.
     #[test]
-    fn nonces_are_64_hex_characters_and_do_not_repeat() {
-        let a = random_hex_32();
-        let b = random_hex_32();
+    fn a_nonce_is_64_lowercase_hex_and_fresh_each_call() {
+        let a = random_hex_32().expect("the OS CSPRNG should answer");
+        let b = random_hex_32().expect("the OS CSPRNG should answer");
         assert_eq!(a.len(), 64);
-        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, b);
+        assert!(a
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_ne!(a, b, "two successive nonces were identical");
     }
 }

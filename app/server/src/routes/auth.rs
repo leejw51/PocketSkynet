@@ -55,7 +55,7 @@ async fn challenge(
 ) -> ApiResult<Response> {
     let wallet = validate::wallet_address("walletAddress", body.wallet_address.as_deref())?;
 
-    let nonce = random_hex_32();
+    let nonce = random_hex_32()?;
     let message = challenge_message(&wallet, &nonce);
     let id = uuid::Uuid::new_v4().to_string();
     let expires_at = now_ms() + CHALLENGE_TTL_MS;

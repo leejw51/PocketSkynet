@@ -98,7 +98,7 @@ async fn create(
     let name = validate::webhook_name(body.name.as_deref())?;
 
     let id = format!("hook_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
-    let token = format!("whk_{}", crate::auth::random_hex_32());
+    let token = format!("whk_{}", crate::auth::random_hex_32()?);
     let is_server_admin = super::misc::is_server_admin(caller.as_str());
     let room_id = room.as_str().to_owned();
     let creator = caller.as_str().to_owned();

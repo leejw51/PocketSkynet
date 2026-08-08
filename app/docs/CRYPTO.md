@@ -879,7 +879,7 @@ for `wasm32-unknown-unknown`.
 | BIP-39 | **`bip39`** (`2.x`) | Pure Rust, `no_std`-capable. Use `Mnemonic::to_seed("")` for the empty passphrase. Alternative: `coins-bip39` (what ethers-rs uses). |
 | BIP-32 | **`bip32`** (`0.5`) with `default-features = false, features = ["secp256k1-ffi"→ OFF, "alloc"]` | Configure it to use `k256`, **not** the `secp256k1` C crate. Alternative: `coins-bip32`. Or implement BIP-32 CKD directly — it is ~40 lines over `hmac`+`sha2`+`k256`. |
 | EIP-55 / address utils | hand-rolled (~15 lines) or **`alloy-primitives`** (`Address::to_checksum`) | `alloy-primitives` is wasm-clean; `ethers-core` also works but is heavier and deprecated. |
-| CSPRNG | **`rand_core`** / **`getrandom`** | See the wasm note below. |
+| CSPRNG | **`getrandom`** (`0.2`, matching `core/Cargo.toml`) | See the wasm note below, and `core/src/random.rs` for the full argument: one module, no fallback, an error on refusal. Chosen over `rand`'s `OsRng` because `OsRng` reports a refusal through `RngCore::fill_bytes`, which cannot fail and so panics — a property of that trait's contract, not of any `rand`/`getrandom` version, so it holds across a future bump. Everything unguessable on either target draws from there. |
 | Constant-time compare | **`subtle`** (`2.x`) | Only needed if you compare something other than a MAC; `hmac`'s `verify_slice` already covers MACs. |
 | Zeroizing key material | **`zeroize`** (`1.x`) with `derive` | Wrap room keys, subkeys, `sharedX`, private keys. `k256::SecretKey` already zeroizes. |
 | HKDF | **not needed** | FruitNation's KDF is a bare `HMAC-SHA256(key, label)`. Do **not** substitute HKDF — it would change every output. Listed only to say: don't. |

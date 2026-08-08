@@ -91,13 +91,22 @@ impl TicketStore {
     }
 
     /// Mint a ticket. Returns the opaque id and its expiry in epoch millis.
-    pub fn issue(&self, wallet: &WalletAddress, ip: IpAddr) -> (String, i64) {
+    ///
+    /// Fallible only because the id is: a ticket is a bearer credential, and
+    /// `random_hex_32` refuses rather than hand back a guessable one. The code
+    /// below sweeps expired tickets before drawing the id, so on the rare
+    /// entropy failure nothing new is inserted — though note that is a claim
+    /// about the statements as written here, not one any server test exercises:
+    /// the entropy seam is `#[cfg(test)]` inside `core` and unreachable from
+    /// this crate, by design (see `core::random` on why there is no run-time
+    /// substitution point).
+    pub fn issue(&self, wallet: &WalletAddress, ip: IpAddr) -> ApiResult<(String, i64)> {
         let now = now_ms();
         // Sweeping on issue keeps the map bounded without a background task;
         // expired tickets are useless anyway.
         self.tickets.retain(|_, t| t.expires_at_ms > now);
 
-        let id = format!("evt_{}", crate::auth::random_hex_32());
+        let id = format!("evt_{}", crate::auth::random_hex_32()?);
         let expires_at_ms = now + TICKET_TTL.as_millis() as i64;
         self.tickets.insert(
             id.clone(),
@@ -107,7 +116,7 @@ impl TicketStore {
                 ip,
             },
         );
-        (id, expires_at_ms)
+        Ok((id, expires_at_ms))
     }
 
     /// Redeem a ticket exactly once.
@@ -247,7 +256,7 @@ async fn issue_ticket(
     crate::auth::AuthUser(caller): crate::auth::AuthUser,
     ClientAddr(ip): ClientAddr,
 ) -> ApiResult<Response> {
-    let (ticket, expires_at_ms) = state.tickets.issue(&caller, ip);
+    let (ticket, expires_at_ms) = state.tickets.issue(&caller, ip)?;
 
     Ok(Json(serde_json::json!({
         "ticket": ticket,
@@ -879,7 +888,7 @@ mod tests {
     fn a_ticket_can_only_be_redeemed_once() {
         let store = TicketStore::new();
         let alice = wallet("alice");
-        let (ticket, _) = store.issue(&alice, ip(1));
+        let (ticket, _) = store.issue(&alice, ip(1)).unwrap();
 
         assert_eq!(store.consume(&ticket, ip(1)), Some(alice));
         assert_eq!(
@@ -893,7 +902,7 @@ mod tests {
     fn a_ticket_is_bound_to_the_address_that_asked_for_it() {
         let store = TicketStore::new();
         let alice = wallet("alice");
-        let (ticket, _) = store.issue(&alice, ip(1));
+        let (ticket, _) = store.issue(&alice, ip(1)).unwrap();
 
         assert_eq!(store.consume(&ticket, ip(2)), None);
         // The attempt spent it, so the rightful owner is refused too — a
@@ -940,7 +949,7 @@ mod tests {
             },
         );
 
-        store.issue(&alice, ip(1));
+        store.issue(&alice, ip(1)).unwrap();
         assert_eq!(store.len(), 1, "the stale entry must not accumulate");
         assert!(store.consume("evt_stale", ip(1)).is_none());
     }
