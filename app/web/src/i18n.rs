@@ -1466,6 +1466,15 @@ mod tests {
             (Lang::Cs, Key::pw_title),
             (Lang::Es, Key::pw_title),
             (Lang::De, Key::pw_title),
+            // "AI" is the initialism as written in every one of these — a
+            // loanword, not a gap. Only Spanish ("IA") and German ("KI")
+            // reorder it. The chip has to stay two characters wide, so
+            // spelling it out ("인공지능") is not an option here.
+            (Lang::Ko, Key::agent_badge),
+            (Lang::Ja, Key::agent_badge),
+            (Lang::Yue, Key::agent_badge),
+            (Lang::Cs, Key::agent_badge),
+            (Lang::Zh, Key::agent_badge),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {
