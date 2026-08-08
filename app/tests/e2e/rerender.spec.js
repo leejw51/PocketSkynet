@@ -129,15 +129,20 @@ test.describe("re-rendering", () => {
 
     await signInAs(page, "rr-sidebar");
     const options = page.locator('[role="option"]');
-    await expect(options).toHaveCount(6, { timeout: 20_000 });
-    expect(await mark(page, '[role="option"]')).toBe(6);
+    // 5 channels + 1 DM + the three built-in rooms every account is now
+    // provisioned. The keyed-rendering property is about all of them.
+    await expect(options).toHaveCount(9, { timeout: 20_000 });
+    expect(await mark(page, '[role="option"]')).toBe(9);
 
     // Reorder the list: the sidebar sorts by last activity, so a message in
     // the oldest room moves it to the top and every row below it shifts down.
     // A reorder is the edit positional matching cannot survive; merely opening
     // a room leaves every position where it was and looks fine either way.
     await post(request, me, rooms[0], "bump");
-    await expect(page.locator('[role="option"]').first()).toContainText(
+    // The built-in rooms are pinned above the Channels section, so the bump
+    // takes Sidebar 0 to the top of the *channels*, not the top of the list.
+    // Target the first channel row (the built-ins never carry a "Sidebar" name).
+    await expect(page.locator('[data-name^="Sidebar"]').first()).toContainText(
       "Sidebar 0",
       {
         timeout: 20_000,
@@ -147,6 +152,6 @@ test.describe("re-rendering", () => {
       .poll(async () => (await survivors(page, '[role="option"]')).kept, {
         timeout: 15_000,
       })
-      .toBe(6);
+      .toBe(9);
   });
 });

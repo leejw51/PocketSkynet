@@ -54,15 +54,22 @@ function watchForErrors(page) {
 }
 
 test.describe("the web client", () => {
-  test("signs in and reaches an empty room list without console errors", async ({
+  test("signs in and reaches the built-in rooms without console errors", async ({
     page,
   }) => {
+    // A fresh account is no longer empty: the server provisions My Note, My
+    // Jarvis and My Lobby for everyone on the first room-list fetch. What this
+    // test still guards is the same thing it always did — sign-in reaches the
+    // rooms pane and the client deserialises the wire shape without a single
+    // console error, which is what would break if `kind` grew a value (as it
+    // did: `note`/`jarvis`/`lobby`) that the client rejected.
     const errors = watchForErrors(page);
     await signInAs(page, "ui-fresh");
 
-    await expect(
-      page.getByRole("heading", { name: "No rooms yet" }),
-    ).toBeVisible();
+    const list = page.getByRole("listbox", { name: "Rooms" });
+    for (const name of ["My Note", "My Jarvis", "My Lobby"]) {
+      await expect(list.locator(`[data-name="${name}"]`)).toHaveCount(1);
+    }
     expect(errors, errors.join(" | ")).toHaveLength(0);
   });
 
@@ -176,9 +183,9 @@ test.describe("the web client", () => {
 
     const errors = watchForErrors(page);
     await signInAs(page, "ui-pick-alice");
-    await expect(
-      page.getByRole("heading", { name: "No rooms yet" }),
-    ).toBeVisible();
+    // A fresh account is no longer empty — it has the three built-in rooms — so
+    // the old "No rooms yet" heading is gone. `signInAs` already waited for the
+    // rooms pane; the DM the picker opens is asserted below.
 
     await page.getByRole("button", { name: "New message" }).click();
     await page
@@ -193,11 +200,15 @@ test.describe("the web client", () => {
     await expect(composer).toBeVisible({ timeout: 15_000 });
 
     // And it is the same room the API would have opened — idempotence, seen
-    // from the outside.
+    // from the outside. Bob's list also carries his three built-in rooms, so
+    // the conversation is the single non-built-in room.
     const rooms = await json(await api(request, bob).get("/api/rooms"));
-    expect(rooms).toHaveLength(1);
-    expect(rooms[0].kind).toBe("dm");
-    expect(rooms[0].members.map((m) => m.userAddress).sort()).toEqual(
+    const convos = rooms.filter(
+      (r) => !["note", "jarvis", "lobby"].includes(r.kind),
+    );
+    expect(convos).toHaveLength(1);
+    expect(convos[0].kind).toBe("dm");
+    expect(convos[0].members.map((m) => m.userAddress).sort()).toEqual(
       [alice.address, bob.address].sort(),
     );
 
