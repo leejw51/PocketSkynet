@@ -183,6 +183,23 @@ fn append_timeout_ms(bytes: f64) -> u32 {
     REQUEST_TIMEOUT_MS.saturating_add((bytes / FLOOR_BYTES_PER_MS) as u32)
 }
 
+/// The floor rate `finish`'s clock budgets the server's re-hash at, in bytes
+/// per millisecond (10 MB/s). Far under what any disk actually hashes at, for
+/// the same reason [`FLOOR_BYTES_PER_MS`] sits far under any usable link:
+/// this separates "still hashing" from "never answering", nothing finer.
+const HASH_FLOOR_BYTES_PER_MS: f64 = 10_485.0;
+
+/// How many times `finish` is attempted before the upload reports failure.
+/// Small: by the second lost answer the probe has almost certainly seen the
+/// session vanish and adopted the commit instead.
+const FINISH_ATTEMPTS: u32 = 3;
+
+/// The clock a `finish` of a `size`-byte upload races: the control bound plus
+/// the server's re-hash of the whole file at the floor rate.
+fn finish_timeout_ms(size: f64) -> u32 {
+    REQUEST_TIMEOUT_MS.saturating_add((size / HASH_FLOOR_BYTES_PER_MS) as u32)
+}
+
 /// Race a request that already carries `controller`'s abort signal against
 /// `timeout_ms`, aborting it on the clock rather than leaving it to hang. The
 /// controller must be the one whose signal was attached when the request was
@@ -355,7 +372,7 @@ impl Client {
             });
         }
 
-        let done = self.finish(&session.id).await;
+        let done = self.finish(&session.id, size, &filename, &target).await;
         // The session is over either way once `finish` has spoken: on success
         // it no longer exists, and on a *commit* failure (a full room, an
         // unpayable site) the server keeps the bytes but retrying is a fresh
@@ -501,13 +518,115 @@ impl Client {
         super::decode(resp).await
     }
 
-    async fn finish(&self, id: &str) -> ApiResult<serde_json::Value> {
-        self.send_json(
-            Method::POST,
-            &format!("/api/uploads/{id}/finish"),
-            &serde_json::json!({}),
-        )
-        .await
+    /// Commit the upload — bounded, probed, and able to adopt a commit whose
+    /// answer never arrived.
+    ///
+    /// `finish` was the last request on this path allowed to run unbounded,
+    /// on the grounds that the server legitimately holds it while re-hashing
+    /// the whole file. The field found the hole in that reasoning: on a
+    /// connection that eats responses, a 267 KB upload sat at 100% forever,
+    /// because the commit happened and its answer died. So `finish` now gets
+    /// the same treatment as `append`, scaled to what the server actually
+    /// does with it (see [`finish_timeout_ms`]) — plus a probe with a twist:
+    /// the session row *disappearing* is how the server says the commit went
+    /// through, so a probe that starts answering 404 means success, not
+    /// failure.
+    ///
+    /// When the answer is known lost (probe saw the session vanish, or a
+    /// timed-out attempt is followed by a 404), the result the caller needed
+    /// is recovered from the room's own file list — the upload is looked up
+    /// by name and size and adopted. That recovery exists for room
+    /// attachments; an image or site upload in the same situation surfaces
+    /// the error instead, because neither has a listing to adopt from and
+    /// re-uploading either is cheap by design (images dedupe by content
+    /// hash).
+    async fn finish(
+        &self,
+        id: &str,
+        size: f64,
+        filename: &str,
+        target: &Target,
+    ) -> ApiResult<serde_json::Value> {
+        use futures::future::{select, Either};
+
+        // Set when an attempt's answer may have been delivered to a dead
+        // connection — the one case where a later 404 means "already done".
+        let mut answer_lost = false;
+
+        for _ in 0..FINISH_ATTEMPTS {
+            let controller = abort_controller()?;
+            let req = self
+                .build(Method::POST, &format!("/api/uploads/{id}/finish"))
+                .abort_signal(Some(&controller.signal()))
+                .json(&serde_json::json!({}))
+                .map_err(|e| ApiError::Network(e.to_string()))?;
+            let race_controller = controller.clone();
+            let attempt = async move {
+                let resp = send_with_timeout(req, race_controller, finish_timeout_ms(size)).await?;
+                super::decode::<serde_json::Value>(resp).await
+            };
+            // The commit's own success signal, watched from the side: the
+            // server deletes the session row when `finish` goes through, so
+            // a status probe that starts answering 404 has seen the commit
+            // land even if the response never arrives here.
+            let probe = async {
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(PROBE_INTERVAL_MS).await;
+                    if let Err(ApiError::Status(s)) = self.upload_status(id).await {
+                        if s.status == 404 {
+                            return;
+                        }
+                    }
+                }
+            };
+
+            match select(Box::pin(attempt), Box::pin(probe)).await {
+                Either::Left((Ok(v), _)) => return Ok(v),
+                Either::Left((Err(e), _)) => match e {
+                    // The request died without an answer — the commit may or
+                    // may not have happened. Try again; a 404 from here on
+                    // means it had.
+                    ApiError::Network(_) => answer_lost = true,
+                    ApiError::Status(ref s) if s.status == 404 && answer_lost => {
+                        return self.adopt_committed(target, filename, size).await;
+                    }
+                    // A genuine refusal — a full room, an unpayable site —
+                    // is an answer, and retrying is not this function's call.
+                    other => return Err(other),
+                },
+                Either::Right(_) => {
+                    controller.abort();
+                    return self.adopt_committed(target, filename, size).await;
+                }
+            }
+        }
+        Err(ApiError::Network(TIMED_OUT.to_owned()))
+    }
+
+    /// Find the file a lost `finish` answer was carrying, in the room's own
+    /// listing — the newest row matching this upload's name and size.
+    async fn adopt_committed(
+        &self,
+        target: &Target,
+        filename: &str,
+        size: f64,
+    ) -> ApiResult<serde_json::Value> {
+        let Target::File { room_id, .. } = target else {
+            return Err(ApiError::Network(
+                "The upload finished, but its answer was lost — please try again".to_owned(),
+            ));
+        };
+        let files = self.list_files(room_id, None).await?;
+        files
+            .into_iter()
+            .filter(|f| f.filename == filename && f.size_bytes as f64 == size)
+            .max_by(|a, b| a.created_at.cmp(&b.created_at))
+            .map(|f| serde_json::to_value(f).unwrap_or_default())
+            .ok_or_else(|| {
+                ApiError::Network(
+                    "The upload finished, but its record could not be found".to_owned(),
+                )
+            })
     }
 
     /// Abandon a session and let the server reclaim its disk now rather than
