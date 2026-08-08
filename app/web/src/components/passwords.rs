@@ -159,16 +159,23 @@ pub fn passwords(p: &PasswordsProps) -> Html {
     //
     // Every keystroke in the filter or the form re-renders this component. The
     // label pass is behind `use_memo` keyed on the rows' identity (id +
-    // `updated_at`, which an edit advances) and the lock state, so it reruns
-    // only when the list actually changes or the session unlocks — not on every
-    // character typed. Values are deliberately *not* in here; see the module
-    // docs.
+    // `updated_at`, which an edit advances), the lock state and the signed-in
+    // account, so it reruns only when the list actually changes, the session
+    // locks/unlocks, or the account changes — not on every character typed.
+    // The account has to be part of the key, not just `locked`: if this
+    // component ever stayed mounted across an account switch that went
+    // straight from one unlocked key to another (no intermediate `locked`
+    // frame) and the rows hadn't refetched yet, keying on `locked` alone would
+    // miss it and the memo would keep serving labels decrypted with the
+    // previous account's key. Values are deliberately *not* in here; see the
+    // module docs.
     let fingerprint: Vec<(String, i64)> =
         rows.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
+    let account = store.auth.address().cloned();
     let labels = {
         let rows = rows.clone();
         let vault_key = vault_key.clone();
-        use_memo((fingerprint, locked), move |_| match &vault_key {
+        use_memo((fingerprint, locked, account), move |_| match &vault_key {
             Some(k) => Vault::from_key(k.clone()).labels(&rows),
             None => sealed_labels(&rows),
         })
@@ -280,7 +287,7 @@ pub fn passwords(p: &PasswordsProps) -> Html {
         let draft_secret = draft_secret.clone();
         let busy = busy.clone();
         let error = error.clone();
-        let reload = reload.clone();
+        let rows = rows.clone();
         let close_draft = close_draft.clone();
         Callback::from(move |_: MouseEvent| {
             if *busy {
@@ -337,7 +344,7 @@ pub fn passwords(p: &PasswordsProps) -> Html {
             let store = store.clone();
             let busy = busy.clone();
             let error = error.clone();
-            let reload = reload.clone();
+            let rows = rows.clone();
             let close_draft = close_draft.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let outcome = match &editing {
@@ -355,7 +362,7 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                     }
                 };
                 match outcome {
-                    Ok(_) => {
+                    Ok(entry) => {
                         toast::success(
                             &store,
                             t(
@@ -368,7 +375,20 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                             ),
                         );
                         close_draft.emit(());
-                        reload.emit(());
+                        // Merge the row the server just handed back rather than
+                        // refetching the whole list: a save is scoped to one
+                        // row, the response already carries its authoritative
+                        // `updated_at`, and on an account near the entry cap a
+                        // refetch would mean a second round trip plus
+                        // re-decrypting every other label just to render the
+                        // one that changed.
+                        let mut next = (*rows).clone();
+                        match next.iter().position(|r| r.id == entry.id) {
+                            Some(pos) => next[pos] = entry,
+                            None => next.push(entry),
+                        }
+                        next.sort_by_key(|r| std::cmp::Reverse(r.updated_at));
+                        rows.set(next);
                     }
                     Err(e) => error.set(Some(e.user_message())),
                 }

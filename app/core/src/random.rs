@@ -58,9 +58,10 @@
 //! "one place to audit" true on both targets at once.
 //!
 //! This module doc is the single home of that argument. Everything else that
-//! draws from here — `wallet::generate_mnemonic`, the server's
-//! `auth::random_hex_32`, the two `Cargo.toml` notes — points back to it rather
-//! than restating it, so there is one place to change if the reasoning does.
+//! draws from here — `wallet::generate_mnemonic`, `password::generate`,
+//! `secrets::seal_field`/`new_entry_id`, the server's `auth::random_hex_32`,
+//! the two `Cargo.toml` notes — points back to it rather than restating it, so
+//! there is one place to change if the reasoning does.
 
 use k256::SecretKey;
 

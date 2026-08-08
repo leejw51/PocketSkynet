@@ -2,7 +2,7 @@
 //!
 //! # Every byte comes from the OS CSPRNG, or nothing does
 //!
-//! [`generate`] draws from `rand::rngs::OsRng` — `getrandom` on the host,
+//! [`generate`] draws from [`crate::random`] — `getrandom` on the host,
 //! `crypto.getRandomValues` in the browser (see `docs/CRYPTO.md` §11.1) — and
 //! returns [`PasswordError::Randomness`] if that fails. There is deliberately
 //! **no fallback**. The tempting one is a PRNG seeded from `Date.now()`, which
@@ -36,7 +36,7 @@
 //! position 2" — a real defect in more than one shipped generator — cannot
 //! happen here.
 
-use rand::RngCore;
+use crate::random;
 
 /// Shortest password this will produce.
 ///
@@ -167,9 +167,7 @@ impl Recipe {
 
 /// Fill `buf` from the OS CSPRNG, or fail.
 fn fill(buf: &mut [u8]) -> Result<(), PasswordError> {
-    rand::rngs::OsRng
-        .try_fill_bytes(buf)
-        .map_err(|_| PasswordError::Randomness)
+    random::fill(buf).map_err(|_| PasswordError::Randomness)
 }
 
 /// A uniform integer in `0..n`, by rejection sampling.

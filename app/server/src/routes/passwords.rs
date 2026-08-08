@@ -133,23 +133,21 @@ async fn create(
         enc_ver: validate::secret_enc_ver(body.enc_ver)?,
     };
 
-    let entry = state
+    let outcome = state
         .db
-        .call(move |conn| {
-            if passwords::count(conn, &new.owner_address)? >= MAX_ENTRIES {
-                return Err(ApiError::bad_request(format!(
-                    "You have reached the limit of {MAX_ENTRIES} saved passwords."
-                )));
-            }
-            // `create` refuses a taken id inside its own statement, so a
-            // retried create is a conflict rather than an overwrite — and two
-            // concurrent ones cannot both win.
-            passwords::create(conn, &new, now_ms())?
-                .ok_or_else(|| ApiError::conflict("That entry already exists"))
-        })
+        .call(move |conn| passwords::create_capped(conn, &new, now_ms(), MAX_ENTRIES))
         .await?;
 
-    Ok(Json(entry).into_response())
+    match outcome {
+        passwords::CreateOutcome::Created(entry) => Ok(Json(entry).into_response()),
+        passwords::CreateOutcome::CapReached => Err(ApiError::bad_request(format!(
+            "You have reached the limit of {MAX_ENTRIES} saved passwords."
+        ))),
+        // `create_capped` refuses a taken id inside its own statement, so a
+        // retried create is a conflict rather than an overwrite — and two
+        // concurrent ones cannot both win.
+        passwords::CreateOutcome::IdTaken => Err(ApiError::conflict("That entry already exists")),
+    }
 }
 
 /// `PUT /api/passwords/{id}` — replace both halves of an entry.

@@ -650,14 +650,19 @@ pub const MAX_SEALED_CIPHERTEXT: usize = 8192;
 /// prefix. A `|` here would make it ambiguous, so the check has to happen on
 /// both sides of the wire and this is the server's half.
 pub fn secret_entry_id(raw: &str) -> ApiResult<String> {
-    let trimmed = raw.trim();
-    if !pocketskynet_core::secrets::is_valid_entry_id(trimmed) {
+    // No `.trim()`: the id is bound into the client's MAC exactly as sent
+    // (`core/src/secrets.rs`'s `secret_mac_input`), so silently normalising
+    // whitespace here would store a different string than the one the seal
+    // authenticates, and the entry could never be decrypted again. The
+    // `[A-Za-z0-9_-]` charset already excludes whitespace, so a raw id that
+    // needed trimming was never valid to begin with.
+    if !pocketskynet_core::secrets::is_valid_entry_id(raw) {
         return Err(ApiError::field(
             "id",
             "Entry id must be 10-100 characters of [A-Za-z0-9_-]",
         ));
     }
-    Ok(trimmed.to_owned())
+    Ok(raw.to_owned())
 }
 
 /// One sealed field's ciphertext.

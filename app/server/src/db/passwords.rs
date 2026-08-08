@@ -161,6 +161,45 @@ pub fn create(conn: &Connection, new: &NewEntry, now: i64) -> ApiResult<Option<P
     }))
 }
 
+/// What [`create_capped`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CreateOutcome {
+    Created(PasswordEntry),
+    /// This owner already has `max_entries` rows.
+    CapReached,
+    /// The id was already taken — by this owner or another.
+    IdTaken,
+}
+
+/// Check the per-owner cap and insert, atomically.
+///
+/// The count and the insert run inside one `IMMEDIATE` transaction.
+/// `IMMEDIATE` takes SQLite's write lock at `BEGIN`, before the count runs, so
+/// a second connection racing the same owner blocks — and retries, via
+/// `busy_timeout` — until this transaction commits or rolls back, rather than
+/// reading a count from its own snapshot that this transaction's insert has
+/// not landed in yet. Without that, two concurrent creates near the cap could
+/// both read the same count on separate pooled connections and both pass it.
+pub fn create_capped(
+    conn: &mut Connection,
+    new: &NewEntry,
+    now: i64,
+    max_entries: i64,
+) -> ApiResult<CreateOutcome> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if count(&tx, &new.owner_address)? >= max_entries {
+        return Ok(CreateOutcome::CapReached);
+    }
+    let outcome = match create(&tx, new, now)? {
+        Some(entry) => CreateOutcome::Created(entry),
+        None => CreateOutcome::IdTaken,
+    };
+    if matches!(outcome, CreateOutcome::Created(_)) {
+        tx.commit()?;
+    }
+    Ok(outcome)
+}
+
 /// Replace both fields of an existing entry.
 ///
 /// Both halves are overwritten together even when only one changed. An edit
