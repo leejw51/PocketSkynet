@@ -23,13 +23,14 @@ cbc.workspace = true
 bip39.workspace = true
 subtle.workspace = true
 
-# The only entropy source this crate has, used solely by `src/random.rs`.
-# Deliberately not `rand`: with no `rand` in this list, `thread_rng()` and every
-# other seeded generator is not something a future edit here *can* reach for.
+# The only entropy source this crate has, used solely by `src/random.rs` — see
+# that module for the full rationale. Deliberately not `rand`: with no `rand` in
+# this list, `thread_rng()` is not something a future edit here *can* reach for.
 getrandom.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# The browser has no /dev/urandom; route getrandom at crypto.getRandomValues.
+# The browser has no /dev/urandom; the `js` feature routes getrandom at
+# crypto.getRandomValues. See `src/random.rs` for how one code path serves both.
 getrandom = { workspace = true, features = ["js"] }
 
 [dev-dependencies]

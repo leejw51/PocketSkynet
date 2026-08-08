@@ -64,15 +64,13 @@ impl MnemonicLength {
     }
 }
 
-/// Generate a fresh BIP-39 English mnemonic from the OS/browser CSPRNG.
+/// Generate a fresh BIP-39 English mnemonic.
 ///
-/// The entropy is drawn here rather than inside `bip39` so the crate's optional
-/// `rand` feature (and its extra dependency graph) is not needed, and so that
-/// the single source of randomness in this crate is [`crate::random`] — one
-/// place to audit. That module is the whole of the claim: this crate does not
-/// depend on `rand` at all, so there is no second generator for a reader to
-/// wonder about, and a failure to draw comes back as an error rather than as
-/// twelve words anybody could guess.
+/// The entropy is drawn through [`crate::random`] — see that module for why the
+/// crate has exactly one entropy source and why a draw that fails comes back as
+/// an error rather than as twelve words anybody could guess — rather than via
+/// `bip39`'s optional `rand` feature, which would pull `rand` back into the
+/// dependency graph this consolidation removed it from.
 ///
 /// The buffer is 32 bytes regardless of length and only the first `ENT/8` are
 /// filled and used, which keeps the two cases one code path. `Mnemonic::from_entropy`
@@ -225,8 +223,20 @@ impl Wallet {
     /// and accepting one would produce an address nobody can sign for.
     pub fn from_private_key_bytes(bytes: &[u8; 32]) -> Result<Self, CryptoError> {
         let secret = SecretKey::from_slice(bytes).map_err(|_| CryptoError::InvalidPrivateKey)?;
+        Ok(Self::from_secret(secret))
+    }
+
+    /// Wrap an already-validated secret key: derive its address and pair them.
+    ///
+    /// The one constructor that takes a `SecretKey` rather than bytes, so the
+    /// two callers that already hold a validated scalar — the byte import above,
+    /// which parsed it, and [`Self::random`], which drew it — share the
+    /// address-derivation step instead of copying it. `SecretKey` cannot hold a
+    /// value outside `[1, n)`, so there is nothing left to reject here; that is
+    /// exactly why this is infallible and its callers decide their own errors.
+    fn from_secret(secret: SecretKey) -> Self {
         let address = eip191::address_from_public_key(&secret.public_key());
-        Ok(Self { secret, address })
+        Self { secret, address }
     }
 
     /// Import a private key from hex, with or without the `0x` prefix.
@@ -252,9 +262,7 @@ impl Wallet {
     /// [`CryptoError::Randomness`], which means exactly one thing: the OS would
     /// not produce entropy.
     pub fn random() -> Result<Self, CryptoError> {
-        let secret = random::secret_key()?;
-        let address = eip191::address_from_public_key(&secret.public_key());
-        Ok(Self { secret, address })
+        Ok(Self::from_secret(random::secret_key()?))
     }
 
     /// The wallet's lowercase Ethereum address — the protocol's primary key.
@@ -495,10 +503,13 @@ mod tests {
     }
 
     /// The failure that must never be silent. With the OS refusing entropy,
-    /// both generators return an error — not a fixed phrase, not the
-    /// all-`abandon` wallet that zero entropy would produce, not a wallet at
-    /// all. `ABANDON` is exactly what a zero-filled buffer becomes, so naming
-    /// it here is the check that a future "sensible default" would trip.
+    /// both generators return `Randomness` — not a fixed phrase, not the
+    /// all-`abandon` wallet that a zero-filled buffer would become, not a wallet
+    /// at all. Returning `Err` *is* the "not a fallback phrase" guarantee:
+    /// there is no `Ok` value to inspect, which is the whole point. (An earlier
+    /// draft asserted the returned phrase was not `ABANDON` here — but under the
+    /// armed guard the call is always `Err`, so `.ok()` was always `None` and
+    /// the assertion could never fail. It proved nothing and is gone.)
     #[test]
     fn generation_refuses_rather_than_falling_back_when_entropy_fails() {
         let _guard = crate::random::FailureGuard::new();
@@ -510,12 +521,6 @@ mod tests {
             );
         }
         assert_eq!(Wallet::random().err(), Some(CryptoError::Randomness));
-
-        // Not the phrase 128 zero bits would have produced.
-        assert_ne!(
-            generate_mnemonic(MnemonicLength::Words12).ok(),
-            Some(ABANDON.to_owned())
-        );
     }
 
     #[test]

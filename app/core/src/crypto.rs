@@ -880,20 +880,18 @@ mod tests {
         assert_eq!(unwrap_room_key_v2(&wrap, &recipient, ROOM).unwrap(), key);
     }
 
-    /// Room keys are the one value in this file that has no second chance: a
-    /// predictable one is undetectable from the wire and stays wrong for every
-    /// message ever sealed under it. Sixteen draws is a wiring check, not a
-    /// statistical claim — the assertions that carry weight are "never zero"
-    /// and "never repeated", both of which a degraded generator fails
-    /// immediately and a good one cannot fail by chance at 256 bits.
+    /// That `generate_room_key` is wired to the CSPRNG and draws afresh on each
+    /// call — not that the CSPRNG is any good, which `random::tests` owns with
+    /// its sixteen-draw sweep. This layer only needs to prove the wrapper does
+    /// not cache, hand back a constant, or return zeros; two distinct non-zero
+    /// keys is the whole of that, without re-running the statistical loop a
+    /// module down.
     #[test]
-    fn room_keys_are_fresh_every_time_and_never_zero() {
-        let mut seen = std::collections::HashSet::new();
-        for _ in 0..16 {
-            let key = generate_room_key().unwrap();
-            assert_ne!(key, [0u8; 32], "a zero room key is not a room key");
-            assert!(seen.insert(key), "generate_room_key repeated itself");
-        }
+    fn room_keys_are_fresh_and_never_zero() {
+        let a = generate_room_key().unwrap();
+        let b = generate_room_key().unwrap();
+        assert_ne!(a, [0u8; 32], "a zero room key is not a room key");
+        assert_ne!(a, b, "generate_room_key handed back the same key twice");
     }
 
     /// Every value drawn from the CSPRNG in this module — the room key, the

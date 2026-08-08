@@ -42,8 +42,12 @@
 //! operating system and a private key instead of two, for the same reason
 //! [`crate::wallet`] implements BIP-32 by hand rather than taking a crate for
 //! it. `OsRng` was not the wrong choice; it was simply a layer that buys
-//! nothing here, and it is the layer whose `RngCore::fill_bytes` panics instead
-//! of reporting a failure.
+//! nothing here. It buys something worse than nothing on the failure path:
+//! `rand`'s `RngCore::fill_bytes` has no way to signal that the OS refused, so
+//! `OsRng` turns a refusal into a panic where `getrandom::getrandom` returns an
+//! `Err` this module can propagate. (That is a property of the `RngCore` trait
+//! contract, not of any one `rand` version, so it does not go stale under a
+//! future `rand`/`getrandom` bump.)
 //!
 //! This crate compiles for `wasm32-unknown-unknown` as well as natively, and a
 //! browser has no `/dev/urandom`. `Cargo.toml` turns on `getrandom`'s `js`
@@ -52,6 +56,11 @@
 //! reference TypeScript client drew from. Nothing in this module is
 //! target-specific; the substitution happens underneath it, which is what makes
 //! "one place to audit" true on both targets at once.
+//!
+//! This module doc is the single home of that argument. Everything else that
+//! draws from here — `wallet::generate_mnemonic`, the server's
+//! `auth::random_hex_32`, the two `Cargo.toml` notes — points back to it rather
+//! than restating it, so there is one place to change if the reasoning does.
 
 use k256::SecretKey;
 
@@ -124,6 +133,18 @@ pub fn secret_key() -> Result<SecretKey, CryptoError> {
     Err(CryptoError::Randomness)
 }
 
+/// 32 CSPRNG bytes as 64 lowercase hex characters.
+///
+/// The shape every unguessable *string* in the system is built from: the
+/// server's login challenge nonce, its SSE ticket, its invite and webhook
+/// tokens, and a per-account encryption salt. Those live in the server crate
+/// and each maps this into its own error type, but the draw-and-encode is here
+/// so the one choke point covers strings as well as raw bytes — a hex token is
+/// not a second, hand-rolled entropy path, it is this function with a prefix.
+pub fn hex_32() -> Result<String, CryptoError> {
+    Ok(hex::encode(bytes::<32>()?))
+}
+
 #[cfg(test)]
 std::thread_local! {
     /// Set by [`FailureGuard`]; read by the one `#[cfg(test)]` branch in
@@ -138,25 +159,33 @@ std::thread_local! {
 /// set/clear functions: a test that panics mid-way must not leave the flag
 /// standing for whatever the harness schedules onto this thread next.
 ///
+/// It carries the *previous* value of the flag rather than assuming the flag
+/// was clear, so nesting composes: an inner guard's `Drop` re-arms the outer
+/// scope instead of disarming it. That is not idle generality — the flag is a
+/// thread-local shared by every test on the thread, and a guard that clobbered
+/// it on drop would make the seam's own behaviour depend on scoping accidents.
+///
 /// This is the whole of the seam. Production code has no way to reach it, no
 /// injectable RNG parameter, and no trait object between a call site and the
 /// OS — an entropy source that can be substituted at run time is precisely the
 /// thing whose absence the rest of this module is arguing for.
 #[cfg(test)]
-pub(crate) struct FailureGuard(());
+pub(crate) struct FailureGuard {
+    previous: bool,
+}
 
 #[cfg(test)]
 impl FailureGuard {
     pub(crate) fn new() -> Self {
-        FAILING.with(|f| f.set(true));
-        Self(())
+        let previous = FAILING.with(|f| f.replace(true));
+        Self { previous }
     }
 }
 
 #[cfg(test)]
 impl Drop for FailureGuard {
     fn drop(&mut self) {
-        FAILING.with(|f| f.set(false));
+        FAILING.with(|f| f.set(self.previous));
     }
 }
 
@@ -245,5 +274,22 @@ mod tests {
             assert!(bytes::<8>().is_err());
         }
         assert!(bytes::<8>().is_ok());
+    }
+
+    /// Nesting composes: dropping the inner guard restores the *outer* scope's
+    /// forced failure rather than clearing it. A guard that clobbered the flag
+    /// on drop would silently re-enable entropy in the middle of an outer
+    /// failure scope, which is exactly the kind of quiet weakening the seam
+    /// exists to make impossible.
+    #[test]
+    fn nested_guards_restore_the_enclosing_scope() {
+        let _outer = FailureGuard::new();
+        assert!(bytes::<8>().is_err());
+        {
+            let _inner = FailureGuard::new();
+            assert!(bytes::<8>().is_err());
+        }
+        // Inner dropped; the outer failure must still stand.
+        assert!(bytes::<8>().is_err());
     }
 }
