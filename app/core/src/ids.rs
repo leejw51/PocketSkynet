@@ -175,6 +175,19 @@ impl WalletAddress {
     pub fn is_agent_sender(&self) -> bool {
         self.0.starts_with(AGENT_SENDER_PREFIX)
     }
+
+    /// Whether this address belongs to a machine speaker rather than a person —
+    /// a webhook poster or a personal agent.
+    ///
+    /// The one predicate the "acting on a person" endpoints reach for. A DM, an
+    /// invitation and a block all name an address the caller expects to be
+    /// somebody they can reach; a reserved address is held by nobody, so the
+    /// request could only ever open a conversation that never answers or block
+    /// an account that cannot act. Both reserved kinds are refused together
+    /// because the reason is the same for each — there is no one there.
+    pub fn is_reserved(&self) -> bool {
+        self.is_webhook_sender() || self.is_agent_sender()
+    }
 }
 
 /// The reserved leading bytes of every webhook sender address.
@@ -500,5 +513,16 @@ mod tests {
         assert!(!agent.is_webhook_sender());
         assert!(!WalletAddress::webhook_sender("hook_1749652746620_ab12cd34").is_agent_sender());
         assert!(!alice.is_agent_sender());
+    }
+
+    #[test]
+    fn is_reserved_covers_both_machine_kinds_and_no_person() {
+        let alice = WalletAddress::new("0x742d35Cc6634C0532925a3b844Bc9e7595f06b22").unwrap();
+        assert!(WalletAddress::agent_of(&alice).is_reserved());
+        assert!(WalletAddress::webhook_sender("hook_1749652746620_ab12cd34").is_reserved());
+        assert!(
+            !alice.is_reserved(),
+            "an ordinary wallet is the thing DM/invite/block are meant to act on"
+        );
     }
 }

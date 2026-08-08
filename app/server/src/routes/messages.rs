@@ -662,6 +662,11 @@ async fn purge(
         "Only room admins can delete a room's entire history",
     )
     .await?;
+    // A built-in room's history is its owner's to clear and no one else's.
+    // `require_admin` passed a server admin through without membership, which
+    // is correct for an ordinary room and exactly wrong here — so the
+    // ownership of a static room is confirmed separately.
+    super::rooms::require_static_owner(&state, &room, &caller).await?;
 
     let marker_id = format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
     let room_id = room.as_str().to_owned();

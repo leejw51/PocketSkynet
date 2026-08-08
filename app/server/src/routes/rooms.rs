@@ -125,6 +125,35 @@ pub(super) async fn refuse_static_removal(
     Ok(())
 }
 
+/// Refuse an act on a built-in room that belongs to somebody other than the
+/// caller.
+///
+/// The purge path is the reason this exists. `require_admin` deliberately
+/// passes a *server* admin without membership — that is the whole point of the
+/// role for an ordinary room — but a built-in room's history is its owner's,
+/// and a server admin computing `room_note_<victim>` and erasing it would make
+/// "nobody else can read this" quietly mean "except whoever runs the server".
+/// The owner is identifiable without a lookup: the id derives from them, so
+/// `static_room_id(kind, caller)` reproduces it exactly when the caller owns
+/// the room and never otherwise. A non-static room passes through untouched.
+///
+/// Returns the plain access-denied a non-member gets everywhere else rather
+/// than a distinct "not your room": the id was derivable, and confirming whose
+/// it is would be the same enumeration oracle the read paths avoid.
+pub(super) async fn require_static_owner(
+    state: &AppState,
+    room: &RoomId,
+    caller: &WalletAddress,
+) -> ApiResult<()> {
+    let record = fetch_room(state, room).await?;
+    if record.is_static()
+        && room.as_str() != rooms::static_room_id(&record.kind, caller.as_str())
+    {
+        return Err(ApiError::access_denied());
+    }
+    Ok(())
+}
+
 /// The room, or 404. Separate from the predicates above so a caller that wants
 /// its own wording — `leave` does — can ask the question without having to
 /// catch and reinterpret an error, which would also swallow the database
@@ -243,6 +272,15 @@ async fn open_dm(
     let mut members = vec![caller.as_str().to_owned()];
     for address in &raw {
         let parsed = validate::wallet_address("walletAddress", Some(address.as_str()))?;
+        // A webhook or an agent is not somebody you can open a conversation
+        // with: it holds no room key, so a DM to one would be a room whose
+        // other member could never read a word of it. An agent answers only in
+        // its owner's Jarvis room, and that room already exists.
+        if parsed.is_reserved() {
+            return Err(ApiError::bad_request(
+                "You can't start a direct message with that address.",
+            ));
+        }
         members.push(parsed.as_str().to_owned());
     }
 
@@ -324,18 +362,43 @@ async fn open_dm(
 async fn list(State(state): State<AppState>, AuthUser(caller): AuthUser) -> ApiResult<Response> {
     let address = caller.as_str().to_owned();
     let admins = super::misc::server_admins();
-    let out = state
+    let (out, changed) = state
         .db
         .call(move |conn| {
             // Degraded, not fatal: a listing that answers without the built-in
             // rooms is a worse answer, but no answer at all would take the
             // whole client down with it.
-            if let Err(e) = rooms::provision_static_rooms(conn, &address, &admins) {
-                tracing::warn!(error = %e, "could not provision the built-in rooms");
-            }
-            storage::visible_rooms(conn, &address)
+            let changed = match rooms::provision_static_rooms(conn, &address, &admins) {
+                Ok(changed) => changed,
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not provision the built-in rooms");
+                    Vec::new()
+                }
+            };
+            Ok((storage::visible_rooms(conn, &address)?, changed))
         })
         .await?;
+
+    // Whoever provisioning just seated (or unseated) has an open socket whose
+    // subscription set predates the change — the same fan-out every other
+    // membership-changing route does, without which a newly-provisioned lobby
+    // member hears nothing sent there until they reconnect. The caller learns
+    // of their own new rooms from this very response, so a `RoomsUpdated` back
+    // to them would be redundant noise; everyone *else* who moved is told.
+    for member in changed {
+        if let Ok(wallet) = WalletAddress::new(&member) {
+            if let Err(e) = state.hub.refresh_user_rooms(&wallet).await {
+                tracing::warn!(error = %e, "could not refresh subscriptions after provisioning");
+            }
+            if wallet != caller {
+                state
+                    .hub
+                    .publish_best_effort(Target::User { wallet }, None, ServerEvent::RoomsUpdated)
+                    .await;
+            }
+        }
+    }
+
     Ok(Json(out).into_response())
 }
 

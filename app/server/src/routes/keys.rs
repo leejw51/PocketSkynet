@@ -121,6 +121,19 @@ async fn store(
     state
         .db
         .call(move |conn| {
+            // The caller's own standing in the room is settled *before* the
+            // room is looked up or classified, so a non-member probing the
+            // derivable id of somebody's note cannot tell it from a room that
+            // does not exist — both are the same 403. Learning the room is
+            // "static" is enough to confirm the victim is an active account,
+            // which is the enumeration oracle this ordering closes; the read
+            // paths already follow it (`require_member` before existence).
+            let caller_belongs = rooms::is_member(conn, &room_id, &caller_address)?
+                || rooms::is_admin(conn, &room_id, &caller_address)?
+                || rooms::has_pending_invitation(conn, &room_id, &caller_address)?;
+            if !caller_belongs {
+                return Err(ApiError::access_denied());
+            }
             let Some(record) = rooms::get_room(conn, &room_id)? else {
                 return Err(ApiError::not_found("Room not found"));
             };

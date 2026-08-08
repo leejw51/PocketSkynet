@@ -31,7 +31,9 @@ pub use crypto::{CryptoError, EncryptedMessage, WrappedRoomKey};
 pub use eip191::{personal_sign, recover_address, verify_signature};
 pub use events::{ClientMessage, PresenceStatus, ResyncReason, ServerEvent, Target};
 pub use hash::{msg_hash_encrypted, msg_hash_plaintext, EmoticonAction};
-pub use ids::{IdError, MessageId, RoomId, WalletAddress, WEBHOOK_SENDER_PREFIX};
+pub use ids::{
+    IdError, MessageId, RoomId, WalletAddress, AGENT_SENDER_PREFIX, WEBHOOK_SENDER_PREFIX,
+};
 pub use keys::{verify_key_binding, EncryptionKeypair};
 pub use password::{PasswordError, Recipe as PasswordRecipe};
 pub use progression::{Award, Directive, Rank, Snapshot, Trophy};

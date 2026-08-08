@@ -68,6 +68,18 @@ fn check_admin(
     let Some(record) = rooms::get_room(conn, room_id)? else {
         return Err(ApiError::not_found("Room not found"));
     };
+    // A built-in room's roster is decided by the server, and My Note's whole
+    // contract is that nobody else can put anything in it. A webhook is a
+    // bearer token that posts through the *unauthenticated* path, so wiring one
+    // into a note would be a way for anyone holding the token to write into a
+    // room that promised it was private — and it would survive every
+    // provisioning reconcile, because the token lives in `room_webhooks`, not
+    // the roster. None of the three accept one.
+    if record.is_static() {
+        return Err(ApiError::bad_request(
+            "Webhooks cannot post into a built-in room.",
+        ));
+    }
     // A DM is the conversation between the people in it. Wiring a feed into
     // one turns it into something neither person opened; a channel is free
     // and says what it is.

@@ -160,25 +160,31 @@ pub fn search_users(
     }
     let pattern = format!("%{escaped}%");
 
-    // Webhook identities (`WEBHOOK_SENDER_PREFIX`) are users rows so their
+    // The two reserved identities — webhook posters (`WEBHOOK_SENDER_PREFIX`)
+    // and personal AI agents (`AGENT_SENDER_PREFIX`) — are users rows so their
     // posts render with a name, but they are not people: everything this
     // search feeds — a DM, an invitation, a block — acts on an address, and
-    // acting on one nobody holds only manufactures dead-end errors. A human
-    // who ground out a vanity address under the reserved prefix is filtered
-    // too; looking like a robot comes with being treated as one.
+    // acting on one nobody holds only manufactures dead-end errors. A Jarvis
+    // is doubly wrong to surface, because it belongs to exactly one other
+    // person and DMing it would open a room to a machine that only ever speaks
+    // in its owner's Jarvis room. A human who ground out a vanity address under
+    // either prefix is filtered too; looking like a robot comes with being
+    // treated as one.
     let mut stmt = conn.prepare(&format!(
         "SELECT wallet_address, username, public_key, public_key_sig, profile_image,
                 created_at, updated_at
          FROM users
          WHERE (username LIKE ?1 ESCAPE '\\' OR wallet_address LIKE ?1 ESCAPE '\\')
-           AND wallet_address NOT LIKE '{}%'
+           AND wallet_address NOT LIKE '{webhook}%'
+           AND wallet_address NOT LIKE '{agent}%'
            AND wallet_address NOT IN
                (SELECT blocked_address FROM blocked_users WHERE blocker_address = ?2)
            AND wallet_address NOT IN
                (SELECT blocker_address FROM blocked_users WHERE blocked_address = ?2)
          ORDER BY username, wallet_address
          LIMIT ?3",
-        pocketskynet_core::WEBHOOK_SENDER_PREFIX
+        webhook = pocketskynet_core::WEBHOOK_SENDER_PREFIX,
+        agent = pocketskynet_core::AGENT_SENDER_PREFIX,
     ))?;
     let rows = stmt.query_map(params![pattern, viewer, limit], User::from_row)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

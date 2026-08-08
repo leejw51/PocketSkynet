@@ -45,6 +45,14 @@ async fn invite(
 ) -> ApiResult<Response> {
     let room = validate::room_id(&room_id)?;
     let invitee = validate::wallet_address("userAddress", body.user_address.as_deref())?;
+    // A webhook or an agent is not a person to invite: it holds no key and
+    // would sit in the roster as a member nobody can reach. Checked before the
+    // room is touched so the answer does not depend on which room was named.
+    if invitee.is_reserved() {
+        return Err(ApiError::bad_request(
+            "That address cannot be invited to a room.",
+        ));
+    }
 
     let room_id = room.as_str().to_owned();
     let inviter = caller.as_str().to_owned();
@@ -53,6 +61,19 @@ async fn invite(
     state
         .db
         .call(move |conn| {
+            // Authority first, and before the room is even looked up, so a
+            // caller who cannot invite here learns nothing about the room —
+            // not whether it exists, and not whether it is one of the built-in
+            // kinds. `is_admin` is false for a room the caller does not
+            // administer *and* for one that does not exist, so a non-member
+            // probing the derivable id of somebody's note gets the same 403 as
+            // for any channel they do not run: the enumeration oracle that
+            // would otherwise confirm the victim is an active account is
+            // closed. Only an admin — who is a member — reaches the classifying
+            // checks below, where a leak would tell them nothing new.
+            if !rooms::is_admin(conn, &room_id, &inviter)? {
+                return Err(ApiError::forbidden("Only room admins can invite users"));
+            }
             let Some(record) = rooms::get_room(conn, &room_id)? else {
                 return Err(ApiError::not_found("Room not found"));
             };
@@ -75,9 +96,6 @@ async fn invite(
                 return Err(ApiError::bad_request(
                     "Cannot invite anyone to a direct message. Start a group message instead.",
                 ));
-            }
-            if !rooms::is_admin(conn, &room_id, &inviter)? {
-                return Err(ApiError::forbidden("Only room admins can invite users"));
             }
             if !users::user_exists(conn, &target)? {
                 return Err(ApiError::not_found("User not found"));

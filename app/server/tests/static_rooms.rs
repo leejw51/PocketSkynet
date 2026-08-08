@@ -591,3 +591,178 @@ async fn the_agent_speaks_only_in_its_owners_jarvis_room() {
         .await
         .expect_status(403);
 }
+
+// --- the doors a code review found ajar -----------------------------------
+
+/// The agent address for one wallet, read off that wallet's own Jarvis roster.
+async fn agent_address(user: &User) -> String {
+    rooms_by_kind(user).await["jarvis"]["members"]
+        .as_array()
+        .expect("members")
+        .iter()
+        .map(|m| s(m, "userAddress"))
+        .find(|a| *a != user.address)
+        .expect("the agent is on the roster")
+}
+
+#[tokio::test]
+async fn a_webhook_cannot_be_minted_for_a_built_in_room() {
+    // The sharp one: a webhook posts through the *unauthenticated* path, so a
+    // webhook on a note would let anyone holding the token write into a room
+    // that promised nobody else could — and it would survive every reconcile,
+    // because the token lives outside the roster.
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    open_the_app(&alice).await;
+
+    for kind in ["note", "jarvis", "lobby"] {
+        let room = static_room_id(kind, &alice.address);
+        let refused = alice
+            .api
+            .post(&format!("/api/rooms/{room}/webhooks"), json!({ "name": "CI" }))
+            .await;
+        refused.expect_status(400);
+        assert!(refused.message().contains("built-in room"), "{kind}");
+    }
+}
+
+#[tokio::test]
+async fn an_operator_cannot_purge_someone_elses_note() {
+    let boss_signer = crypto::Signer::random();
+    let boss_address = boss_signer.address().to_lowercase();
+    let server =
+        TestServer::start_with_env(&[("VITE_FRUITNATION_ADMIN", boss_address.as_str())]).await;
+    let boss = login(&server, boss_signer, "boss").await;
+    let alice = new_user(&server, "alice").await;
+    open_the_app(&alice).await;
+    open_the_app(&boss).await;
+
+    let note = static_room_id("note", &alice.address);
+    send_message(&alice.api, &note, "the safe combination is 0451").await;
+
+    // The operator reaches past a room's own admins by design, but a note's
+    // history is its owner's — the same reasoning as the admin delete route.
+    boss.api
+        .delete(&format!("/api/rooms/{note}/messages"))
+        .await
+        .expect_status(403);
+
+    // Alice's history survives, and she can still clear her own note.
+    let still_there = alice.api.get(&format!("/api/rooms/{note}/messages")).await;
+    assert_eq!(still_there.array().len(), 1);
+    alice
+        .api
+        .delete(&format!("/api/rooms/{note}/messages"))
+        .await
+        .expect_status(200);
+}
+
+#[tokio::test]
+async fn an_agent_is_not_a_person_you_can_search_dm_invite_or_block() {
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    let bob = new_user(&server, "bob").await;
+    open_the_app(&alice).await;
+    open_the_app(&bob).await;
+
+    let bobs_agent = agent_address(&bob).await;
+
+    // It has a users row so its replies render with a name, but it must never
+    // surface as a person anywhere that acts on one.
+    let hits = bob.api.get("/api/users/search?q=jarvis").await.array();
+    assert!(
+        hits.iter().all(|u| s(u, "walletAddress") != bobs_agent),
+        "the agent must not appear in user search: {hits:?}"
+    );
+
+    // Opening a DM with it, inviting it, or blocking it are all refused — a
+    // room to a machine that only ever speaks in its owner's Jarvis room is a
+    // conversation that never answers.
+    alice
+        .api
+        .post("/api/rooms/dm", json!({ "walletAddress": bobs_agent }))
+        .await
+        .expect_status(400);
+
+    let room = create_room(&alice.api, "Team").await;
+    alice
+        .api
+        .post(
+            &format!("/api/rooms/{room}/invite"),
+            json!({ "userAddress": bobs_agent }),
+        )
+        .await
+        .expect_status(400);
+
+    alice
+        .api
+        .post("/api/users/block", json!({ "address": bobs_agent }))
+        .await
+        .expect_status(400);
+}
+
+#[tokio::test]
+async fn probing_a_strangers_note_id_reveals_nothing_about_them() {
+    // The enumeration oracle: the built-in refusals must not run before the
+    // membership gate, or a non-member gets a distinguishable answer that
+    // confirms the victim is an active account. Alice's note is provisioned
+    // (she opened the app); Bob's is not (he never did) — and mallory, an
+    // outsider to both, must get the *same* answer for each and for a room
+    // that does not exist at all.
+    let server = TestServer::start().await;
+    let alice = new_user(&server, "alice").await;
+    let bob = new_user(&server, "bob").await;
+    let mallory = new_user(&server, "mallory").await;
+    open_the_app(&alice).await;
+    // Bob deliberately does NOT open the app: his note is unprovisioned.
+
+    let active_note = static_room_id("note", &alice.address);
+    let dormant_note = static_room_id("note", &bob.address);
+    let absent = "room_note_0x0000000000000000000000000000000000000000".to_owned();
+
+    let wrap = || {
+        json!({
+            "userAddress": mallory.address,
+            "encryptedSymmetricKey": "wrapped",
+            "ephemeralPublicKey": "04ab",
+            "encryptionIV": "1a2b3c4d5e6f78901234567890abcdef",
+            "hmac": "9".repeat(64),
+            "keyVersion": 1,
+        })
+    };
+    let mut key_codes = Vec::new();
+    for room in [&active_note, &dormant_note, &absent] {
+        key_codes.push(
+            mallory
+                .api
+                .post(&format!("/api/rooms/{room}/keys"), wrap())
+                .await
+                .status,
+        );
+    }
+    assert_eq!(
+        key_codes[0], key_codes[1],
+        "an active account's note must not answer differently from a dormant one"
+    );
+    assert_eq!(
+        key_codes[1], key_codes[2],
+        "…or from a room that never existed"
+    );
+
+    // Inviting: same story through a different verb.
+    let mut invite_codes = Vec::new();
+    for room in [&active_note, &dormant_note, &absent] {
+        invite_codes.push(
+            mallory
+                .api
+                .post(
+                    &format!("/api/rooms/{room}/invite"),
+                    json!({ "userAddress": alice.address }),
+                )
+                .await
+                .status,
+        );
+    }
+    assert_eq!(invite_codes[0], invite_codes[1]);
+    assert_eq!(invite_codes[1], invite_codes[2]);
+}

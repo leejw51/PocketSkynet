@@ -138,15 +138,26 @@ pub fn static_room_id(kind: &str, owner: &str) -> String {
 /// with one enforcement point is a rule that a future route can bypass by
 /// accident; recomputing the set means the room *heals* rather than merely
 /// resisting.
+/// Returns the addresses whose room membership actually changed — someone
+/// seated in a room they were not in, or dropped from one they no longer
+/// belong to. The common case, where everything already exists, returns an
+/// empty set. The caller uses it to refresh live subscriptions: a person newly
+/// seated in a room (the owner on first sign-in, an admin added to somebody's
+/// lobby) has an open socket subscribed to `user_room_ids` that does not yet
+/// include it, so without this they would receive nothing sent there until they
+/// reconnected.
 pub fn provision_static_rooms(
     conn: &mut Connection,
     owner: &str,
     server_admins: &[String],
-) -> ApiResult<()> {
+) -> ApiResult<Vec<String>> {
     let agent = pocketskynet_core::WalletAddress::agent_of(
         &pocketskynet_core::WalletAddress::new(owner)
             .map_err(|e| crate::error::ApiError::Internal(anyhow::anyhow!(e)))?,
     );
+    // A set so an address touched in two rooms is refreshed once, and so the
+    // agent — which has no socket — falls out harmlessly if it lands here.
+    let mut changed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for kind in STATIC_ROOM_KINDS {
         let id = static_room_id(kind, owner);
@@ -187,11 +198,17 @@ pub fn provision_static_rooms(
         )?;
 
         for member in &roster {
-            tx.execute(
+            // The row count distinguishes a genuine seating from a no-op
+            // re-run, which is what keeps the common path from waking every
+            // socket on every room-list fetch.
+            let inserted = tx.execute(
                 "INSERT INTO room_members (room_id, user_address, joined_at) VALUES (?1, ?2, ?3)
                  ON CONFLICT (room_id, user_address) DO NOTHING",
                 params![id, member, now],
             )?;
+            if inserted > 0 {
+                changed.insert(member.clone());
+            }
         }
         // Anyone the roster no longer names goes, along with their read pointer
         // and hidden-room row — the same three deletes `remove_member` does,
@@ -205,6 +222,18 @@ pub fn provision_static_rooms(
         let mut binds: Vec<&dyn rusqlite::ToSql> = vec![&id];
         for member in &roster {
             binds.push(member);
+        }
+        // Read who is about to be removed before removing them, so their
+        // sockets can be told to drop the room from their subscription set.
+        {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT user_address FROM room_members
+                 WHERE room_id = ?1 AND user_address NOT IN ({placeholders})"
+            ))?;
+            let removed = stmt.query_map(binds.as_slice(), |r| r.get::<_, String>(0))?;
+            for address in removed {
+                changed.insert(address?);
+            }
         }
         for table in ["room_members", "room_reads"] {
             tx.execute(
@@ -229,7 +258,11 @@ pub fn provision_static_rooms(
     // placeholder. Written last, outside the loop, because it belongs to the
     // person rather than to any one room.
     super::users::upsert_user(conn, agent.as_str(), "Jarvis", None, None)?;
-    Ok(())
+
+    // The agent holds no socket, so refreshing it would be a lookup that finds
+    // nothing — drop it rather than hand the caller a wake-up for a machine.
+    changed.remove(agent.as_str());
+    Ok(changed.into_iter().collect())
 }
 
 // ------------------------------------------------------- direct messages ---
