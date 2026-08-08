@@ -146,9 +146,7 @@ pub(super) async fn require_static_owner(
     caller: &WalletAddress,
 ) -> ApiResult<()> {
     let record = fetch_room(state, room).await?;
-    if record.is_static()
-        && room.as_str() != rooms::static_room_id(&record.kind, caller.as_str())
-    {
+    if record.is_static() && room.as_str() != rooms::static_room_id(&record.kind, caller.as_str()) {
         return Err(ApiError::access_denied());
     }
     Ok(())

@@ -619,7 +619,10 @@ async fn a_webhook_cannot_be_minted_for_a_built_in_room() {
         let room = static_room_id(kind, &alice.address);
         let refused = alice
             .api
-            .post(&format!("/api/rooms/{room}/webhooks"), json!({ "name": "CI" }))
+            .post(
+                &format!("/api/rooms/{room}/webhooks"),
+                json!({ "name": "CI" }),
+            )
             .await;
         refused.expect_status(400);
         assert!(refused.message().contains("built-in room"), "{kind}");
