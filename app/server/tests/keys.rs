@@ -207,7 +207,13 @@ async fn a_key_cannot_be_stored_for_a_non_member_and_non_invitee() {
 }
 
 #[tokio::test]
-async fn storing_a_key_in_a_nonexistent_room_is_a_404() {
+async fn storing_a_key_in_a_room_you_do_not_belong_to_is_a_uniform_403() {
+    // Was a 404 "Room not found". The caller's standing in the room is now
+    // settled before the room is looked up, so a non-member — which is what
+    // you are for a room that does not exist — gets the same 403 whether the
+    // room is missing, somebody else's, or the derivable id of somebody's My
+    // Note. That uniformity closes the enumeration oracle a note id would
+    // otherwise be (see `static_rooms::probing_a_strangers_note_id_reveals_nothing`).
     let server = TestServer::start().await;
     let alice = new_user(&server, "alice").await;
 
@@ -218,7 +224,7 @@ async fn storing_a_key_in_a_nonexistent_room_is_a_404() {
             wrap(&alice.address, 1),
         )
         .await
-        .expect_error(404, "Room not found");
+        .expect_error(403, "Access denied");
 }
 
 #[tokio::test]
