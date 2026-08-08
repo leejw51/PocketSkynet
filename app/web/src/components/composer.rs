@@ -277,7 +277,8 @@ pub fn composer(p: &ComposerProps) -> Html {
             // However many were picked — one or, with `multiple` on the input,
             // up to a browser-chosen batch; `attach_files` enforces the actual
             // per-message cap and tells the user if it trimmed the selection.
-            let files: Vec<web_sys::File> = (0..list.length()).filter_map(|i| list.get(i)).collect();
+            let files: Vec<web_sys::File> =
+                (0..list.length()).filter_map(|i| list.get(i)).collect();
             if files.is_empty() {
                 return;
             }

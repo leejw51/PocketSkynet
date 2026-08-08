@@ -1408,14 +1408,20 @@ fn end_transfer(store: &Store, id: u64, succeeded: bool) {
 /// this under the server's per-wallet open-session cap (see
 /// [`MAX_ATTACHMENTS_PER_MESSAGE`]) and gives the transfer rail a stable,
 /// readable order rather than N bars racing.
-pub async fn attach_files(store: Store, room_id: RoomId, mut picked: Vec<web_sys::File>, caption: String) {
+pub async fn attach_files(
+    store: Store,
+    room_id: RoomId,
+    mut picked: Vec<web_sys::File>,
+    caption: String,
+) {
     let lang = store.language;
 
     if picked.len() > MAX_ATTACHMENTS_PER_MESSAGE {
         picked.truncate(MAX_ATTACHMENTS_PER_MESSAGE);
         toast::error(
             &store,
-            t(lang, Key::attach_too_many).replace("{max}", &MAX_ATTACHMENTS_PER_MESSAGE.to_string()),
+            t(lang, Key::attach_too_many)
+                .replace("{max}", &MAX_ATTACHMENTS_PER_MESSAGE.to_string()),
             None,
         );
     }
