@@ -1484,11 +1484,11 @@ pub fn chat(p: &ChatProps) -> Html {
                 on_attach={{
                     let store = store.clone();
                     let id = p.room_id.clone();
-                    Callback::from(move |(file, caption): (web_sys::File, String)| {
+                    Callback::from(move |(files, caption): (Vec<web_sys::File>, String)| {
                         let store = store.clone();
                         let id = id.clone();
                         wasm_bindgen_futures::spawn_local(async move {
-                            crate::actions::attach_file(store, id, file, caption).await;
+                            crate::actions::attach_files(store, id, files, caption).await;
                         });
                     })
                 }}
