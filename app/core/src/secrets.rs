@@ -99,9 +99,19 @@
 //!   design than this one.
 //! * **Memory.** Decrypted values live in ordinary `String`s. `zeroize` is not
 //!   a dependency of this crate, and on wasm — where the heap is a JS-visible
-//!   `ArrayBuffer` and the GC moves nothing on request — wiping is closer to
-//!   theatre than to a guarantee. Callers should drop plaintext promptly; that
-//!   is the honest extent of it.
+//!   `ArrayBuffer` and the GC moves nothing on request — guaranteed wiping is
+//!   closer to theatre than to a guarantee. So the guarantee this layer *does*
+//!   make is **lifetime minimization**, not zeroization, and it is the caller's
+//!   to keep: a decrypted *value* is never cached, never held in a list, and
+//!   never written to any storage backend. [`open_field`] returns a plaintext
+//!   and the caller is expected to use it and drop it within the one action
+//!   that asked for it — a reveal, a copy, an edit. The `web` client
+//!   (`web/src/secrets.rs`, `components/passwords.rs`) is built to that rule:
+//!   the list decrypts only the *label* of each entry, and a value is opened
+//!   solely at the instant it is revealed or copied. The unavoidable residue —
+//!   a value briefly in the heap while it is on screen, and the plaintext in an
+//!   input field while it is being typed or edited — is exactly that, residue;
+//!   everything else is minimized rather than trusted to a wipe.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -166,13 +176,25 @@ pub struct SealedField {
     pub hmac: String,
 }
 
-/// The root key for one account's password store.
+/// The root key for one account's password store, with its two working
+/// subkeys.
 ///
 /// A newtype rather than a bare `[u8; 32]` so it cannot be handed to
 /// [`crate::crypto::encrypt_message_v2`] as a room key by accident — the two
 /// are the same shape and mean entirely different things.
+///
+/// The AES and HMAC subkeys are derived **once**, in [`Self::derive`], and held
+/// here rather than recomputed on every [`seal_field`] / [`open_field`] call.
+/// Opening a 500-entry store means 1000 field decrypts, and re-running the two
+/// label-KDF HMACs per field turned that into 3000 avoidable HMAC passes on the
+/// wasm main thread — the caller memoises the *result* (see `web/src/secrets.rs`
+/// and `components/passwords.rs`), and this makes the work behind one such pass
+/// as small as it can be.
 #[derive(Clone)]
-pub struct VaultKey([u8; 32]);
+pub struct VaultKey {
+    enc_key: [u8; 32],
+    mac_key: [u8; 32],
+}
 
 impl std::fmt::Debug for VaultKey {
     /// Never print the bytes. A derived `Debug` on key material is how secrets
@@ -190,15 +212,19 @@ impl VaultKey {
     /// key that works perfectly until somebody fixes it — see the trap in
     /// `docs/CRYPTO.md` §3.1.
     pub fn derive(encryption_private_key: &[u8; 32]) -> Self {
-        Self(derive_subkey(encryption_private_key, VAULT_LABEL))
+        let root = derive_subkey(encryption_private_key, VAULT_LABEL);
+        Self {
+            enc_key: derive_subkey(&root, SECRET_ENC_LABEL),
+            mac_key: derive_subkey(&root, SECRET_MAC_LABEL),
+        }
     }
 
-    fn enc_key(&self) -> [u8; 32] {
-        derive_subkey(&self.0, SECRET_ENC_LABEL)
+    fn enc_key(&self) -> &[u8; 32] {
+        &self.enc_key
     }
 
-    fn mac_key(&self) -> [u8; 32] {
-        derive_subkey(&self.0, SECRET_MAC_LABEL)
+    fn mac_key(&self) -> &[u8; 32] {
+        &self.mac_key
     }
 }
 
@@ -252,13 +278,13 @@ pub fn seal_field_with_iv(
         return Err(CryptoError::InvalidEncoding);
     }
 
-    let ciphertext = aes_cbc_encrypt(&vault.enc_key(), iv, plaintext.as_bytes());
+    let ciphertext = aes_cbc_encrypt(vault.enc_key(), iv, plaintext.as_bytes());
     // Standard alphabet *with* padding: the `=` characters are part of the MAC
     // input, exactly as in the message scheme.
     let ciphertext = BASE64.encode(&ciphertext);
     let iv_hex = hex::encode(iv);
     let hmac = mac_hex(
-        &vault.mac_key(),
+        vault.mac_key(),
         &secret_mac_input(entry_id, field, &iv_hex, &ciphertext),
     );
 
@@ -287,7 +313,7 @@ pub fn open_field(
 
     // Authenticate first. Nothing below this line runs on unauthenticated
     // data, which is what keeps the CBC padding check from becoming an oracle.
-    if !verify_mac(&vault.mac_key(), &mac_input, &sealed.hmac) {
+    if !verify_mac(vault.mac_key(), &mac_input, &sealed.hmac) {
         return Err(CryptoError::DecryptionFailed);
     }
 
@@ -295,7 +321,7 @@ pub fn open_field(
     let ciphertext = BASE64
         .decode(&sealed.ciphertext)
         .map_err(|_| CryptoError::DecryptionFailed)?;
-    let plaintext = aes_cbc_decrypt(&vault.enc_key(), &iv, &ciphertext)?;
+    let plaintext = aes_cbc_decrypt(vault.enc_key(), &iv, &ciphertext)?;
     String::from_utf8(plaintext).map_err(|_| CryptoError::DecryptionFailed)
 }
 
@@ -422,9 +448,11 @@ mod tests {
         // a compromise of one wrapped room key's ECDH partner would become a
         // compromise of the password store. The label is what separates them.
         let vault = vault();
-        assert_ne!(vault.0, ENC_PRIV);
+        assert_ne!(vault.enc_key(), &ENC_PRIV);
         assert_ne!(vault.enc_key(), vault.mac_key());
-        assert_ne!(vault.enc_key(), vault.0);
+        // The vault root is hashed twice more before use, so neither working
+        // subkey is the private key that seeded it.
+        assert_ne!(vault.mac_key(), &ENC_PRIV);
     }
 
     #[test]

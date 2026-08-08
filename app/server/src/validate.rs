@@ -523,6 +523,31 @@ pub fn enc_ver(raw: Option<i64>, default: i64) -> ApiResult<i64> {
     }
 }
 
+/// `encVer` for a Skynet Password entry — only `SECRET_ENC_VER` (1) exists.
+///
+/// A separate validator from [`enc_ver`] on purpose. That one accepts 1..=2,
+/// the range the *message* scheme defines, and the password scheme has no
+/// version 2. Reusing it would let a client store rows stamped `encVer: 2` that
+/// no reader knows how to open — and because `encVer` is **not** inside the
+/// sealing MAC (`core/src/secrets.rs`), the value is server-tamperable too, so
+/// the bound is the only thing keeping it honest. The accepted set is sourced
+/// from the one core constant, so a future v2 lands here, in the sealer, and in
+/// the client's writer together rather than in one of the three alone.
+pub fn secret_enc_ver(raw: Option<i64>) -> ApiResult<i64> {
+    let v = raw.unwrap_or(pocketskynet_core::secrets::SECRET_ENC_VER);
+    if v == pocketskynet_core::secrets::SECRET_ENC_VER {
+        Ok(v)
+    } else {
+        Err(ApiError::field(
+            "encVer",
+            &format!(
+                "Encryption version must be {}",
+                pocketskynet_core::secrets::SECRET_ENC_VER
+            ),
+        ))
+    }
+}
+
 /// `keyVersion` — the room epoch a payload is sealed under.
 pub fn key_version(field: &str, raw: Option<i64>, default: i64) -> ApiResult<i64> {
     match raw {

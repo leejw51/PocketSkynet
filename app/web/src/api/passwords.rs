@@ -42,6 +42,11 @@ fn default_enc_ver() -> i64 {
 }
 
 /// The create body. `id` is ours; the two fields are sealed.
+///
+/// `encVer` is stamped from the one core constant, not threaded in by callers:
+/// every writer of this scheme agrees on the version by construction, and the
+/// server rejects anything else (`validate::secret_enc_ver`). When a v2 is ever
+/// defined it changes in `core::secrets` and every body here follows.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateBody<'a> {
@@ -64,8 +69,9 @@ struct ReplaceBody<'a> {
 impl Client {
     /// Every entry this wallet holds, most recently changed first.
     ///
-    /// Unpaginated by design: the client has to decrypt the whole list to
-    /// filter it at all, because the key is ciphertext too.
+    /// The rows come back sealed; opening them is [`crate::secrets`]'s job, and
+    /// the client opens only the *label* of each for the list — a value is
+    /// decrypted solely when it is revealed or copied.
     pub async fn passwords(&self) -> ApiResult<Vec<PasswordEntry>> {
         self.send(Method::GET, "/api/passwords").await
     }
@@ -80,7 +86,6 @@ impl Client {
         id: &str,
         key: &SealedField,
         value: &SealedField,
-        enc_ver: i64,
     ) -> ApiResult<PasswordEntry> {
         self.send_json(
             Method::POST,
@@ -89,7 +94,7 @@ impl Client {
                 id,
                 key,
                 value,
-                enc_ver,
+                enc_ver: pocketskynet_core::secrets::SECRET_ENC_VER,
             },
         )
         .await
@@ -105,7 +110,6 @@ impl Client {
         id: &str,
         key: &SealedField,
         value: &SealedField,
-        enc_ver: i64,
     ) -> ApiResult<PasswordEntry> {
         self.send_json(
             Method::PUT,
@@ -113,7 +117,7 @@ impl Client {
             &ReplaceBody {
                 key,
                 value,
-                enc_ver,
+                enc_ver: pocketskynet_core::secrets::SECRET_ENC_VER,
             },
         )
         .await

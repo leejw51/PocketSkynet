@@ -30,11 +30,12 @@ use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
+use pocketskynet_core::secrets::SealedField;
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
 use crate::db::now_ms;
-use crate::db::passwords::{self, NewEntry, SealedField};
+use crate::db::passwords::{self, NewEntry};
 use crate::error::{ApiError, ApiResult};
 use crate::validate::{self, ValidJson};
 use crate::AppState;
@@ -129,7 +130,7 @@ async fn create(
         owner_address: caller.as_str().to_owned(),
         key: parse_sealed("key", body.key.as_ref())?,
         value: parse_sealed("value", body.value.as_ref())?,
-        enc_ver: validate::enc_ver(body.enc_ver, 1)?,
+        enc_ver: validate::secret_enc_ver(body.enc_ver)?,
     };
 
     let entry = state
@@ -165,7 +166,7 @@ async fn replace(
     let id = validate::secret_entry_id(&id)?;
     let key = parse_sealed("key", body.key.as_ref())?;
     let value = parse_sealed("value", body.value.as_ref())?;
-    let enc_ver = validate::enc_ver(body.enc_ver, 1)?;
+    let enc_ver = validate::secret_enc_ver(body.enc_ver)?;
     let owner = caller.as_str().to_owned();
 
     let entry = state
@@ -242,6 +243,51 @@ mod tests {
                 "{method} {path} must require a token"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn an_encryption_version_the_scheme_does_not_define_is_refused() {
+        // `encVer: 2` is a valid *message* version and no password version at
+        // all. It is not inside the sealing MAC, so if the bound accepted it a
+        // client — or a tampering server — could plant rows no reader can open.
+        let state = state("passwords-encver");
+        let alice = wallet("alice");
+        let token = register(&state, &alice, "alice");
+        let router = build(state);
+
+        let mut bad = entry("sec_aaaaaaaaaaaaaaaa");
+        bad["encVer"] = json!(2);
+        let created = send(&router, "POST", "/api/passwords", Some(&token), Some(bad)).await;
+        assert_eq!(created.status, StatusCode::BAD_REQUEST);
+
+        // The real version still works, and a missing one defaults to it.
+        let ok = send(
+            &router,
+            "POST",
+            "/api/passwords",
+            Some(&token),
+            Some(entry("sec_bbbbbbbbbbbbbbbb")),
+        )
+        .await;
+        assert_eq!(ok.status, StatusCode::OK);
+        assert_eq!(ok.json()["encVer"], 1);
+
+        let mut no_ver = entry("sec_cccccccccccccccc");
+        no_ver.as_object_mut().unwrap().remove("encVer");
+        let defaulted = send(&router, "POST", "/api/passwords", Some(&token), Some(no_ver)).await;
+        assert_eq!(defaulted.status, StatusCode::OK);
+        assert_eq!(defaulted.json()["encVer"], 1);
+
+        // And an edit cannot smuggle a bad version in either.
+        let bump = send(
+            &router,
+            "PUT",
+            "/api/passwords/sec_bbbbbbbbbbbbbbbb",
+            Some(&token),
+            Some(json!({ "key": sealed("k2"), "value": sealed("v2"), "encVer": 2 })),
+        )
+        .await;
+        assert_eq!(bump.status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

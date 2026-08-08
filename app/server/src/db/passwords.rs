@@ -21,6 +21,7 @@
 //! answer: `false`, which the route turns into a 404. That is deliberate; see
 //! `routes/passwords.rs`.
 
+use pocketskynet_core::secrets::SealedField;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -32,6 +33,14 @@ use crate::error::ApiResult;
 /// than six flat members so the client can hand each one to
 /// `secrets::open_field` without re-assembling it, and so it is obvious at a
 /// glance that both halves carry their own IV and MAC.
+///
+/// [`SealedField`] is `core`'s own type, not a look-alike. An earlier version
+/// redeclared it here on the theory that the server "must not be able to
+/// construct a core sealed field" — but `core`'s fields are `pub`, so that
+/// barrier never existed, and the copy was pure drift risk: two structs the
+/// wire has to keep byte-identical. Reusing the one type is what makes them so
+/// by construction. The server still cannot *open* one; that needs the vault
+/// key, which never arrives here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PasswordEntry {
     pub id: String,
@@ -43,19 +52,6 @@ pub struct PasswordEntry {
     pub created_at: i64,
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
-}
-
-/// One sealed field on the wire. Mirrors `core::secrets::SealedField`.
-///
-/// Redeclared here rather than imported because this is the *storage* shape:
-/// the server must not gain the ability to construct a `core` sealed field, or
-/// somebody will eventually pass one to a `core` function that expects to be
-/// able to open it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct SealedField {
-    pub ciphertext: String,
-    pub iv: String,
-    pub hmac: String,
 }
 
 /// What a create or replace writes.
@@ -186,29 +182,43 @@ pub fn replace(
     enc_ver: i64,
     now: i64,
 ) -> ApiResult<Option<PasswordEntry>> {
-    let changed = conn.execute(
-        "UPDATE password_entries
-            SET key_ciphertext = ?3, key_iv = ?4, key_hmac = ?5,
-                value_ciphertext = ?6, value_iv = ?7, value_hmac = ?8,
-                enc_ver = ?9, updated_at = ?10
-          WHERE owner_address = ?1 AND id = ?2",
-        params![
-            owner,
-            id,
-            key.ciphertext,
-            key.iv,
-            key.hmac,
-            value.ciphertext,
-            value.iv,
-            value.hmac,
-            enc_ver,
-            now,
-        ],
-    )?;
-    if changed == 0 {
-        return Ok(None);
-    }
-    get(conn, owner, id)
+    // `RETURNING created_at` in the same statement, the way `db/users.rs` and
+    // `db/rooms.rs` return their upserted rows: the update *is* the read, so
+    // there is no second SELECT and no window in which a concurrent write could
+    // slip between the two. `created_at` is the only column the update does not
+    // already have in hand — everything else it just wrote.
+    let created_at: Option<i64> = conn
+        .query_row(
+            "UPDATE password_entries
+                SET key_ciphertext = ?3, key_iv = ?4, key_hmac = ?5,
+                    value_ciphertext = ?6, value_iv = ?7, value_hmac = ?8,
+                    enc_ver = ?9, updated_at = ?10
+              WHERE owner_address = ?1 AND id = ?2
+              RETURNING created_at",
+            params![
+                owner,
+                id,
+                key.ciphertext,
+                key.iv,
+                key.hmac,
+                value.ciphertext,
+                value.iv,
+                value.hmac,
+                enc_ver,
+                now,
+            ],
+            |r| r.get(0),
+        )
+        .optional()?;
+
+    Ok(created_at.map(|created_at| PasswordEntry {
+        id: id.to_owned(),
+        key: key.clone(),
+        value: value.clone(),
+        enc_ver,
+        created_at,
+        updated_at: now,
+    }))
 }
 
 /// Delete one entry. `false` when this owner has no such row.
