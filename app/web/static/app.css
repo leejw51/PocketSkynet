@@ -8698,6 +8698,7 @@ span.fn-conn { cursor: default; }
    authenticated and there is no src a browser can be pointed at. */
 .fn-attach {
   display: block;
+  position: relative;
   margin-block: var(--fn-s1);
   max-inline-size: min(420px, 100%);
 }
@@ -8710,29 +8711,55 @@ span.fn-conn { cursor: default; }
   background: var(--fn-surface-3);
 }
 
+/* `cover`, not `contain`. `contain` letterboxes: a portrait photo in a
+   landscape box gets black bars down both sides and the card is mostly not the
+   picture. `cover` scales on whichever axis is short and crops the other, so
+   the frame is always full. What that costs — the edges of an off-ratio image
+   — costs nothing here, because the whole picture is a zoom target and one tap
+   shows it whole. A preview is a preview; the original is one tap away. */
 .fn-attach__media {
   display: block;
   inline-size: 100%;
-  max-block-size: 320px;
-  /* `contain`, not `cover`: a screenshot cropped to a pleasing rectangle is a
-     screenshot with its point cut off. */
-  object-fit: contain;
-  border-radius: var(--fn-r-ctl) var(--fn-r-ctl) 0 0;
-  background: #000;
+  block-size: 100%;
+  object-fit: cover;
+  background: var(--fn-surface-3);
 }
 /* The image sits in a button so the whole picture is the "open" target — a
-   16px icon is a poor hit area for something 420px wide. */
+   16px icon is a poor hit area for something 420px wide.
+   The fixed ratio is what gives `cover` something to fill: without it the box
+   is the image's own shape and there is nothing to crop to. Square, because a
+   chat carries both photographs and screenshots and it is the only ratio that
+   is not actively wrong for one of them — 4:3 reduces a portrait of a person
+   to a horizontal band across their middle, which is the common case here and
+   the worst thing this could do. A wide screenshot loses a little off each
+   side instead, and one tap still opens it whole. */
 .fn-attach__shot {
   display: block;
+  position: relative;
   inline-size: 100%;
+  aspect-ratio: 1 / 1;
+  max-block-size: 380px;
   padding: 0;
   border: 0;
-  background: none;
+  overflow: hidden;
+  border-radius: var(--fn-r-card);
+  background: var(--fn-surface-3);
   cursor: zoom-in;
   transition: filter var(--fn-dur-fast) var(--fn-ease);
 }
 @media (hover: hover) {
   .fn-attach__shot:hover .fn-attach__media { filter: brightness(1.08); }
+}
+/* A *playing* video is a bare media element with no `__shot` around it, so it
+   has no ratio box to fill and must size itself. It also keeps `contain`:
+   cropping a still is a preview decision, but cropping a video someone is
+   watching cuts the frame they are watching. */
+.fn-attach > .fn-attach__media {
+  block-size: auto;
+  max-block-size: 380px;
+  object-fit: contain;
+  border-radius: var(--fn-r-card);
+  background: #000;
 }
 
 .fn-attach__row {
@@ -8745,12 +8772,64 @@ span.fn-conn { cursor: default; }
   border-radius: var(--fn-r-card);
   background: linear-gradient(180deg, var(--fn-raise-a), var(--fn-raise-b));
 }
-/* When media sits above it, the card and the media are one object. */
+/* With media above it the row stops being a card of its own and becomes a
+   caption *on* the picture. Stacked, it doubled the height of every image
+   message to carry a filename and a path — for a photo, the photo is the
+   content and the metadata is a footnote, so the footnote goes over it.
+   Absolute rather than a last flex row: the row must not take space from the
+   image, or the ratio above stops being the ratio. */
 .fn-attach__media + .fn-attach__row,
 .fn-attach__shot + .fn-attach__row {
-  border-start-start-radius: 0;
-  border-start-end-radius: 0;
-  border-block-start: 0;
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  border: 0;
+  border-radius: 0 0 var(--fn-r-card) var(--fn-r-card);
+  padding: var(--fn-s3) var(--fn-s2) var(--fn-s2);
+  /* A scrim, not a solid bar: the top of it has to be invisible against an
+     arbitrary photograph, and a hard edge across someone's face is worse than
+     the wasted space this replaces. */
+  background: linear-gradient(
+    to top,
+    rgb(0 0 0 / 0.78) 0%,
+    rgb(0 0 0 / 0.55) 45%,
+    rgb(0 0 0 / 0) 100%
+  );
+  /* Text over an unknown image cannot inherit theme colours — a dark filename
+     on a dark photo is invisible in either theme. */
+  color: #fff;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.65);
+  pointer-events: none;
+}
+/* …but the buttons in it still have to be clickable. */
+.fn-attach__media + .fn-attach__row .fn-attach__tools,
+.fn-attach__shot + .fn-attach__row .fn-attach__tools {
+  pointer-events: auto;
+}
+.fn-attach__media + .fn-attach__row .fn-attach__name,
+.fn-attach__shot + .fn-attach__row .fn-attach__name,
+.fn-attach__media + .fn-attach__row .fn-attach__meta,
+.fn-attach__shot + .fn-attach__row .fn-attach__meta {
+  color: #fff;
+}
+.fn-attach__media + .fn-attach__row .topcoat-icon-button--quiet,
+.fn-attach__shot + .fn-attach__row .topcoat-icon-button--quiet {
+  color: #fff;
+}
+/* The extension plate and the raw path are the two things worth dropping when
+   the picture is visible: the plate says "JPG" about something you can see is
+   a photograph, and the path is two lines of URL that the download button
+   makes unnecessary. Both stay for a non-image attachment, where the row is
+   the whole card and they are all there is to go on. */
+.fn-attach__media + .fn-attach__row .fn-attach__plate,
+.fn-attach__shot + .fn-attach__row .fn-attach__plate,
+.fn-attach__media + .fn-attach__row .fn-attach__path,
+.fn-attach__shot + .fn-attach__row .fn-attach__path {
+  display: none;
+}
+.fn-attach__media + .fn-attach__row,
+.fn-attach__shot + .fn-attach__row {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .fn-attach__plate {
@@ -8803,7 +8882,7 @@ span.fn-conn { cursor: default; }
 
 @media (max-width: 480px) {
   .fn-attach { max-inline-size: 100%; }
-  .fn-attach__media { max-block-size: 240px; }
+  .fn-attach__shot { max-block-size: 300px; }
 }
 
 /* ==========================================================================
