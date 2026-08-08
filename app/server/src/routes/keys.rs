@@ -66,6 +66,13 @@ fn parse_wrap(body: &WrapBody, default_enc_ver: i64) -> ApiResult<(WalletAddress
 
 /// `POST /api/rooms/{roomId}/keys` — store one wrap for one epoch.
 ///
+/// Built-in rooms key like any other room now: the server never indexed their
+/// ciphertext anyway (`docs/SEARCH.md` §2 — encrypted content is never
+/// indexed, built-in or not), so keeping them plaintext bought searchability
+/// at the cost of the operator's box being able to read My Note. Search over
+/// these rooms is a client-side concern now (`web/src/components/search.rs`),
+/// which is what makes the trade unnecessary.
+///
 /// This endpoint never touches `currentKeyVersion`: establishing epoch 1 is a
 /// plain store, and advancing an epoch is what `/rotate-key` is for. Mixing
 /// the two would let a single member move the room forward without providing
@@ -87,6 +94,19 @@ async fn store(
     state
         .db
         .call(move |conn| {
+            // The caller's own standing in the room is settled *before* the
+            // room is looked up or classified, so a non-member probing the
+            // derivable id of somebody's note cannot tell it from a room that
+            // does not exist — both are the same 403. Learning the room is
+            // "static" is enough to confirm the victim is an active account,
+            // which is the enumeration oracle this ordering closes; the read
+            // paths already follow it (`require_member` before existence).
+            let caller_belongs = rooms::is_member(conn, &room_id, &caller_address)?
+                || rooms::is_admin(conn, &room_id, &caller_address)?
+                || rooms::has_pending_invitation(conn, &room_id, &caller_address)?;
+            if !caller_belongs {
+                return Err(ApiError::access_denied());
+            }
             if rooms::get_room(conn, &room_id)?.is_none() {
                 return Err(ApiError::not_found("Room not found"));
             }

@@ -64,6 +64,13 @@ features = [
     "ScrollBehavior",
     "DomRect",
     "Navigator",
+    # Jarvis's `get_location` tool. The browser asks the user before any of
+    # these resolve to anything, so the permission prompt is the feature's
+    # consent gate rather than something bolted on beside it.
+    "Geolocation",
+    "Position",
+    "PositionError",
+    "Coordinates",
     "Clipboard",
     # --- added by the client implementation -------------------------------
     # History/PopStateEvent: real-path routing per DESIGN.md §4, rather than

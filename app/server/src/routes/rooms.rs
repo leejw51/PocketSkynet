@@ -88,29 +88,84 @@ pub(super) async fn require_admin(
 /// person who set it and a derived one to everybody else, and a DM you could
 /// be added to would not be the conversation the other person opened.
 ///
+/// The three built-in rooms refuse the same verbs for the same reason and are
+/// caught by the same predicate ([`Room::fixed_roster`]): their rosters are
+/// recomputed from the owner and the server's configuration on every listing,
+/// so a membership granted through one of these verbs would be silently undone
+/// on the next fetch — which is worse than a refusal, because it looks like it
+/// worked.
+///
 /// 400 rather than 403 on purpose — the caller is not unauthorised, the
 /// request does not apply.
 pub(super) async fn require_channel(state: &AppState, room: &RoomId, verb: &str) -> ApiResult<()> {
-    if is_direct(state, room).await? {
+    if let Some(noun) = fetch_room(state, room).await?.fixed_roster() {
+        return Err(ApiError::bad_request(format!("Cannot {verb} {noun}.")));
+    }
+    Ok(())
+}
+
+/// Refuse a verb that would remove one of the built-in rooms.
+///
+/// Delete, leave and the admin console's destroy all end here. These rooms are
+/// not a thing anybody created, so there is nothing to undo by removing one:
+/// the next room-list fetch would provision it straight back, empty, and the
+/// user would have lost their notes to a button that did not do what it said.
+/// Hiding is the verb that means "stop showing me this", and unlike a delete it
+/// is reversible — which is why the refusal names it.
+pub(super) async fn refuse_static_removal(
+    state: &AppState,
+    room: &RoomId,
+    verb: &str,
+) -> ApiResult<()> {
+    if fetch_room(state, room).await?.is_static() {
         return Err(ApiError::bad_request(format!(
-            "Cannot {verb} a direct message."
+            "Cannot {verb} a built-in room. Hide it instead."
         )));
     }
     Ok(())
 }
 
-/// Whether this room is a DM. Separate from [`require_channel`] so a caller
-/// that wants its own wording — `leave` does — can ask the question without
-/// having to catch and reinterpret an error, which would also swallow the
-/// database failures this can legitimately return.
-async fn is_direct(state: &AppState, room: &RoomId) -> ApiResult<bool> {
+/// Refuse an act on a built-in room that belongs to somebody other than the
+/// caller.
+///
+/// The purge path is the reason this exists. `require_admin` deliberately
+/// passes a *server* admin without membership — that is the whole point of the
+/// role for an ordinary room — but a built-in room's history is its owner's,
+/// and a server admin computing `room_note_<victim>` and erasing it would make
+/// "nobody else can read this" quietly mean "except whoever runs the server".
+/// The owner is identifiable without a lookup: the id derives from them, so
+/// `static_room_id(kind, caller)` reproduces it exactly when the caller owns
+/// the room and never otherwise. A non-static room passes through untouched.
+///
+/// Returns the plain access-denied a non-member gets everywhere else rather
+/// than a distinct "not your room": the id was derivable, and confirming whose
+/// it is would be the same enumeration oracle the read paths avoid.
+pub(super) async fn require_static_owner(
+    state: &AppState,
+    room: &RoomId,
+    caller: &WalletAddress,
+) -> ApiResult<()> {
+    let record = fetch_room(state, room).await?;
+    if record.is_static() && room.as_str() != rooms::static_room_id(&record.kind, caller.as_str()) {
+        return Err(ApiError::access_denied());
+    }
+    Ok(())
+}
+
+/// The room, or 404. Separate from the predicates above so a caller that wants
+/// its own wording — `leave` does — can ask the question without having to
+/// catch and reinterpret an error, which would also swallow the database
+/// failures this can legitimately return.
+pub(super) async fn fetch_room(
+    state: &AppState,
+    room: &RoomId,
+) -> ApiResult<crate::db::models::Room> {
     let room_id = room.as_str().to_owned();
-    let record = state
+    state
         .db
         .call(move |conn| rooms::get_room(conn, &room_id))
         .await?
-        .ok_or_else(|| ApiError::not_found("Room not found"))?;
-    Ok(record.is_direct())
+        .ok_or_else(|| ApiError::not_found("Room not found"))
 }
 
 pub(super) async fn require_room_exists(state: &AppState, room: &RoomId) -> ApiResult<()> {
@@ -215,6 +270,15 @@ async fn open_dm(
     let mut members = vec![caller.as_str().to_owned()];
     for address in &raw {
         let parsed = validate::wallet_address("walletAddress", Some(address.as_str()))?;
+        // A webhook or an agent is not somebody you can open a conversation
+        // with: it holds no room key, so a DM to one would be a room whose
+        // other member could never read a word of it. An agent answers only in
+        // its owner's Jarvis room, and that room already exists.
+        if parsed.is_reserved() {
+            return Err(ApiError::bad_request(
+                "You can't start a direct message with that address.",
+            ));
+        }
         members.push(parsed.as_str().to_owned());
     }
 
@@ -274,12 +338,65 @@ async fn open_dm(
 }
 
 /// `GET /api/rooms` — the caller's rooms with unread state.
+///
+/// This is also where the three built-in rooms are provisioned, and the choice
+/// of *here* rather than at sign-in is the one worth explaining.
+///
+/// Sign-in is the obvious hook and it is the wrong one, for two reasons that
+/// only show up later. A JWT lasts a day, so somebody who was already logged in
+/// when the feature shipped would not see their rooms until the token expired —
+/// and the operator who added a wallet to `VITE_FRUITNATION_ADMIN` this morning
+/// would not appear in anybody's lobby until each of them logged in again.
+/// Neither is a bug anyone would report as "provisioning ran at the wrong
+/// time"; they are reported as "the feature does not work", days apart.
+///
+/// The room list is the request that *needs* the rooms to exist. It is issued
+/// by every client on every start and after every realtime nudge, it is
+/// idempotent, and it already reads the whole membership set — so the reconcile
+/// costs three keyed upserts against a connection that was being checked out
+/// anyway. Doing it here means the invariant is repaired continuously rather
+/// than asserted once, which is the only version of it that survives a config
+/// change.
 async fn list(State(state): State<AppState>, AuthUser(caller): AuthUser) -> ApiResult<Response> {
     let address = caller.as_str().to_owned();
-    let out = state
+    let admins = super::misc::server_admins();
+    let (out, changed) = state
         .db
-        .call(move |conn| storage::visible_rooms(conn, &address))
+        .call(move |conn| {
+            // Degraded, not fatal: a listing that answers without the built-in
+            // rooms is a worse answer, but no answer at all would take the
+            // whole client down with it.
+            let changed = match rooms::provision_static_rooms(conn, &address, &admins) {
+                Ok(changed) => changed,
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not provision the built-in rooms");
+                    Vec::new()
+                }
+            };
+            Ok((storage::visible_rooms(conn, &address)?, changed))
+        })
         .await?;
+
+    // Whoever provisioning just seated (or unseated) has an open socket whose
+    // subscription set predates the change — the same fan-out every other
+    // membership-changing route does, without which a newly-provisioned lobby
+    // member hears nothing sent there until they reconnect. The caller learns
+    // of their own new rooms from this very response, so a `RoomsUpdated` back
+    // to them would be redundant noise; everyone *else* who moved is told.
+    for member in changed {
+        if let Ok(wallet) = WalletAddress::new(&member) {
+            if let Err(e) = state.hub.refresh_user_rooms(&wallet).await {
+                tracing::warn!(error = %e, "could not refresh subscriptions after provisioning");
+            }
+            if wallet != caller {
+                state
+                    .hub
+                    .publish_best_effort(Target::User { wallet }, None, ServerEvent::RoomsUpdated)
+                    .await;
+            }
+        }
+    }
+
     Ok(Json(out).into_response())
 }
 
@@ -366,6 +483,7 @@ async fn remove(
         "Only room admins can delete the room",
     )
     .await?;
+    refuse_static_removal(&state, &room, "delete").await?;
 
     // Collect the roster before the delete so the remaining members can be
     // told; afterwards there is nothing left to enumerate.
@@ -447,11 +565,12 @@ async fn leave(
     // that still answers to a key naming them — and re-opening the DM would
     // find it and refuse them entry to their own history. Hiding is the verb
     // for "stop showing me this", and it is reversible.
-    if is_direct(&state, &room).await? {
+    if fetch_room(&state, &room).await?.is_direct() {
         return Err(ApiError::bad_request(
             "Cannot leave a direct message. Hide it instead.",
         ));
     }
+    refuse_static_removal(&state, &room, "leave").await?;
 
     let room_id = room.as_str().to_owned();
     let address = caller.as_str().to_owned();
@@ -759,7 +878,9 @@ async fn unhide(
 mod tests {
     use super::*;
     use crate::routes::build;
-    use crate::test_support::{register, send, state, wallet, Response as TestResponse};
+    use crate::test_support::{
+        made_rooms, register, send, state, wallet, Response as TestResponse,
+    };
     use axum::http::StatusCode;
     use axum::Router;
 
@@ -811,12 +932,13 @@ mod tests {
         // A bare Room, not the enriched shape.
         assert!(created.json().get("members").is_none());
 
-        let listed = send(&router, "GET", "/api/rooms", Some(&token), None).await;
-        assert_eq!(listed.json().as_array().unwrap().len(), 1);
-        assert_eq!(listed.json()[0]["memberCount"], 1);
-        assert_eq!(listed.json()[0]["unreadCount"], 0);
-        assert_eq!(listed.json()[0]["lastReadSerial"], 0);
-        assert_eq!(listed.json()[0]["kind"], "channel");
+        // Beside the three built-in rooms every account is given.
+        let listed = made_rooms(&send(&router, "GET", "/api/rooms", Some(&token), None).await);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["memberCount"], 1);
+        assert_eq!(listed[0]["unreadCount"], 0);
+        assert_eq!(listed[0]["lastReadSerial"], 0);
+        assert_eq!(listed[0]["kind"], "channel");
     }
 
     #[tokio::test]
@@ -856,9 +978,9 @@ mod tests {
         assert_eq!(from_bob.json()["id"], room_id);
 
         for token in [&alice_token, &bob_token] {
-            let listed = send(&router, "GET", "/api/rooms", Some(token), None).await;
-            assert_eq!(listed.json().as_array().unwrap().len(), 1);
-            assert_eq!(listed.json()[0]["id"], room_id);
+            let listed = made_rooms(&send(&router, "GET", "/api/rooms", Some(token), None).await);
+            assert_eq!(listed.len(), 1, "one DM, not two");
+            assert_eq!(listed[0]["id"], room_id);
         }
     }
 
@@ -1349,7 +1471,7 @@ mod tests {
         assert!(hidden.json()[0]["room"].get("unreadCount").is_none());
 
         let visible = send(&router, "GET", "/api/rooms", Some(&alice_token), None).await;
-        assert!(visible.json().as_array().unwrap().is_empty());
+        assert!(made_rooms(&visible).is_empty());
 
         send(
             &router,
@@ -1360,7 +1482,7 @@ mod tests {
         )
         .await;
         let back = send(&router, "GET", "/api/rooms", Some(&alice_token), None).await;
-        assert_eq!(back.json().as_array().unwrap().len(), 1);
+        assert_eq!(made_rooms(&back).len(), 1);
     }
 
     #[tokio::test]

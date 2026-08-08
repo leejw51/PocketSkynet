@@ -2791,6 +2791,67 @@ input.fn-mono, textarea.fn-mono { color: var(--fn-fg); }
   transform: rotate(-90deg);
 }
 
+/* --- In-room search --------------------------------------------------------
+   Client-side only: the server never indexes an encrypted room's content, so
+   this is scoped to whatever this device already has loaded and decrypted in
+   memory (`web/src/components/chat.rs`). Sits between the header and the
+   stream, closed by default. */
+.fn-room-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  border-block-end: 1px solid var(--fn-border, rgb(255 255 255 / 0.08));
+  background: var(--fn-surface-2, rgb(255 255 255 / 0.03));
+}
+.fn-room-search input {
+  inline-size: 100%;
+}
+.fn-room-search__results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-block-size: 240px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fn-room-search__hit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--fn-r-sm, 6px);
+}
+.fn-room-search__hit:hover {
+  background: var(--fn-surface-3, rgb(255 255 255 / 0.06));
+}
+.fn-room-search__who {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: var(--fn-t-xs);
+  opacity: 0.85;
+}
+.fn-room-search__snippet {
+  flex-grow: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fn-t-sm, 0.875rem);
+}
+.fn-room-search__time {
+  flex-shrink: 0;
+  font-size: var(--fn-t-xs);
+  opacity: 0.6;
+}
+.fn-room-search__empty {
+  padding: 6px 8px;
+  font-size: var(--fn-t-sm, 0.875rem);
+  opacity: 0.6;
+}
+
 /* --- Mentions inbox ------------------------------------------------------- */
 .fn-mention-row {
   inline-size: 100%;
@@ -3334,6 +3395,11 @@ span.fn-conn { cursor: default; }
    marked row is what tells you where the map is centred. */
 .fn-more__row[aria-current="page"] { color: var(--fn-primary-text); }
 .fn-more__row[aria-current="page"] > svg { color: var(--fn-primary); }
+
+/* The top bar's More, the mirror image of `fn-topbar__wide`: hidden wherever
+   that row is shown, because a wide top bar already *is* the menu and a sheet
+   listing what is on screen is a door into the room you are standing in. */
+.fn-topbar__narrow { display: none; }
 
 /* Back button appears only in the single-column layout (§16). */
 .fn-back { display: none; }
@@ -6497,6 +6563,8 @@ span.fn-conn { cursor: default; }
      below through the nav or the More sheet behind its fifth tab, so what is
      left up here is the identity, the wallet, and the way out. */
   .fn-topbar__wide { display: none; }
+  /* …and the sheet that reaches all of it takes their place. */
+  .fn-topbar__narrow { display: inline-flex; }
 
   .fn-topbar__addr .fn-addr--full { display: none; }
   .fn-stream { padding-inline: var(--fn-s3); }
@@ -8637,6 +8705,7 @@ span.fn-conn { cursor: default; }
    authenticated and there is no src a browser can be pointed at. */
 .fn-attach {
   display: block;
+  position: relative;
   margin-block: var(--fn-s1);
   max-inline-size: min(420px, 100%);
 }
@@ -8649,29 +8718,55 @@ span.fn-conn { cursor: default; }
   background: var(--fn-surface-3);
 }
 
+/* `cover`, not `contain`. `contain` letterboxes: a portrait photo in a
+   landscape box gets black bars down both sides and the card is mostly not the
+   picture. `cover` scales on whichever axis is short and crops the other, so
+   the frame is always full. What that costs — the edges of an off-ratio image
+   — costs nothing here, because the whole picture is a zoom target and one tap
+   shows it whole. A preview is a preview; the original is one tap away. */
 .fn-attach__media {
   display: block;
   inline-size: 100%;
-  max-block-size: 320px;
-  /* `contain`, not `cover`: a screenshot cropped to a pleasing rectangle is a
-     screenshot with its point cut off. */
-  object-fit: contain;
-  border-radius: var(--fn-r-ctl) var(--fn-r-ctl) 0 0;
-  background: #000;
+  block-size: 100%;
+  object-fit: cover;
+  background: var(--fn-surface-3);
 }
 /* The image sits in a button so the whole picture is the "open" target — a
-   16px icon is a poor hit area for something 420px wide. */
+   16px icon is a poor hit area for something 420px wide.
+   The fixed ratio is what gives `cover` something to fill: without it the box
+   is the image's own shape and there is nothing to crop to. Square, because a
+   chat carries both photographs and screenshots and it is the only ratio that
+   is not actively wrong for one of them — 4:3 reduces a portrait of a person
+   to a horizontal band across their middle, which is the common case here and
+   the worst thing this could do. A wide screenshot loses a little off each
+   side instead, and one tap still opens it whole. */
 .fn-attach__shot {
   display: block;
+  position: relative;
   inline-size: 100%;
+  aspect-ratio: 1 / 1;
+  max-block-size: 380px;
   padding: 0;
   border: 0;
-  background: none;
+  overflow: hidden;
+  border-radius: var(--fn-r-card);
+  background: var(--fn-surface-3);
   cursor: zoom-in;
   transition: filter var(--fn-dur-fast) var(--fn-ease);
 }
 @media (hover: hover) {
   .fn-attach__shot:hover .fn-attach__media { filter: brightness(1.08); }
+}
+/* A *playing* video is a bare media element with no `__shot` around it, so it
+   has no ratio box to fill and must size itself. It also keeps `contain`:
+   cropping a still is a preview decision, but cropping a video someone is
+   watching cuts the frame they are watching. */
+.fn-attach > .fn-attach__media {
+  block-size: auto;
+  max-block-size: 380px;
+  object-fit: contain;
+  border-radius: var(--fn-r-card);
+  background: #000;
 }
 
 .fn-attach__row {
@@ -8684,12 +8779,64 @@ span.fn-conn { cursor: default; }
   border-radius: var(--fn-r-card);
   background: linear-gradient(180deg, var(--fn-raise-a), var(--fn-raise-b));
 }
-/* When media sits above it, the card and the media are one object. */
+/* With media above it the row stops being a card of its own and becomes a
+   caption *on* the picture. Stacked, it doubled the height of every image
+   message to carry a filename and a path — for a photo, the photo is the
+   content and the metadata is a footnote, so the footnote goes over it.
+   Absolute rather than a last flex row: the row must not take space from the
+   image, or the ratio above stops being the ratio. */
 .fn-attach__media + .fn-attach__row,
 .fn-attach__shot + .fn-attach__row {
-  border-start-start-radius: 0;
-  border-start-end-radius: 0;
-  border-block-start: 0;
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  border: 0;
+  border-radius: 0 0 var(--fn-r-card) var(--fn-r-card);
+  padding: var(--fn-s3) var(--fn-s2) var(--fn-s2);
+  /* A scrim, not a solid bar: the top of it has to be invisible against an
+     arbitrary photograph, and a hard edge across someone's face is worse than
+     the wasted space this replaces. */
+  background: linear-gradient(
+    to top,
+    rgb(0 0 0 / 0.78) 0%,
+    rgb(0 0 0 / 0.55) 45%,
+    rgb(0 0 0 / 0) 100%
+  );
+  /* Text over an unknown image cannot inherit theme colours — a dark filename
+     on a dark photo is invisible in either theme. */
+  color: #fff;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.65);
+  pointer-events: none;
+}
+/* …but the buttons in it still have to be clickable. */
+.fn-attach__media + .fn-attach__row .fn-attach__tools,
+.fn-attach__shot + .fn-attach__row .fn-attach__tools {
+  pointer-events: auto;
+}
+.fn-attach__media + .fn-attach__row .fn-attach__name,
+.fn-attach__shot + .fn-attach__row .fn-attach__name,
+.fn-attach__media + .fn-attach__row .fn-attach__meta,
+.fn-attach__shot + .fn-attach__row .fn-attach__meta {
+  color: #fff;
+}
+.fn-attach__media + .fn-attach__row .topcoat-icon-button--quiet,
+.fn-attach__shot + .fn-attach__row .topcoat-icon-button--quiet {
+  color: #fff;
+}
+/* The extension plate and the raw path are the two things worth dropping when
+   the picture is visible: the plate says "JPG" about something you can see is
+   a photograph, and the path is two lines of URL that the download button
+   makes unnecessary. Both stay for a non-image attachment, where the row is
+   the whole card and they are all there is to go on. */
+.fn-attach__media + .fn-attach__row .fn-attach__plate,
+.fn-attach__shot + .fn-attach__row .fn-attach__plate,
+.fn-attach__media + .fn-attach__row .fn-attach__path,
+.fn-attach__shot + .fn-attach__row .fn-attach__path {
+  display: none;
+}
+.fn-attach__media + .fn-attach__row,
+.fn-attach__shot + .fn-attach__row {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .fn-attach__plate {
@@ -8742,7 +8889,7 @@ span.fn-conn { cursor: default; }
 
 @media (max-width: 480px) {
   .fn-attach { max-inline-size: 100%; }
-  .fn-attach__media { max-block-size: 240px; }
+  .fn-attach__shot { max-block-size: 300px; }
 }
 
 /* ==========================================================================
@@ -11051,4 +11198,181 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
 .fn-pwcard__paste--armed {
   color: var(--fn-crown-text, #d99b1b);
   border-color: var(--fn-crown-text, #d99b1b);
+}
+
+/* --- My Jarvis: the agent at work -------------------------------------- */
+
+/* The activity line. It replaces a spinner with a sentence, because the
+   interesting part of a tool-using agent is *which* tool — a six-second pause
+   labelled "thinking" reads as a hang, and the same pause labelled "searching
+   your rooms" reads as work. */
+.fn-jarvis-activity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 9px 14px;
+  border: 1px solid var(--fn-accent-dim, rgb(120 170 255 / 0.28));
+  border-radius: 999px;
+  background: linear-gradient(
+    100deg,
+    var(--fn-surface-2, rgb(255 255 255 / 0.04)),
+    var(--fn-accent-wash, rgb(120 170 255 / 0.1))
+  );
+  font-size: 0.86rem;
+  color: var(--fn-text-2, rgb(255 255 255 / 0.78));
+}
+.fn-jarvis-activity__label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fn-jarvis-activity__pulse {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+}
+.fn-jarvis-activity__pulse i {
+  inline-size: 5px;
+  block-size: 5px;
+  border-radius: 50%;
+  background: var(--fn-accent, rgb(120 170 255));
+  animation: fn-jarvis-pulse 1.1s ease-in-out infinite;
+}
+.fn-jarvis-activity__pulse i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.fn-jarvis-activity__pulse i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+@keyframes fn-jarvis-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+/* Somebody who has asked not to see motion still needs to know it is working,
+   so the dots stop moving and stay lit rather than disappearing. */
+@media (prefers-reduced-motion: reduce) {
+  .fn-jarvis-activity__pulse i {
+    animation: none;
+    opacity: 0.85;
+  }
+}
+
+/* The vault switch. Deliberately wordy for a control this small: it grants a
+   language model access to a password store, and the sentence under it is the
+   only place the actual guarantee ("it never sees a password") is stated where
+   somebody is deciding. */
+.fn-jarvis-vault {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--fn-border, rgb(255 255 255 / 0.08));
+  border-radius: 12px;
+  background: var(--fn-surface-2, rgb(255 255 255 / 0.03));
+  cursor: pointer;
+}
+.fn-jarvis-vault input {
+  margin-block-start: 2px;
+  flex: none;
+}
+.fn-jarvis-vault__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-inline-size: 0;
+}
+.fn-jarvis-vault__text strong {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.fn-jarvis-vault__text small {
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--fn-text-3, rgb(255 255 255 / 0.55));
+}
+
+/* The confirmation body. A proposed message is quoted rather than described,
+   so what is approved is the text that will actually be sent. */
+.fn-jarvis-confirm {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin: 0;
+}
+.fn-jarvis-confirm dt {
+  font-size: 0.78rem;
+  color: var(--fn-text-3, rgb(255 255 255 / 0.55));
+}
+.fn-jarvis-confirm dd {
+  margin: 0;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.fn-jarvis-confirm__body {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  border-inline-start: 3px solid var(--fn-accent, rgb(120 170 255));
+  border-radius: 4px;
+  background: var(--fn-surface-2, rgb(255 255 255 / 0.04));
+  white-space: pre-wrap;
+}
+
+/* The starter chips. Only ever on screen in an empty My Jarvis — the job is to
+   teach the tool surface exists, and once there is a transcript the transcript
+   does that better. */
+.fn-jarvis-starters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 16px 10px;
+}
+.fn-jarvis-starters__lead {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fn-text-3, rgb(255 255 255 / 0.5));
+}
+.fn-jarvis-starters__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fn-jarvis-starter {
+  padding: 8px 14px;
+  border: 1px solid var(--fn-border, rgb(255 255 255 / 0.12));
+  border-radius: 999px;
+  background: var(--fn-surface-2, rgb(255 255 255 / 0.04));
+  color: inherit;
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    transform 120ms ease;
+}
+.fn-jarvis-starter:hover {
+  border-color: var(--fn-accent, rgb(120 170 255));
+  background: var(--fn-accent-wash, rgb(120 170 255 / 0.12));
+}
+.fn-jarvis-starter:active {
+  transform: translateY(1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .fn-jarvis-starter {
+    transition: none;
+  }
+  .fn-jarvis-starter:active {
+    transform: none;
+  }
 }

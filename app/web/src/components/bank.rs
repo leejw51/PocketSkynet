@@ -68,14 +68,14 @@ pub(crate) fn save_greeters(chain_id: u64, list: &[String]) {
 /// The networks the Bank can point at: the EVM entries of the built-in
 /// registry (Cronos mainnet + testnet). The server's choice is irrelevant
 /// here by design.
-fn bank_networks() -> Vec<Network> {
+pub(crate) fn bank_networks() -> Vec<Network> {
     builtin_networks()
         .into_iter()
         .filter(|n| n.chain_id.is_some() && n.supports_send())
         .collect()
 }
 
-fn load_bank_chain() -> u64 {
+pub(crate) fn load_bank_chain() -> u64 {
     use gloo_storage::Storage;
     gloo_storage::LocalStorage::get(BANK_NET_KEY).unwrap_or(bank::VVS_CHAIN_ID)
 }

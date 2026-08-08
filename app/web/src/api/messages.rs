@@ -87,6 +87,40 @@ impl MessageBody {
     }
 }
 
+/// The body for [`Client::agent_reply`] — the same sealed-or-plain shape as
+/// [`MessageBody`], minus the fields (threading, mentions, hosted media) a
+/// one-line agent reply never carries.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentReplyBody {
+    pub text: String,
+    pub msg_hash: String,
+    pub is_encrypted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iv: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hmac: Option<String>,
+    pub enc_ver: i64,
+    pub key_version: i64,
+}
+
+/// Every field [`AgentReplyBody`] needs is already on a [`MessageBody`] —
+/// same sealed-or-plain shape, just under `text` instead of `content` and
+/// with no thread/mentions/media to carry.
+impl From<MessageBody> for AgentReplyBody {
+    fn from(body: MessageBody) -> Self {
+        Self {
+            text: body.content,
+            msg_hash: body.msg_hash,
+            is_encrypted: body.is_encrypted,
+            iv: body.iv,
+            hmac: body.hmac,
+            enc_ver: body.enc_ver,
+            key_version: body.key_version,
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EmoticonReq<'a> {
@@ -116,6 +150,29 @@ impl Client {
         self.send_json(
             Method::POST,
             &format!("/api/rooms/{}/messages", encode_segment(room.as_str())),
+            body,
+        )
+        .await
+    }
+
+    /// Post the AI's answer into the caller's own "My Jarvis" room.
+    ///
+    /// The model call happened here, in the browser, with a key that never
+    /// leaves it (`crate::ai`). This endpoint exists only for the one thing a
+    /// browser cannot do: write a message under the agent's address rather
+    /// than the caller's, so the reply reads as a reply and not as the user
+    /// talking to themselves. The server checks that the room really is this
+    /// wallet's Jarvis room and derives the sender itself, so the most this
+    /// call can do is put words in your own agent's mouth.
+    ///
+    /// `body` carries the same sealed-or-plain shape [`MessageBody`] does —
+    /// this device already sealed the reply under the room's current epoch
+    /// before calling this, exactly as it would for a message under its own
+    /// address.
+    pub async fn agent_reply(&self, room: &RoomId, body: &AgentReplyBody) -> ApiResult<Message> {
+        self.send_json(
+            Method::POST,
+            &format!("/api/rooms/{}/agent", encode_segment(room.as_str())),
             body,
         )
         .await

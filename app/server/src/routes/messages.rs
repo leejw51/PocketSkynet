@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
             "/rooms/{roomId}/messages",
             post(send).get(list).delete(purge),
         )
+        .route("/rooms/{roomId}/agent", post(agent_reply))
         .route("/messages/{messageId}", patch(edit).delete(remove))
         .route("/messages/{messageId}/thread", get(thread))
         .route("/messages/{messageId}/publish", post(publish))
@@ -150,7 +151,9 @@ async fn send(
     let is_encrypted = body.is_encrypted.unwrap_or(false);
 
     // Unencrypted rooms skip the epoch machinery entirely — the room is not
-    // even fetched, which is what keeps plaintext rooms cheap.
+    // even fetched, which is what keeps plaintext rooms cheap. Built-in rooms
+    // key exactly like any other room (`routes/keys.rs`), so nothing here
+    // singles them out.
     if is_encrypted {
         check_epoch(&state, &room, key_version).await?;
     }
@@ -200,6 +203,145 @@ async fn send(
         .await?;
 
     announce(&state, &room, Some(&caller), message.msg_serial).await;
+    Ok(Json(message).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentBody {
+    text: Option<String>,
+    #[serde(rename = "msgHash")]
+    msg_hash: Option<String>,
+    #[serde(rename = "isEncrypted")]
+    is_encrypted: Option<bool>,
+    iv: Option<String>,
+    hmac: Option<String>,
+    #[serde(rename = "encVer")]
+    enc_ver: Option<i64>,
+    #[serde(rename = "keyVersion")]
+    key_version: Option<i64>,
+}
+
+/// `POST /api/rooms/{roomId}/agent` — post the AI's reply into "My Jarvis".
+///
+/// # Why the client sends the answer instead of the server fetching it
+///
+/// The user's API keys live in their browser and nowhere else
+/// (`web/src/ai.rs`), and the search feature already established the shape:
+/// retrieval here, generation there, with the model call made from the device
+/// that holds the credential (`docs/SEARCH.md` §5). Making the server call the
+/// model would mean either shipping it the key on every turn or asking the
+/// operator to configure one for everybody — the first turns a self-hosted
+/// messenger into a credential store, the second makes "your own AI agent" the
+/// operator's agent. Neither is the product.
+///
+/// So the browser talks to the model and hands the text back, and this endpoint
+/// exists for the one thing the browser cannot do: write a message under an
+/// address that is not the caller's. It is the same trick incoming webhooks
+/// use, with the same reasoning — a reply needs a `senderAddress`, and the
+/// alternative was a per-message "this one was the AI" flag that every read
+/// path would have to learn.
+///
+/// # What stops this being a way to forge messages
+///
+/// Three conditions, all necessary. The room must be of kind `jarvis`; its id
+/// must be the one [`rooms::static_room_id`] derives for *the caller*, so a
+/// wallet cannot post into somebody else's agent room even knowing its id; and
+/// the sender written is [`WalletAddress::agent_of`] the caller — never a value
+/// from the request. The most a caller can do with this endpoint is put words
+/// in their own agent's mouth, in a room only they can read.
+///
+/// # Encryption
+///
+/// My Jarvis keys like any other room now, but there is still only one real
+/// party to it — the owner, on whichever device is talking to the model — so
+/// the ciphertext this endpoint stores was sealed by the same browser that is
+/// about to call it, under the room's current epoch. The fields below mirror
+/// `MessageBody`'s exactly for that reason: this is the same sealed-message
+/// shape as [`send`], just written under a sender the caller cannot claim
+/// directly.
+async fn agent_reply(
+    State(state): State<AppState>,
+    AuthUser(caller): AuthUser,
+    Path(room_id): Path<String>,
+    ValidJson(body): ValidJson<AgentBody>,
+) -> ApiResult<Response> {
+    let room = validate::room_id(&room_id)?;
+    let expected = rooms::static_room_id(crate::db::models::ROOM_KIND_JARVIS, caller.as_str());
+    if room.as_str() != expected {
+        // Deliberately the same refusal a non-member gets anywhere else: a
+        // distinct "that is not your agent room" would confirm which room ids
+        // are somebody's, which is exactly the oracle `require_member` avoids.
+        return Err(ApiError::access_denied());
+    }
+    // Self-heal the same gap `routes::rooms::list` closes: a client that
+    // painted its sidebar from a cached room list can reach the Jarvis
+    // composer and answer before its first `/api/rooms` call has provisioned
+    // this room server-side, and `require_member` below would otherwise 403 a
+    // caller who owns this room in every sense but the database's. Best
+    // effort, the same degrade-not-fail choice `list` makes — a failure here
+    // just leaves `require_member` as the backstop it already is.
+    {
+        let address = caller.as_str().to_owned();
+        let admins = super::misc::server_admins();
+        let _ = state
+            .db
+            .call(move |conn| rooms::provision_static_rooms(conn, &address, &admins))
+            .await;
+    }
+    require_member(&state, &room, &caller).await?;
+
+    let content = validate::message_content(body.text.as_deref())?;
+    let iv = validate::message_iv(body.iv.as_deref())?;
+    let hmac = validate::message_hmac(body.hmac.as_deref())?;
+    let enc_ver = validate::enc_ver(body.enc_ver, 1)?;
+    let key_version = validate::key_version("keyVersion", body.key_version, 1)?;
+    let is_encrypted = body.is_encrypted.unwrap_or(false);
+
+    let msg_hash = if is_encrypted {
+        // The caller sealed this, so only the caller's browser knows the
+        // plaintext — the server hashes the ciphertext, exactly as `send` does
+        // for an encrypted message, never as `msg_hash_plaintext` would.
+        check_epoch(&state, &room, key_version).await?;
+        validate::msg_hash(body.msg_hash.as_deref())?
+    } else {
+        // Computed here for the same reason a webhook's is: the caller is
+        // relaying somebody else's words and has no business asserting their
+        // hash.
+        pocketskynet_core::msg_hash_plaintext(&content)
+    };
+
+    let id = format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
+    let room_id = room.as_str().to_owned();
+    let sender = WalletAddress::agent_of(&caller).as_str().to_owned();
+    let message = state
+        .db
+        .call(move |conn| {
+            let mentions = resolve_mentions(conn, &room_id, &content, is_encrypted, Vec::new())?;
+            let media = resolve_media(&content, is_encrypted, Vec::new());
+            messages::create_message(
+                conn,
+                NewMessage {
+                    id,
+                    room_id,
+                    sender,
+                    content,
+                    msg_hash,
+                    is_encrypted,
+                    iv,
+                    hmac,
+                    enc_ver,
+                    key_version,
+                    parent_message_id: None,
+                    mentions,
+                    media,
+                },
+            )
+        })
+        .await?;
+
+    // `None` origin: no wallet acted, so nobody's block list mutes the wake-up
+    // — and the caller's other tabs are exactly who needs to see this land.
+    announce(&state, &room, None, message.msg_serial).await;
     Ok(Json(message).into_response())
 }
 
@@ -562,6 +704,11 @@ async fn purge(
         "Only room admins can delete a room's entire history",
     )
     .await?;
+    // A built-in room's history is its owner's to clear and no one else's.
+    // `require_admin` passed a server admin through without membership, which
+    // is correct for an ordinary room and exactly wrong here — so the
+    // ownership of a static room is confirmed separately.
+    super::rooms::require_static_owner(&state, &room, &caller).await?;
 
     let marker_id = format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
     let room_id = room.as_str().to_owned();

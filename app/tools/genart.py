@@ -1062,6 +1062,67 @@ MANIFEST: list[dict[str, str]] = [
             "picking one conversation out of a list."
         ),
     },
+    # ---- the three built-in rooms -----------------------------------------
+    #
+    # "My Note", "My Jarvis" and "My Lobby" are provisioned for every account
+    # and pinned above everything else in the room list, so they are the one
+    # place in the sidebar where a *specific* picture beats the hashed room
+    # sigil every other room wears. The sigils exist to make eight rooms
+    # distinguishable from one another; these three have to say what they are.
+    #
+    # Themed rather than themeless, unlike the sigils, and that is the whole
+    # reason they are separate assets: a sigil is a dark plate that sits on any
+    # surface, while these sit inline in the room row beside the title, at the
+    # list's own background. They need the light and dark plates the rest of
+    # the flat-vector spine gets.
+    #
+    # 256px because that is where they render — 40 in a room row, 56 in the
+    # chat header — and the same ceiling the room sigils use for the same
+    # reason. Every clause about small sizes is load-bearing: the first pass at
+    # a set like this comes back as a beautiful scene that is a grey smudge at
+    # forty pixels.
+    {
+        # Not a padlock alone: that is `encrypted-badge`, and two padlocks in
+        # one sidebar would say the same thing twice about different features.
+        # The notebook is the subject and the lock is an attribute of it.
+        "name": "my-note",
+        "max_edge": 256,
+        "prompt": (
+            "Emblem centred in frame: a small closed notebook seen head-on, "
+            "one hexagonal seal on its cover, a slim ribbon bookmark trailing "
+            "from the lower edge, and a small closed padlock resting against "
+            "its spine. Nothing else in frame. Must read as a private "
+            "notebook at 40 pixels."
+        ),
+    },
+    {
+        # A speech bubble with a lens in it, rather than a robot head. The room
+        # is a *conversation* with the machine, and a head would sit next to
+        # the operator avatars in the same list and read as another person.
+        "name": "my-jarvis",
+        "max_edge": 256,
+        "prompt": (
+            "Emblem centred in frame: a rounded speech bubble seen head-on "
+            "with a single hexagonal machine lens at its centre, its iris "
+            "glowing in the accent colour, and three small square data motes "
+            "travelling toward it along a thin dotted arc. Nothing else in "
+            "frame. Must read as a conversation with a machine at 40 pixels."
+        ),
+    },
+    {
+        # A front desk, not a crowd. The room is the standing line to whoever
+        # runs this server, and a group of figures would read as a group chat —
+        # which is precisely the thing it is not.
+        "name": "my-lobby",
+        "max_edge": 256,
+        "prompt": (
+            "Emblem centred in frame: a low reception desk seen head-on "
+            "beneath a simple geometric arch, a small hexagonal call bell "
+            "standing on the counter, and one thin accent-coloured light bar "
+            "above the arch. No people. Must read as a front desk at 40 "
+            "pixels."
+        ),
+    },
     *_identity_manifest(),
     *_profile_manifest(),
 ]
@@ -1210,6 +1271,30 @@ CUTE_PROMPTS: dict[str, str] = {
         "cobalt outlines. A small cute blue-and-white robot floats beside the "
         "stack, one hand reaching toward the lit card. Choosing one "
         "conversation out of a list. " + CUTE_STYLE
+    ),
+    "my-note": (
+        "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
+        "chunky rounded notebook with a glossy cobalt blue cover, a warm "
+        "gold ribbon bookmark curling from the lower edge and a small "
+        "rounded gold padlock clipped to its spine. Entirely an object — "
+        "no cartoon face, no eyes, nothing that reads as a character. "
+        "Must read as a private notebook at 40 pixels. " + CUTE_STYLE
+    ),
+    "my-jarvis": (
+        "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
+        "plump rounded speech bubble in glossy cobalt blue with a single "
+        "wide warm gold lens set into its middle, and three small rounded "
+        "motes drifting toward it. Entirely an object — no cartoon face, "
+        "no eyes, no smile, nothing that reads as a character. Must read "
+        "as a conversation with a machine at 40 pixels. " + CUTE_STYLE
+    ),
+    "my-lobby": (
+        "Emblem centred in frame, drawn as a soft enamel-pin badge: a "
+        "chunky rounded reception counter in glossy cobalt blue under a "
+        "wide rounded arch, with a small warm gold call bell on top of "
+        "the counter. Entirely an object — no cartoon face, no eyes, "
+        "nothing that reads as a character, and nobody standing at it. "
+        "Must read as a front desk at 40 pixels. " + CUTE_STYLE
     ),
     "encrypted-badge": (
         "Icon: a chubby rounded padlock, closed, with a warm gold body and a "
@@ -1497,6 +1582,28 @@ HUMAN_PROMPTS: dict[str, str] = {
         + HUMAN_FACES
         + " "
         + HUMAN_STYLE
+    ),
+    "my-note": (
+        "Emblem centred in frame: a slim closed notebook seen head-on, "
+        "drawn as a flat glowing cyan hologram on a dark plate, with a "
+        "thin ribbon bookmark trailing from the lower edge and a small "
+        "closed padlock at its spine. Entirely an object. No people, no "
+        "face, no hands. Must read as a private notebook at 40 pixels. " + HUMAN_STYLE
+    ),
+    "my-jarvis": (
+        "Emblem centred in frame: a rounded speech bubble drawn as a flat "
+        "glowing cyan hologram on a dark plate, one thin circular lens "
+        "outline at its centre, three small square data motes travelling "
+        "toward it along a fine dotted arc. Entirely a symbol. No people, "
+        "no face, no hands. Must read as a conversation with a machine at "
+        "40 pixels. " + HUMAN_STYLE
+    ),
+    "my-lobby": (
+        "Emblem centred in frame: a low reception counter under a simple "
+        "arch, drawn as a flat glowing cyan hologram on a dark plate, with "
+        "a small faceted call bell on the counter and one thin light bar "
+        "across the top of the arch. Entirely a symbol. No people, no "
+        "face, no hands. Must read as a front desk at 40 pixels. " + HUMAN_STYLE
     ),
     "encrypted-badge": (
         "Icon: a closed padlock whose shackle is formed from two interlocking "

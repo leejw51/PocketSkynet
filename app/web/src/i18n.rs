@@ -95,6 +95,30 @@ impl Lang {
         }
     }
 
+    /// The language's name **in English**, for the one audience that reads
+    /// English by construction: a model being told which language to answer in
+    /// (`crate::jarvis::system_prompt`).
+    ///
+    /// The exact opposite of [`Self::endonym`], and worth having both rather
+    /// than reusing one. A prompt saying "reply in 廣東話" is asking a model to
+    /// infer an instruction from a string it may tokenise poorly, whereas
+    /// "reply in Cantonese (traditional characters)" is unambiguous — and the
+    /// parenthetical on the two Chinese entries is the whole reason this is a
+    /// table and not `format!("{:?}", self)`: "Chinese" alone is what produces
+    /// simplified characters for a Cantonese reader.
+    pub fn english_name(self) -> &'static str {
+        match self {
+            Lang::En => "English",
+            Lang::Ko => "Korean",
+            Lang::Ja => "Japanese",
+            Lang::Yue => "Cantonese (traditional characters)",
+            Lang::Zh => "Simplified Chinese",
+            Lang::Cs => "Czech",
+            Lang::De => "German",
+            Lang::Es => "Spanish",
+        }
+    }
+
     /// Parse a tag, tolerating a region suffix (`ko-KR`, `es-419`) and case.
     ///
     /// `zh-HK` and `zh-Hant-HK` map to Cantonese: a browser set to Hong Kong
@@ -254,6 +278,11 @@ strings! {
 
     // --- Rooms --------------------------------------------------------------
     (search_rooms, "Search rooms", "채팅방 검색", "ルームを検索", "搜尋聊天室", "Hledat místnosti", "Buscar salas", "搜索聊天室", "Räume durchsuchen"),
+    // Client-side, within one open room — the server never indexes an
+    // encrypted room's content, so this is the only search a built-in room
+    // gets (`web/src/components/chat.rs`).
+    (search_this_room, "Search this room", "이 채팅방 검색", "このルームを検索", "搜尋此聊天室", "Hledat v této místnosti", "Buscar en esta sala", "搜索此聊天室", "Diesen Raum durchsuchen"),
+    (search_no_results, "No matches", "일치하는 결과 없음", "一致する結果なし", "沒有相符結果", "Žádné shody", "Sin coincidencias", "没有匹配结果", "Keine Treffer"),
     (no_rooms_yet, "No rooms yet", "아직 채팅방이 없습니다", "ルームがまだありません", "尚未有聊天室", "Zatím žádné místnosti", "Aún no hay salas", "还没有聊天室", "Noch keine Räume"),
     (no_rooms_body, "Create one and invite someone by wallet address.", "채팅방을 만들고 지갑 주소로 초대하세요.", "ルームを作成し、ウォレットアドレスで招待しましょう。", "建立一個聊天室，用錢包地址邀請其他人。", "Vytvořte místnost a pozvěte někoho podle adresy peněženky.", "Crea una y invita a alguien con su dirección de cartera.", "创建一个，然后按钱包地址邀请别人。", "Erstelle einen und lade jemanden per Wallet-Adresse ein."),
     (fast_create_room, "Fast create room", "빠른 채팅방 만들기", "ルームをすぐ作成", "快速建立聊天室", "Rychle vytvořit místnost", "Crear sala rápida", "快速创建聊天室", "Raum schnell erstellen"),
@@ -522,6 +551,7 @@ strings! {
     (revoke, "Revoke", "철회", "取り消す", "撤銷", "Odvolat", "Revocar", "撤销", "Widerrufen"),
     (webhook_url_copied, "Webhook URL copied", "웹훅 URL을 복사했습니다", "Webhook URLをコピーしました", "已複製Webhook URL", "URL webhooku zkopírována", "URL del webhook copiada", "已复制 Webhook URL", "Webhook-URL kopiert"),
     (webhook_badge, "webhook", "웹훅", "Webhook", "Webhook", "webhook", "webhook", "Webhook", "Webhook"),
+    (agent_badge, "AI", "AI", "AI", "AI", "AI", "IA", "AI", "KI"),
 
     // --- Dialogs: invite ----------------------------------------------------
     (invite, "Invite", "초대", "招待", "邀請", "Pozvat", "Invitar", "邀请", "Einladen"),
@@ -828,6 +858,38 @@ strings! {
     (rooms_removed_toast, "{count} rooms destroyed", "채팅방 {count}개를 파기했습니다", "{count} 件のルームを破棄しました", "已銷毀 {count} 個聊天室", "Zničeno {count} místností", "{count} salas destruidas", "已销毁 {count} 个聊天室", "{count} Räume zerstört"),
     (remove_all_partial, "Stopped after {done} of {total}: {error}", "{total}개 중 {done}개를 처리한 뒤 중단되었습니다: {error}", "{total} 件中 {done} 件で中断しました: {error}", "做咗 {total} 個之中嘅 {done} 個就停咗：{error}", "Zastaveno po {done} z {total}: {error}", "Se detuvo tras {done} de {total}: {error}", "在 {total} 个中完成 {done} 个后停止：{error}", "Nach {done} von {total} gestoppt: {error}"),
     (room_destroyed_toast_body, "Its messages, keys, attachments and pictures are gone from the server.", "메시지, 키, 첨부파일, 이미지가 서버에서 사라졌습니다.", "メッセージ、鍵、添付ファイル、画像はサーバーから消えました。", "佢嘅訊息、金鑰、附件同圖片已經喺伺服器度冇咗。", "Její zprávy, klíče, přílohy i obrázky jsou ze serveru pryč.", "Sus mensajes, claves, adjuntos e imágenes ya no están en el servidor.", "其消息、密钥、附件和图片已从服务器上消失。", "Seine Nachrichten, Schlüssel, Anhänge und Bilder sind vom Server verschwunden."),
+
+    // --- The three built-in rooms --------------------------------------------
+    // Translated rather than taken from the server, exactly as a DM is titled
+    // after its members rather than after the placeholder the column holds:
+    // these rooms are part of the interface, and a Korean user did not name
+    // their notebook in English. See `web/src/rooms.rs`.
+    (section_my_rooms, "My rooms", "내 방", "マイルーム", "我嘅房間", "Moje místnosti", "Mis salas", "我的房间", "Meine Räume"),
+    (room_my_note, "My Note", "내 노트", "マイノート", "我嘅筆記", "Můj zápisník", "Mi nota", "我的笔记", "Meine Notiz"),
+    (room_my_jarvis, "My Jarvis", "내 자비스", "マイジャービス", "我嘅 Jarvis", "Můj Jarvis", "Mi Jarvis", "我的贾维斯", "Mein Jarvis"),
+    (room_my_lobby, "My Lobby", "내 로비", "マイロビー", "我嘅大堂", "Moje recepce", "Mi vestíbulo", "我的大厅", "Meine Lobby"),
+    (room_my_note_blurb, "Only you. Nobody else can read it, join it or be invited.", "오직 나만. 다른 사람은 읽거나 참여하거나 초대받을 수 없습니다.", "自分だけ。ほかの誰も読めず、参加も招待もできません。", "淨係得你自己。冇其他人可以睇、加入或者被邀請。", "Jen vy. Nikdo jiný to nepřečte, nepřipojí se ani nebude pozván.", "Solo tú. Nadie más puede leerla, unirse ni ser invitado.", "只有你。其他人无法阅读、加入或被邀请。", "Nur du. Niemand sonst kann sie lesen, beitreten oder eingeladen werden."),
+    (room_my_jarvis_blurb, "Your own AI. Your key stays in this browser.", "나만의 AI. 키는 이 브라우저에 남아 있습니다.", "あなた専用の AI。鍵はこのブラウザーから出ません。", "你自己嘅 AI。金鑰淨係留喺呢個瀏覽器。", "Vaše vlastní AI. Klíč zůstává v tomto prohlížeči.", "Tu propia IA. Tu clave se queda en este navegador.", "你自己的 AI。密钥留在这个浏览器里。", "Deine eigene KI. Dein Schlüssel bleibt in diesem Browser."),
+    (room_my_lobby_blurb, "You and whoever runs this server.", "나와 이 서버 운영자들.", "あなたと、このサーバーを運営している人たち。", "你同埋管理呢部伺服器嘅人。", "Vy a ti, kdo spravují tento server.", "Tú y quienes administran este servidor.", "你和这台服务器的管理员。", "Du und wer diesen Server betreibt."),
+    (room_built_in_permanent, "This room is always here — it can be hidden, but not removed.", "이 방은 항상 있습니다. 숨길 수는 있어도 삭제할 수는 없습니다.", "このルームは常にあります。非表示にはできますが、削除はできません。", "呢個房間永遠都喺度——可以隱藏，但係刪唔到。", "Tato místnost tu je vždy — lze ji skrýt, ale ne odstranit.", "Esta sala siempre está aquí: puedes ocultarla, pero no eliminarla.", "这个房间一直都在——可以隐藏，但无法删除。", "Dieser Raum ist immer da — er lässt sich ausblenden, aber nicht entfernen."),
+    (jarvis_thinking, "Jarvis is thinking…", "자비스가 생각하는 중…", "ジャービスが考えています…", "Jarvis 諗緊…", "Jarvis přemýšlí…", "Jarvis está pensando…", "贾维斯正在思考…", "Jarvis denkt nach…"),
+    (jarvis_needs_key, "Add an AI provider key in Settings and Jarvis will answer here.", "설정에서 AI 제공자 키를 추가하면 자비스가 여기서 답합니다.", "設定で AI プロバイダーの鍵を追加すると、ジャービスがここで返信します。", "喺設定度加個 AI 供應商金鑰，Jarvis 就會喺呢度回覆。", "Přidejte v Nastavení klíč poskytovatele AI a Jarvis vám tu odpoví.", "Añade una clave de proveedor de IA en Ajustes y Jarvis responderá aquí.", "在设置中添加 AI 提供商密钥，贾维斯就会在这里回复。", "Füge in den Einstellungen einen KI-Anbieterschlüssel hinzu, dann antwortet Jarvis hier."),
+    (jarvis_using, "Jarvis is using {tool}…", "자비스가 {tool} 사용 중…", "ジャービスが {tool} を使っています…", "Jarvis 用緊 {tool}…", "Jarvis používá {tool}…", "Jarvis está usando {tool}…", "贾维斯正在使用 {tool}…", "Jarvis nutzt {tool}…"),
+    (jarvis_out_of_steam, "I tried a few things and did not get there. Could you narrow that down for me?", "몇 가지 시도해 봤지만 답을 찾지 못했습니다. 조금 더 좁혀 주시겠어요?", "いくつか試しましたが、たどり着けませんでした。もう少し絞っていただけますか？", "我試咗幾樣嘢都搞唔掂。可唔可以講得再具體啲？", "Zkusil jsem několik věcí a nedopadlo to. Můžete to upřesnit?", "Probé varias cosas y no llegué. ¿Puedes concretar un poco más?", "我试了几种办法都没成功。可以说得更具体一些吗？", "Ich habe einiges versucht und bin nicht weitergekommen. Kannst du das eingrenzen?"),
+    (jarvis_confirm_note, "Write this into My Note?", "이 내용을 마이 노트에 기록할까요?", "これをマイノートに書き込みますか？", "要唔要寫入我的筆記？", "Zapsat to do Mé poznámky?", "¿Escribir esto en Mi nota?", "把这条写入我的笔记吗？", "Das in Meine Notiz schreiben?"),
+    (jarvis_confirm_send, "Send this message?", "이 메시지를 보낼까요?", "このメッセージを送信しますか？", "要唔要發呢個訊息？", "Odeslat tuto zprávu?", "¿Enviar este mensaje?", "发送这条消息吗？", "Diese Nachricht senden?"),
+    (jarvis_confirm_room, "To", "받는 곳", "宛先", "去邊度", "Komu", "Para", "发送至", "An"),
+    (jarvis_confirm_copy, "Copy this password to the clipboard?", "이 비밀번호를 클립보드에 복사할까요?", "このパスワードをクリップボードにコピーしますか？", "要唔要複製呢個密碼去剪貼簿？", "Zkopírovat toto heslo do schránky?", "¿Copiar esta contraseña al portapapeles?", "把这个密码复制到剪贴板吗？", "Dieses Passwort in die Zwischenablage kopieren?"),
+    (jarvis_confirm_vault_save, "Create a new password and save it?", "새 비밀번호를 만들어 저장할까요?", "新しいパスワードを作成して保存しますか？", "要唔要整個新密碼再儲存？", "Vytvořit nové heslo a uložit ho?", "¿Crear una contraseña nueva y guardarla?", "创建一个新密码并保存吗？", "Ein neues Passwort erzeugen und speichern?"),
+    (jarvis_vault_toggle, "Let Jarvis use Skynet Password", "자비스가 스카이넷 패스워드를 사용하도록 허용", "ジャービスにスカイネット・パスワードの使用を許可", "俾 Jarvis 用 Skynet 密碼", "Povolit Jarvisovi používat Skynet Password", "Permitir que Jarvis use Skynet Password", "允许贾维斯使用 Skynet 密码", "Jarvis darf Skynet Password nutzen"),
+    (jarvis_vault_note, "Jarvis can find entries and copy one to your clipboard. It never sees a password, and this permission ends when you close the tab.", "자비스는 항목을 찾아 클립보드로 복사할 수 있습니다. 비밀번호 자체는 보지 못하며, 이 권한은 탭을 닫으면 사라집니다.", "ジャービスは項目を探してクリップボードにコピーできます。パスワード自体は見えず、この許可はタブを閉じると終了します。", "Jarvis 可以搵到條目再複製去你嘅剪貼簿。佢見唔到密碼本身，而且呢個權限喺你熄咗個分頁之後就冇咗。", "Jarvis umí najít položky a jednu zkopírovat do schránky. Heslo nikdy nevidí a toto oprávnění skončí zavřením panelu.", "Jarvis puede encontrar entradas y copiar una al portapapeles. Nunca ve una contraseña, y este permiso termina al cerrar la pestaña.", "贾维斯可以查找条目并把某一条复制到剪贴板。它永远看不到密码，并且此权限在你关闭标签页后失效。", "Jarvis kann Einträge finden und einen in die Zwischenablage kopieren. Es sieht nie ein Passwort, und diese Erlaubnis endet mit dem Schließen des Tabs."),
+    (jarvis_try, "Try asking", "이렇게 물어보세요", "こう聞いてみてください", "試下咁問", "Zkuste se zeptat", "Prueba a preguntar", "试着这样问", "Frag doch mal"),
+    (jarvis_try_search, "What did I say about the budget?", "예산에 대해 내가 뭐라고 했지?", "予算について私は何と言った？", "我講過啲咩關於預算？", "Co jsem říkal o rozpočtu?", "¿Qué dije sobre el presupuesto?", "我关于预算说过什么？", "Was habe ich zum Budget gesagt?"),
+    (jarvis_try_note, "Add \"call the dentist\" to my note", "\"치과 예약하기\"를 노트에 추가해줘", "「歯医者に電話」をメモに追加して", "幫我喺筆記加「打電話畀牙醫」", "Přidej do poznámky „zavolat zubaři“", "Añade «llamar al dentista» a mi nota", "把\"给牙医打电话\"加到我的笔记", "Füge „Zahnarzt anrufen“ zu meiner Notiz hinzu"),
+    (jarvis_try_rooms, "Summarise what I missed today", "오늘 놓친 내용을 요약해줘", "今日見逃した内容を要約して", "總結下我今日錯過咗啲咩", "Shrň, co mi dnes uniklo", "Resume lo que me perdí hoy", "总结一下我今天错过了什么", "Fasse zusammen, was ich heute verpasst habe"),
+    (jarvis_try_time, "What time is it, and where am I?", "지금 몇 시고 여긴 어디야?", "今何時で、ここはどこ？", "而家幾點，我喺邊？", "Kolik je hodin a kde jsem?", "¿Qué hora es y dónde estoy?", "现在几点，我在哪里？", "Wie spät ist es, und wo bin ich?"),
+    (jarvis_approve, "Go ahead", "진행", "実行する", "去馬", "Do toho", "Adelante", "去做吧", "Mach das"),
+    (jarvis_length, "Length", "길이", "長さ", "長度", "Délka", "Longitud", "长度", "Länge"),
 
     // --- Direct messages, threads and mentions -------------------------------
     (section_channels, "Channels", "채널", "チャンネル", "頻道", "Kanály", "Canales", "频道", "Kanäle"),
@@ -1168,7 +1230,6 @@ strings! {
     (publish_copy_failed, "Copy is unavailable here — select the URL on the card.", "여기서는 복사를 사용할 수 없습니다 — 카드의 URL을 직접 선택하세요.", "ここではコピーを使えません — カードのURLを選択してください。", "呢度用唔到複製 — 請自己揀選卡上面嘅網址。", "Kopírování zde není dostupné — označte URL na kartě.", "Copiar no está disponible aquí: selecciona la URL en la tarjeta.", "此处无法复制 — 请手动选中卡片上的网址。", "Kopieren ist hier nicht verfügbar — markiere die URL auf der Karte."),
 
     // --- Skynet Password (the encrypted key/value store) ---------------------
-    (nav_passwords, "Passwords", "비밀번호", "パスワード", "密碼", "Hesla", "Contraseñas", "密码", "Passwörter"),
     (pw_title, "Skynet Password", "스카이넷 패스워드", "スカイネット・パスワード", "Skynet 密碼", "Skynet Password", "Skynet Password", "Skynet 密码", "Skynet Password"),
     (pw_hint, "A key and a value, sealed on this device before they leave it. The server stores what it cannot read.", "키와 값을 이 기기에서 봉인한 뒤 전송합니다. 서버는 읽을 수 없는 것만 보관합니다.", "キーと値をこの端末で封じてから送信します。サーバーは読めないものだけを保管します。", "個名同個值喺呢部機封咗先送出去。伺服器只係存住佢睇唔到嘅嘢。", "Klíč a hodnota, zapečetěné na tomto zařízení, než ho opustí. Server ukládá to, co neumí přečíst.", "Una clave y un valor, sellados en este dispositivo antes de salir de él. El servidor guarda lo que no puede leer.", "键和值在本机封存后才发送。服务器保存的是它读不懂的内容。", "Ein Schlüssel und ein Wert, auf diesem Gerät versiegelt, bevor sie es verlassen. Der Server speichert, was er nicht lesen kann."),
     (pw_only_you, "Only you can open these — not this server, not whoever runs it.", "오직 본인만 열 수 있습니다 — 이 서버도, 운영자도 열 수 없습니다.", "開けるのはあなただけです — このサーバーも運営者も開けません。", "只有你先開得到 — 呢個伺服器同營運者都開唔到。", "Otevřít je můžete jen vy — ne tento server ani ten, kdo ho provozuje.", "Solo tú puedes abrirlos: ni este servidor ni quien lo administra.", "只有你能打开 — 服务器和运营者都不行。", "Nur du kannst sie öffnen — weder dieser Server noch wer ihn betreibt."),
@@ -1425,6 +1486,15 @@ mod tests {
             (Lang::Cs, Key::pw_title),
             (Lang::Es, Key::pw_title),
             (Lang::De, Key::pw_title),
+            // "AI" is the initialism as written in every one of these — a
+            // loanword, not a gap. Only Spanish ("IA") and German ("KI")
+            // reorder it. The chip has to stay two characters wide, so
+            // spelling it out ("인공지능") is not an option here.
+            (Lang::Ko, Key::agent_badge),
+            (Lang::Ja, Key::agent_badge),
+            (Lang::Yue, Key::agent_badge),
+            (Lang::Cs, Key::agent_badge),
+            (Lang::Zh, Key::agent_badge),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

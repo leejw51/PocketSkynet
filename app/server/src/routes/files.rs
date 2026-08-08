@@ -808,8 +808,26 @@ async fn serve_thumbnail(
     // Same shape check the download makes; the digest is not needed here.
     validated_path(&state, &stored)?;
 
-    let path = crate::thumbs::sidecar_path(&state.cfg.files_dir(), &stored)
+    let dir = state.cfg.files_dir();
+    let path = crate::thumbs::sidecar_path(&dir, &stored)
         .ok_or_else(|| ApiError::not_found("File not found"))?;
+    // A missing sidecar is rebuilt from the original rather than being a 404.
+    //
+    // Generation used to happen only at upload, which made a thumbnail a
+    // one-shot: anything uploaded before thumbnails existed never got one, and
+    // — the case that prompted this — a sidecar rendered before the Exif
+    // orientation fix stayed sideways forever, because the only way to correct
+    // it was to delete it and deleting it left nothing behind. With this,
+    // removing a stale sidecar *is* the repair: the next request draws a fresh
+    // one through the current renderer.
+    //
+    // Cheap in the common case (one `stat` that hits), bounded by the same cap
+    // the chunked upload path uses, and never fatal: if the rebuild fails the
+    // response is the 404 it would have been anyway, and the client falls back
+    // to the original.
+    if !path.exists() {
+        crate::thumbs::accompany_file(&dir, &stored, MAX_FILE_BYTES as u64).await;
+    }
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| ApiError::not_found("File not found"))?;

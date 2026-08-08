@@ -158,6 +158,12 @@ async fn block(
     if target == caller {
         return Err(ApiError::bad_request("Cannot block yourself"));
     }
+    // A webhook or an agent is not somebody there is anything to block: it
+    // holds no key, signs nothing, and only ever speaks in a room its owner
+    // already controls.
+    if target.is_reserved() {
+        return Err(ApiError::bad_request("That is not a person you can block."));
+    }
 
     let blocker = caller.as_str().to_owned();
     let blocked = target.as_str().to_owned();

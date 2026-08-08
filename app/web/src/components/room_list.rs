@@ -10,7 +10,7 @@
 //! tab stop; ↑/↓ move, Home/End jump, and typing a letter jumps to the next
 //! room starting with it.
 
-use pocketskynet_core::RoomId;
+use pocketskynet_core::{RoomId, WalletAddress};
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement};
 use yew::prelude::*;
@@ -503,7 +503,7 @@ fn body(
                     // for *all* of them, and every row was then matched by
                     // position. Marking one room read renumbered the sections
                     // and rebuilt the whole sidebar.
-                    { for sectioned(rooms).into_iter().flat_map(|(heading, section)| {
+                    { for sectioned(rooms, me.as_ref()).into_iter().flat_map(|(heading, section)| {
                         let head = heading.map(|h| html! {
                             <span key={format!("section-{h:?}")}
                                   class="fn-room-section" role="presentation">
@@ -548,38 +548,34 @@ fn body(
     }
 }
 
-/// Split the room list into channels and direct messages, keeping the index
-/// each row had in the flat list.
+/// Group the room list into its categories, keeping the index each row had in
+/// the flat list.
 ///
-/// The index is what drives the CSS entrance stagger, so it has to count
-/// across the whole list rather than restart per section — otherwise the two
-/// sections animate on top of each other.
-///
-/// Returns one unlabelled section when the list is all one kind. A heading
-/// over the only list on screen labels something nobody could have confused,
-/// and on a phone it costs a row of the few that fit.
-/// One sidebar section: its heading (when there is more than one section)
-/// and the rows under it, each keeping the index it had in the flat list.
-type Section = (Option<Key>, Vec<(usize, RoomWithMembers)>);
-
-fn sectioned(rooms: &[&RoomWithMembers]) -> Vec<Section> {
-    let mut channels = Vec::new();
-    let mut directs = Vec::new();
-    for (i, r) in rooms.iter().enumerate() {
-        if r.is_direct() {
-            directs.push((i, (*r).clone()));
-        } else {
-            channels.push((i, (*r).clone()));
+/// The rules — pinned order, the stagger index, when a heading is worth a row —
+/// live in [`crate::rooms::sectioned`] with tests beside them; this is the
+/// adapter that hands it the `RoomWithMembers` the sidebar actually holds.
+/// Splitting it that way is what lets "the built-in rooms are pinned above
+/// everything else" be checked by `cargo test` instead of by looking at a
+/// screenshot.
+fn sectioned(
+    rooms: &[&RoomWithMembers],
+    me: Option<&WalletAddress>,
+) -> Vec<crate::rooms::Section<RoomWithMembers>> {
+    let owned: Vec<RoomWithMembers> = rooms.iter().map(|r| (*r).clone()).collect();
+    // Without a signed-in address there is no "mine" to pin — a built-in room
+    // is only the viewer's own — so everything files under its plain category.
+    match me {
+        Some(me) => {
+            let me = me.clone();
+            crate::rooms::sectioned(&owned, move |r| crate::rooms::Category::of(r, &me))
         }
-    }
-
-    match (channels.is_empty(), directs.is_empty()) {
-        (false, true) => vec![(None, channels)],
-        (true, false) => vec![(None, directs)],
-        _ => vec![
-            (Some(Key::section_channels), channels),
-            (Some(Key::section_direct_messages), directs),
-        ],
+        None => crate::rooms::sectioned(&owned, |r| {
+            if r.is_direct() {
+                crate::rooms::Category::Directs
+            } else {
+                crate::rooms::Category::Channels
+            }
+        }),
     }
 }
 
@@ -1030,10 +1026,21 @@ fn room_row(p: &RoomRowProps) -> Html {
     // which differs per viewer and so can only be worked out here. Derived
     // rather than stored, so it also stays right when somebody renames
     // themselves.
-    let title = store
-        .me()
-        .map(|me| r.title_for(me))
-        .unwrap_or_else(|| r.room.name.clone());
+    // A built-in room's stored name is the fallback the `NOT NULL` column
+    // needs, not its label — see `crate::rooms`. Only *the viewer's own*
+    // built-in room is relabelled: a server admin sits in everybody's My
+    // Lobby, and calling all of them "My Lobby" would stack identical rows at
+    // the top of their sidebar. Checked first so a Korean reader's notebook is
+    // not called "My Note".
+    let built_in = store.me().and_then(|me| crate::rooms::mine(r, me));
+    let title = match built_in {
+        Some(room) => t(lang, room.title()).to_owned(),
+        None => store
+            .me()
+            .map(|me| r.title_for(me))
+            .unwrap_or_else(|| r.room.name.clone()),
+    };
+    let art = built_in.map(|room| room.art());
 
     let track = use_node_ref();
     let actions = use_node_ref();
@@ -1247,7 +1254,10 @@ fn room_row(p: &RoomRowProps) -> Html {
                     style={format!(
                         "--i: {}; --row-art: {}",
                         p.index,
-                        crate::asset::img_url(store.skin, crate::identity::art_for(id.as_str())),
+                        crate::asset::img_url(
+                            store.skin,
+                            art.unwrap_or_else(|| crate::identity::art_for(id.as_str())),
+                        ),
                     )}
                     role="option"
                     aria-selected={selected.to_string()}
@@ -1260,6 +1270,7 @@ fn room_row(p: &RoomRowProps) -> Html {
                         seed={id.to_string()}
                         class="fn-room-row__avatar"
                         presence={peer_presence}
+                        art={art}
                         corner={first_letter}
                         zoom={crate::components::common::Zoom {
                             title: title.clone(),
@@ -1284,10 +1295,22 @@ fn room_row(p: &RoomRowProps) -> Html {
                         // conversation avoids having an owner — so the badge
                         // marks nothing, and "2 members" restates the name
                         // already on the row above it.
-                        if is_admin && !r.is_direct() {
+                        if is_admin && !r.is_direct() && built_in.is_none() {
                             <Badge variant="admin">{ t(lang, Key::admin) }</Badge>
                         }
-                        if !r.is_direct() {
+                        // A built-in room says what it is instead of how many
+                        // people are in it. "1 member" is the least useful
+                        // sentence that could go here — the number is a
+                        // property of the kind, and never changes — while
+                        // "only you" and "you and whoever runs this server"
+                        // are the whole difference between the three. Yielded
+                        // to the message preview the moment there is one:
+                        // the blurb answers a question you ask once.
+                        if let Some(room) = built_in {
+                            if preview.is_empty() {
+                                <span>{ t(lang, room.blurb()) }</span>
+                            }
+                        } else if !r.is_direct() {
                             <span>{ t(lang, if r.member_count == 1 {
                                         Key::member_count_one
                                     } else {
@@ -1368,7 +1391,10 @@ fn drawer(
             // and offering a button that always errors is worse than not
             // offering it. Hiding, above, is the DM's answer and is
             // reversible.
-            if !r.is_direct() {
+            // The built-in rooms refuse it for a different reason and with the
+            // same consequence: the server would recreate one on the next
+            // listing, so the button could only ever mean "delete my notes".
+            if !r.is_direct() && !r.room.is_static() {
                 // An admin gets the second question the menu asks — the
                 // gesture is a shortcut to the verb, not a different verb.
                 // Destroying is still never *reached* by swiping: it is only

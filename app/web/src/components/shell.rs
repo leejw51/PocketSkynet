@@ -318,7 +318,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     <button
                         type="button"
                         class="topcoat-icon-button--quiet fn-topbar__wide"
-                        aria-label={t(lang, Key::nav_passwords)}
+                        aria-label={t(lang, Key::pw_title)}
                         title={t(lang, Key::pw_title)}
                         aria-current={(p.route.nav_key() == "passwords").then_some("page")}
                         onclick={go(Route::Passwords, p.on_navigate.clone())}
@@ -491,6 +491,30 @@ pub fn shell(p: &ShellProps) -> Html {
                         onclick={go(Route::Settings, p.on_navigate.clone())}
                     >
                         { icons::gear(18) }
+                    </button>
+                    // The mirror of `fn-topbar__wide`: shown only where that
+                    // row is hidden. Below 800px the top bar keeps just the
+                    // wallet and the way out, which leaves it looking like a
+                    // bar with two buttons and a lot of nothing — while every
+                    // destination it dropped sits behind a tab at the far
+                    // bottom corner. This is the same sheet the bottom nav
+                    // opens, put where the row that vanished used to be, so
+                    // reaching Settings does not mean crossing the screen.
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet fn-topbar__narrow"
+                        aria-label={t(lang, Key::nav_more)}
+                        title={t(lang, Key::nav_more)}
+                        aria-haspopup="dialog"
+                        aria-current={IN_MORE.contains(&p.route.nav_key()).then_some("page")}
+                        onclick={{
+                            let store = store.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                store.dispatch(Action::OpenModal(Modal::More));
+                            })
+                        }}
+                    >
+                        { icons::ellipsis(18) }
                     </button>
                     <button
                         type="button"

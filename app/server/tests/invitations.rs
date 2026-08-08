@@ -349,7 +349,15 @@ async fn inviting_an_existing_member_is_rejected() {
 }
 
 #[tokio::test]
-async fn inviting_into_a_nonexistent_room_is_a_404() {
+async fn inviting_into_a_room_you_do_not_administer_is_a_uniform_403() {
+    // Was a 404 "Room not found", which leaked the room's existence: the
+    // authority check now runs before the room is looked up, so a caller who
+    // could not invite here learns nothing about the room — a nonexistent
+    // room, an existing one they do not administer, and somebody's derivable
+    // My Note id all answer the same 403. That uniformity is the point; it is
+    // what closes the enumeration oracle that a note's id would otherwise be
+    // (see `static_rooms::probing_a_strangers_note_id_reveals_nothing`), and
+    // it matches the read-path convention `rooms.rs` already documents.
     let server = TestServer::start().await;
     let alice = new_user(&server, "alice").await;
     let bob = new_user(&server, "bob").await;
@@ -361,7 +369,7 @@ async fn inviting_into_a_nonexistent_room_is_a_404() {
             json!({ "userAddress": bob.address }),
         )
         .await
-        .expect_error(404, "Room not found");
+        .expect_error(403, "Only room admins can invite users");
 }
 
 #[tokio::test]

@@ -33,6 +33,7 @@ use super::common::{
 use super::composer::{Composer, Picker};
 use super::icons;
 use super::message::{DayMark, MessageRow};
+use super::modal::Modal as ConfirmDialog;
 use super::toast;
 use crate::i18n::{t, Key, Lang};
 
@@ -52,6 +53,29 @@ pub fn chat(p: &ChatProps) -> Html {
     let rotating = use_state(|| false);
     let rotate_error = use_state(|| Option::<String>::None);
     let loading_older = use_state(|| false);
+    // Set while the user's own AI is composing a reply in My Jarvis, so the
+    // room can show it is thinking. There is no token stream to hang a live
+    // indicator on (`web/src/ai.rs` awaits the whole answer), so this is the
+    // only "something is happening" the room has.
+    let jarvis_busy = use_state(|| false);
+    // Which tool Jarvis is running right now, so the activity line can name it
+    // rather than saying "thinking" through a six-second search. `None` while
+    // the model itself is deciding.
+    let jarvis_tool = use_state(|| Option::<String>::None);
+    // A write Jarvis has proposed, waiting on the person. The model cannot
+    // resolve this for itself, which is the point: it is the gate that keeps a
+    // prompt injection in a search result from becoming a sent message.
+    let jarvis_ask = use_state(|| Option::<crate::jarvis_run::Confirm>::None);
+    // Vault access, granted per session and never persisted — a consent that
+    // survives a reload is one nobody remembers giving.
+    let jarvis_vault = use_state(|| false);
+    // Search within this room, client-side: the server never indexes
+    // ciphertext, so an encrypted room — every built-in room, now — has to be
+    // searchable this way or not at all. Scoped to what is already loaded and
+    // decrypted in memory; nothing here fetches more history or persists a
+    // plaintext index anywhere.
+    let search_open = use_state(|| false);
+    let search_query = use_state(String::new);
     let picker_for = use_state(|| Option::<Option<MessageId>>::None);
     // The message the picker is reacting to, flattened out of the two-level
     // Option: outer = "picker is open", inner = "a specific message, or the
@@ -567,7 +591,15 @@ pub fn chat(p: &ChatProps) -> Html {
     // DM does not, and the server's placeholder must never reach the screen.
     // See `RoomWithMembers::title_for` — the answer differs per viewer, so it
     // can only be worked out here.
-    let title = room.title_for(&me);
+    // …and a built-in room has neither: its stored name is the fallback the
+    // `NOT NULL` column needs, and the label is translated from its kind — but
+    // only for the viewer's *own* built-in room. Somebody else's My Lobby that
+    // a server admin sits in is, to them, just a room with its stored name.
+    let built_in = crate::rooms::mine(&room, &me);
+    let title = match built_in {
+        Some(r) => t(lang, r.title()).to_owned(),
+        None => room.title_for(&me),
+    };
     // In a one-to-one DM the header stands for a person, so it carries their
     // status; a channel header stands for a room, which is not somewhere
     // anybody is. This is the single most useful place for it — it is what
@@ -601,6 +633,39 @@ pub fn chat(p: &ChatProps) -> Html {
     let now = format::now_ms();
     let tz = format::tz_offset_minutes();
 
+    // Matches for the search panel — computed only while it is open with a
+    // non-empty query, so the common case (panel closed) does no extra
+    // decryption beyond what the stream below already does.
+    let search_hits: Vec<(MessageId, String, String, i64)> = if *search_open {
+        let q = search_query.trim().to_lowercase();
+        if q.is_empty() {
+            Vec::new()
+        } else {
+            state
+                .ordered(&store.blocks)
+                .iter()
+                .filter(|m| !m.is_deleted)
+                .filter_map(|m| {
+                    let text = match &bundle {
+                        Some(b) => decrypt_message(b, &p.room_id, m).text().map(str::to_owned),
+                        None => (!m.is_encrypted).then(|| m.content.clone()),
+                    };
+                    text.filter(|t| t.to_lowercase().contains(&q)).map(|t| {
+                        let who = room
+                            .members
+                            .iter()
+                            .find(|mm| mm.user_address == m.sender_address)
+                            .map(|mm| mm.user.display_name())
+                            .unwrap_or_else(|| m.sender_address.abbreviated());
+                        (m.id.clone(), who, t, m.message_timestamp)
+                    })
+                })
+                .collect()
+        }
+    } else {
+        Vec::new()
+    };
+
     // --- callbacks -------------------------------------------------------
 
     let on_send = {
@@ -609,6 +674,10 @@ pub fn chat(p: &ChatProps) -> Html {
         let reply_to = reply_to.clone();
         let roster = room.members.clone();
         let me_for_send = me.clone();
+        let jarvis_busy = jarvis_busy.clone();
+        let jarvis_tool = jarvis_tool.clone();
+        let jarvis_ask = jarvis_ask.clone();
+        let jarvis_vault = jarvis_vault.clone();
         Callback::from(move |text: String| {
             let now = format::now_ms();
             let local_id = crate::state::next_local_id();
@@ -632,8 +701,43 @@ pub fn chat(p: &ChatProps) -> Html {
             reply_to.set(None);
             let store2 = store.clone();
             let room_id = room_id.clone();
+            // In My Jarvis a message is also a question. The answer is fetched
+            // after the send resolves rather than beside it, so a failed send
+            // does not produce a reply to something that was never posted —
+            // and so the agent's turn list contains the message it is
+            // answering.
+            let ask = built_in == Some(crate::rooms::StaticRoom::Jarvis);
+            let jarvis_busy = jarvis_busy.clone();
+            let jarvis_ui = crate::jarvis_run::Ui {
+                stage: {
+                    let jarvis_tool = jarvis_tool.clone();
+                    Callback::from(move |tool: Option<String>| jarvis_tool.set(tool))
+                },
+                confirm: {
+                    let jarvis_ask = jarvis_ask.clone();
+                    Callback::from(move |c: crate::jarvis_run::Confirm| jarvis_ask.set(Some(c)))
+                },
+                vault_consent: *jarvis_vault,
+            };
+            let jarvis_tool_done = jarvis_tool.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                actions::send_message(store2, room_id, local_id, text, extras).await;
+                // The question is kept for the agent turn: `send_message`
+                // consumes `text`, and the reply must see the message that was
+                // just posted, which the store snapshot this task holds does
+                // not yet contain (see `actions::jarvis_reply`).
+                let question = ask.then(|| text.clone());
+                let sent =
+                    actions::send_message(store2.clone(), room_id.clone(), local_id, text, extras)
+                        .await;
+                // A failed send left nothing in the room to answer — asking
+                // anyway would put a reply in the transcript to a question
+                // Jarvis, reading the same room, never actually saw.
+                if let Some(question) = question.filter(|_| sent) {
+                    jarvis_busy.set(true);
+                    actions::jarvis_reply(store2, room_id, question, jarvis_ui).await;
+                    jarvis_busy.set(false);
+                    jarvis_tool_done.set(None);
+                }
             });
         })
     };
@@ -986,6 +1090,7 @@ pub fn chat(p: &ChatProps) -> Html {
                 <Ident
                     seed={p.room_id.to_string()}
                     size={IdentSize::Sm}
+                    art={built_in.map(|r| r.art())}
                     presence={peer_presence}
                     zoom={crate::components::common::Zoom {
                         title: title.clone(),
@@ -1038,6 +1143,24 @@ pub fn chat(p: &ChatProps) -> Html {
                     <button
                         type="button"
                         class="topcoat-icon-button--quiet"
+                        aria-label={t(lang, Key::search_this_room)}
+                        title={t(lang, Key::search_this_room)}
+                        aria-expanded={search_open.to_string()}
+                        onclick={{
+                            let search_open = search_open.clone();
+                            let search_query = search_query.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                let opening = !*search_open;
+                                search_open.set(opening);
+                                if !opening {
+                                    search_query.set(String::new());
+                                }
+                            })
+                        }}
+                    >{ icons::search(18) }</button>
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet"
                         aria-label={t(lang, Key::sync_this_room)}
                         title={t(lang, Key::sync_now)}
                         onclick={{
@@ -1063,6 +1186,48 @@ pub fn chat(p: &ChatProps) -> Html {
             // false to run the exit, which it cannot do if the parent has
             // already stopped rendering it.
             { room_menu(lang, &store, &room, &title, is_admin, menu_open.clone(), &p.on_navigate) }
+
+            if *search_open {
+                <div class="fn-room-search">
+                    <input
+                        type="search"
+                        class="topcoat-text-input"
+                        placeholder={t(lang, Key::search_this_room)}
+                        aria-label={t(lang, Key::search_this_room)}
+                        value={(*search_query).clone()}
+                        oninput={{
+                            let search_query = search_query.clone();
+                            Callback::from(move |e: InputEvent| {
+                                let value = e
+                                    .target_dyn_into::<web_sys::HtmlInputElement>()
+                                    .map(|i| i.value())
+                                    .unwrap_or_default();
+                                search_query.set(value);
+                            })
+                        }}
+                    />
+                    if !search_query.trim().is_empty() {
+                        <ul class="fn-room-search__results">
+                            { for search_hits.iter().map(|(id, who, snippet, ts)| html! {
+                                <li key={id.to_string()} class="fn-room-search__hit">
+                                    <span class="fn-room-search__who">{ who }</span>
+                                    <span class="fn-room-search__snippet">
+                                        { format::preview(snippet, 140) }
+                                    </span>
+                                    <span class="fn-room-search__time">
+                                        { format::hhmm(*ts, tz) }
+                                    </span>
+                                </li>
+                            }) }
+                            if search_hits.is_empty() {
+                                <li class="fn-room-search__empty">
+                                    { t(lang, Key::search_no_results) }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            }
 
             if offline {
                 <super::common::OfflineBanner />
@@ -1141,6 +1306,148 @@ pub fn chat(p: &ChatProps) -> Html {
                     Callback::from(move |_code: String| picker_for.set(None))
                 }}
             />
+
+            // My Jarvis says two things above the composer nowhere else does.
+            // Without a text-provider key on this device the agent cannot
+            // answer at all, and a room that silently swallows every message
+            // reads as broken — so it says where to put a key. And while a
+            // reply is being composed it says so, because there is no message
+            // in the room yet to show that anything is happening.
+            if built_in == Some(crate::rooms::StaticRoom::Jarvis) {
+                if *jarvis_busy {
+                    <div class="fn-jarvis-activity" role="status" aria-live="polite">
+                        <span class="fn-jarvis-activity__pulse" aria-hidden="true">
+                            <i /><i /><i />
+                        </span>
+                        <span class="fn-jarvis-activity__label">{
+                            match (*jarvis_tool).as_deref() {
+                                // Naming the tool is the difference between a
+                                // spinner and a machine you can see working.
+                                Some(tool) => t(lang, Key::jarvis_using).replace("{tool}", tool),
+                                None => t(lang, Key::jarvis_thinking).to_owned(),
+                            }
+                        }</span>
+                    </div>
+                } else if crate::ai::AiSettings::load().text_provider().is_none() {
+                    <div class="fn-banner" role="note">
+                        { t(lang, Key::jarvis_needs_key) }
+                    </div>
+                }
+
+                // A tool-using agent is invisible until somebody asks it for
+                // something it can actually do, and "ask me anything" teaches
+                // nobody what those things are. Four concrete sentences, shown
+                // only in an empty room, each one exercising a different tool
+                // group — they stop being clutter the moment there is a
+                // conversation to read instead.
+                if visible_count == 0 {
+                    <div class="fn-jarvis-starters">
+                        <span class="fn-jarvis-starters__lead">{ t(lang, Key::jarvis_try) }</span>
+                        <div class="fn-jarvis-starters__row">
+                            { for [
+                                Key::jarvis_try_search,
+                                Key::jarvis_try_note,
+                                Key::jarvis_try_rooms,
+                                Key::jarvis_try_time,
+                            ].iter().map(|k| {
+                                let text = t(lang, *k).to_owned();
+                                let click = {
+                                    let on_send = on_send.clone();
+                                    let text = text.clone();
+                                    Callback::from(move |_: MouseEvent| on_send.emit(text.clone()))
+                                };
+                                html! {
+                                    <button type="button" class="fn-jarvis-starter" onclick={click}>
+                                        { text }
+                                    </button>
+                                }
+                            }) }
+                        </div>
+                    </div>
+                }
+
+                // Vault access is a switch, not a setting: it lives beside the
+                // composer where it is used, defaults to off, and is forgotten
+                // when the tab closes. Offered only where it could work — a
+                // locked session cannot open an entry however willing the
+                // owner is.
+                if store.auth.can_decrypt() {
+                    <label class="fn-jarvis-vault">
+                        <input type="checkbox" checked={*jarvis_vault}
+                            onchange={{
+                                let jarvis_vault = jarvis_vault.clone();
+                                Callback::from(move |_: Event| jarvis_vault.set(!*jarvis_vault))
+                            }} />
+                        <span class="fn-jarvis-vault__text">
+                            <strong>{ t(lang, Key::jarvis_vault_toggle) }</strong>
+                            <small>{ t(lang, Key::jarvis_vault_note) }</small>
+                        </span>
+                    </label>
+                }
+            }
+
+            // What Jarvis proposed to do, in the owner's own words. Rendered
+            // here rather than inside the agent because the decision is the
+            // one thing in the loop the model must not be able to make.
+            if let Some(c) = (*jarvis_ask).clone() {
+                <ConfirmDialog
+                    title={c.title.clone()}
+                    on_close={{
+                        let jarvis_ask = jarvis_ask.clone();
+                        let decision = c.decision.clone();
+                        Callback::from(move |_: ()| {
+                            // Dismissing is declining. A dialog that resolved
+                            // to "yes" when closed would make the Escape key a
+                            // way to send somebody a message.
+                            *decision.borrow_mut() = Some(false);
+                            jarvis_ask.set(None);
+                        })
+                    }}
+                    footer={{
+                        let yes = {
+                            let jarvis_ask = jarvis_ask.clone();
+                            let decision = c.decision.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                *decision.borrow_mut() = Some(true);
+                                jarvis_ask.set(None);
+                            })
+                        };
+                        let no = {
+                            let jarvis_ask = jarvis_ask.clone();
+                            let decision = c.decision.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                *decision.borrow_mut() = Some(false);
+                                jarvis_ask.set(None);
+                            })
+                        };
+                        html! {
+                            <>
+                                <button type="button" class="topcoat-button" onclick={no}>
+                                    { t(lang, Key::cancel) }
+                                </button>
+                                <button type="button"
+                                        class="topcoat-button--cta topcoat-button--cta-primary"
+                                        onclick={yes}>
+                                    { t(lang, Key::jarvis_approve) }
+                                </button>
+                            </>
+                        }
+                    }}
+                >
+                    <dl class="fn-jarvis-confirm">
+                        { for c.lines.iter().map(|(k, v)| html! {
+                            <>
+                                if !k.is_empty() {
+                                    <dt>{ k }</dt>
+                                }
+                                <dd class={if k.is_empty() { "fn-jarvis-confirm__body" } else { "" }}>
+                                    { v }
+                                </dd>
+                            </>
+                        }) }
+                    </dl>
+                </ConfirmDialog>
+            }
 
             <Composer
                 members={room.members.clone()}
@@ -1355,6 +1662,15 @@ fn room_menu(
     let id = room.id().clone();
     let name = title.to_owned();
     let direct = room.is_direct();
+    // A built-in room refuses leave and delete server-side and would be
+    // provisioned straight back on the next listing, so the only thing those
+    // buttons could accomplish is an error dialog. It refuses the roster verbs
+    // for the same reason — invite, rename and manage-admins all 400 — so
+    // every one of those is hidden too. Hiding and clear-transcript are the
+    // verbs that work, and they stay. Keyed on the *kind*, not on ownership:
+    // the server refuses these for anybody's built-in room, including a lobby a
+    // server admin merely sits in.
+    let built_in = room.room.is_static();
 
     let item = |label: &'static str, action: Modal, open: UseStateHandle<bool>| {
         let store = store.clone();
@@ -1414,10 +1730,10 @@ fn room_menu(
             // conversation, no name anybody chose to change, and every member
             // of a DM is already an admin of it. Offering a control that
             // always errors is worse than not offering it.
-            if !direct && (is_admin || room.has_encryption) {
+            if !direct && !built_in && (is_admin || room.has_encryption) {
                 { item(t(lang, Key::invite_people), Modal::Invite(id.clone()), open.clone()) }
             }
-            if !direct && is_admin {
+            if !direct && !built_in && is_admin {
                 // Share-by-link sits beside share-by-address: the first is for
                 // people whose wallet address nobody has yet.
                 { item(t(lang, Key::invite_links), Modal::InviteLinks(id.clone()), open.clone()) }
@@ -1426,8 +1742,9 @@ fn room_menu(
             }
             // Only where the server would say yes: a webhook holds no room
             // key, so an encrypted room has nothing to manage behind this
-            // item and offering it would open a dialog that only errors.
-            if !direct && is_admin && !room.has_encryption {
+            // item and offering it would open a dialog that only errors — and
+            // a built-in room refuses webhooks outright.
+            if !direct && !built_in && is_admin && !room.has_encryption {
                 { item(t(lang, Key::webhooks_menu), Modal::Webhooks(id.clone()), open.clone()) }
             }
             <button
@@ -1464,7 +1781,7 @@ fn room_menu(
             // Leaving is a channel verb too — a departed member would leave a
             // DM still keyed to their name, which they could then never
             // re-open. Hiding, below, is the reversible answer for both.
-            if !direct {
+            if !direct && !built_in {
                 // An admin's exit asks a second question — see
                 // `ConfirmAction::ExitAsAdmin`. The first dialog says so, so
                 // that "Leave" is never a button whose consequences arrive
@@ -1486,11 +1803,17 @@ fn room_menu(
                       t(lang, Key::hide_room).to_owned(),
                       ConfirmAction::HideRoom(id.clone()), open.clone()) }
             if is_admin {
+                // Clearing the transcript stays available for a built-in room
+                // and is the only reason this distinction is drawn: the room
+                // cannot be deleted, so emptying it is the only way to start a
+                // notebook over, and removing both would leave no way at all.
                 { confirm(t(lang, Key::delete_all_messages), true,
                           t(lang, Key::delete_all_title).replace("{name}", &name),
                           t(lang, Key::delete_all_body).to_owned(),
                           t(lang, Key::delete_all).to_owned(),
                           ConfirmAction::DeleteAllMessages(id.clone()), open.clone()) }
+            }
+            if is_admin && !built_in {
                 { confirm(t(lang, Key::delete_room), true,
                           t(lang, Key::delete_room_title).replace("{name}", &name),
                           t(lang, Key::delete_room_body).to_owned(),

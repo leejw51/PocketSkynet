@@ -110,6 +110,27 @@ pub async fn login(server: &TestServer, signer: Signer, username: &str) -> User 
     }
 }
 
+/// The kinds of room the server provisions for every account rather than
+/// anybody creating — see `db/models.rs`.
+pub const STATIC_ROOM_KINDS: [&str; 3] = ["note", "jarvis", "lobby"];
+
+/// A `GET /api/rooms` listing with the three built-in rooms filtered out —
+/// the rooms somebody actually made.
+///
+/// Every account has My Note, My Jarvis and My Lobby, provisioned by the
+/// listing itself, so "how many rooms does this person have" is no longer the
+/// question most of these tests are asking. Filtering by kind rather than
+/// subtracting three keeps them honest: a test that expected `len() == 4`
+/// would still pass if provisioning had built the wrong three rooms, or one of
+/// them twice, or somebody else's.
+pub fn made_rooms(response: &Resp) -> Vec<Value> {
+    response
+        .array()
+        .into_iter()
+        .filter(|room| !STATIC_ROOM_KINDS.contains(&room["kind"].as_str().unwrap_or("")))
+        .collect()
+}
+
 /// `POST /api/auth/challenge`, returning `(challengeId, message)`.
 pub async fn request_challenge(anon: &Api, address: &str) -> (String, String) {
     let resp = anon

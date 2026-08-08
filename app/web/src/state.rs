@@ -486,7 +486,12 @@ impl AppState {
         };
         self.rooms
             .iter()
-            .filter(|r| !r.is_direct() && r.is_admin(me))
+            // Built-in rooms are excluded: the server refuses to delete one, so
+            // including them would make "remove all rooms" count three it can
+            // never act on and then abort partway through the batch when the
+            // first refusal came back. The owner is an admin of all three, so
+            // without this they would every time.
+            .filter(|r| !r.is_direct() && !r.room.is_static() && r.is_admin(me))
             .map(|r| r.id().clone())
             .collect()
     }

@@ -44,7 +44,7 @@
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use image::{ImageReader, RgbImage};
+use image::{DynamicImage, ImageDecoder, ImageReader, RgbImage};
 
 /// The longest edge of a generated thumbnail, in pixels.
 ///
@@ -114,7 +114,31 @@ pub fn render(bytes: &[u8]) -> Option<Vec<u8>> {
     limits.max_image_width = Some(MAX_SOURCE_EDGE);
     limits.max_image_height = Some(MAX_SOURCE_EDGE);
     reader.limits(limits);
-    let source = reader.decode().ok()?;
+
+    // Decode through the decoder rather than `reader.decode()`, because the
+    // orientation has to be read *before* the pixels are handed over.
+    //
+    // A phone camera does not rotate what it recorded. It writes the sensor's
+    // own pixels and adds an Exif tag saying which way up the result is, and
+    // every browser applies that tag to an `<img>` for free — which is why the
+    // full-size attachment always looked right and only the preview lay on its
+    // side. Re-encoding drops the tag (the output here is a bare JPEG with no
+    // Exif at all, deliberately: it is this server's own encoding, which is
+    // what makes accepting a client-captured video frame sound). So a
+    // thumbnail that does not bake the rotation into its pixels loses the
+    // information entirely, and a portrait photograph is stored sideways
+    // forever.
+    let mut decoder = reader.into_decoder().ok()?;
+    // `NoTransforms` for every format that carries no Exif, so this costs
+    // nothing for a PNG and is never a reason to reject a file.
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut source = DynamicImage::from_decoder(decoder).ok()?;
+    // Before scaling, not after: `thumbnail` fits inside a square bounding box
+    // by aspect ratio, and a portrait image rotated afterwards would have been
+    // fitted as though it were landscape.
+    source.apply_orientation(orientation);
 
     // `thumbnail` preserves aspect ratio inside the bounding box and uses the
     // fast path for large downscales, which is the common case — but it also
@@ -269,6 +293,116 @@ mod tests {
             .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
             .unwrap();
         out
+    }
+
+    /// A JPEG carrying an Exif `Orientation` tag, the way a phone writes one.
+    ///
+    /// Built by hand rather than checked in as a fixture so the tag being
+    /// tested is visible in the test: an APP1 segment spliced in directly
+    /// after the SOI marker, holding a little-endian TIFF header and a
+    /// single-entry IFD0 whose only tag is 0x0112.
+    fn jpeg_with_orientation(width: u32, height: u32, orientation: u16) -> Vec<u8> {
+        let img = RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 200])
+        });
+        let mut plain = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut plain), image::ImageFormat::Jpeg)
+            .unwrap();
+
+        let mut payload: Vec<u8> = Vec::new();
+        payload.extend_from_slice(b"Exif\0\0");
+        payload.extend_from_slice(b"II"); // little-endian
+        payload.extend_from_slice(&42u16.to_le_bytes());
+        payload.extend_from_slice(&8u32.to_le_bytes()); // IFD0 starts here
+        payload.extend_from_slice(&1u16.to_le_bytes()); // one entry
+        payload.extend_from_slice(&0x0112u16.to_le_bytes()); // Orientation
+        payload.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        payload.extend_from_slice(&1u32.to_le_bytes()); // count
+        payload.extend_from_slice(&orientation.to_le_bytes());
+        payload.extend_from_slice(&[0, 0]); // pad the value to four bytes
+        payload.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&plain[..2]); // SOI
+        out.extend_from_slice(&[0xFF, 0xE1]); // APP1
+        out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(&plain[2..]);
+        out
+    }
+
+    #[tokio::test]
+    async fn a_deleted_sidecar_is_drawn_again_from_the_original() {
+        // What makes "delete the stale ones" a complete repair. Thumbnails
+        // used to be generated only at upload, so a sidecar rendered by an
+        // older `render` — one that ignored Exif orientation — could never be
+        // corrected: deleting it left nothing, because nothing rebuilt it.
+        // The serve routes now call this on a miss.
+        let dir = std::env::temp_dir().join(format!("thumbs-heal-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let stored = format!("{}.png", "d".repeat(64));
+        tokio::fs::write(dir.join(&stored), big_png(800, 400))
+            .await
+            .unwrap();
+
+        accompany_file(&dir, &stored, 10_000_000).await;
+        assert!(exists(&dir, &stored), "the first pass draws one");
+
+        let sidecar = sidecar_path(&dir, &stored).unwrap();
+        tokio::fs::remove_file(&sidecar).await.unwrap();
+        assert!(!exists(&dir, &stored));
+
+        accompany_file(&dir, &stored, 10_000_000).await;
+        assert!(exists(&dir, &stored), "and a later pass draws it again");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[test]
+    fn a_sideways_photograph_is_stood_up_before_it_is_scaled() {
+        // The reported bug. A phone does not rotate what it recorded — it
+        // writes the sensor's pixels and tags which way is up. A browser
+        // applies that tag to the full-size image for free, which is why only
+        // the preview lay on its side; re-encoding drops the tag, so the
+        // rotation has to be baked into the pixels here or it is lost.
+        //
+        // Orientation 6 is "rotate 90° clockwise", the one a phone held
+        // upright produces. A 1200×600 source must therefore come back taller
+        // than it is wide.
+        let jpeg = jpeg_with_orientation(1200, 600, 6);
+        let out = render(&jpeg).expect("a thumbnail");
+        let decoded = image::load_from_memory(&out).expect("valid JPEG out");
+        assert!(
+            decoded.height() > decoded.width(),
+            "a rotated source must come back portrait, got {}x{}",
+            decoded.width(),
+            decoded.height()
+        );
+        // And it is still bounded, i.e. the rotation happened before the fit
+        // rather than after it.
+        assert!(decoded.width() <= THUMB_EDGE && decoded.height() <= THUMB_EDGE);
+        assert_eq!(decoded.height(), THUMB_EDGE);
+    }
+
+    #[test]
+    fn an_untagged_image_is_left_exactly_as_it_was() {
+        // The other half: orientation 1 means "no transform", and a format
+        // that carries no Exif at all must not pay for this. Both must keep
+        // their shape.
+        let tagged = render(&jpeg_with_orientation(1200, 600, 1)).expect("a thumbnail");
+        let decoded = image::load_from_memory(&tagged).unwrap();
+        assert!(
+            decoded.width() > decoded.height(),
+            "landscape must stay landscape"
+        );
+
+        let png = render(&big_png(1200, 600)).expect("a thumbnail");
+        let decoded = image::load_from_memory(&png).unwrap();
+        assert!(
+            decoded.width() > decoded.height(),
+            "a PNG has no Exif to apply"
+        );
     }
 
     #[test]

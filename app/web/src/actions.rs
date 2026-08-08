@@ -150,6 +150,25 @@ pub async fn refresh_rooms(store: Store) {
     }
 }
 
+/// Ask the user's own AI for an answer in "My Jarvis", and post it there.
+///
+/// The implementation moved to [`crate::jarvis_run`] when the agent grew
+/// tools: answering is no longer one request but a loop that may search the
+/// owner's rooms, read their note or reach the chain in between. What stayed
+/// behind is the reason it lives on the client at all — the model call is
+/// made in the browser with a key `localStorage` holds and the provider is
+/// the only other party to it (`docs/SEARCH.md` §5), and the server's whole
+/// involvement is writing the answer down under the agent's address, because
+/// a browser cannot claim a `senderAddress` that is not its own wallet.
+pub async fn jarvis_reply(
+    store: Store,
+    room_id: RoomId,
+    question: String,
+    ui: crate::jarvis_run::Ui,
+) {
+    crate::jarvis_run::reply(store, room_id, question, ui).await
+}
+
 /// Redeem an invite-link token into membership and land in the room
 /// (ROADMAP §7 M1) — the last step of the landing flow, shared by its two
 /// callers: the landing page when a signed-in user opens a link, and the
@@ -238,7 +257,16 @@ pub async fn open_room(store: Store, room_id: RoomId) {
     drain_sync(store.clone(), room_id.clone(), cached_cursor).await;
 
     if needs_keys(&store, &room_id) {
-        refresh_keys(store, room_id).await;
+        refresh_keys(store.clone(), room_id.clone()).await;
+    }
+
+    // Cheap on every open: a boolean already on the fetched room, and a real
+    // key ceremony only fires the first time it is still false.
+    if let Some(kind) = store
+        .room(&room_id)
+        .and_then(|r| crate::rooms::StaticRoom::from_kind(&r.room.kind))
+    {
+        ensure_static_encryption(&store, &room_id, kind).await;
     }
 }
 
@@ -626,7 +654,7 @@ pub async fn send_message(
     local_id: u64,
     text: String,
     extras: SendExtras,
-) {
+) -> bool {
     let room = store.room(&room_id).cloned();
     let encrypted = room.as_ref().is_some_and(|r| r.has_encryption);
 
@@ -668,7 +696,7 @@ pub async fn send_message(
             Ok(b) => b,
             Err(e) => {
                 store.dispatch(Action::SendFailed(room_id, local_id, e));
-                return;
+                return false;
             }
         };
 
@@ -684,7 +712,7 @@ pub async fn send_message(
                 });
                 store.dispatch(Action::Sync(room_id.clone(), vec![msg]));
                 store.dispatch(Action::SendSucceeded(room_id, local_id));
-                return;
+                return true;
             }
             Err(e) if e.is_stale_key_version() && attempt == 0 => {
                 // Silent: refetch the epoch, re-encrypt, retry once. Only a
@@ -704,7 +732,7 @@ pub async fn send_message(
                 if e.is_key_rotation_required() {
                     refresh_rooms(store).await;
                 }
-                return;
+                return false;
             }
         }
     }
@@ -852,6 +880,76 @@ pub async fn prewrap_key_for(
         // outcome we wanted, so it is a success, not a failure.
         Err(e) if e.status() == Some(409) => Ok(()),
         Err(e) => Err(e.user_message()),
+    }
+}
+
+/// Establish epoch 1 for My Lobby, wrapping to the owner and every current
+/// server admin in one pass.
+///
+/// Unlike [`establish_encryption`], this room can have real members beyond
+/// its owner — the addresses `VITE_FRUITNATION_ADMIN` names — so it needs the
+/// multi-recipient shape [`crypto::wrap_room_key_for`] already provides for
+/// rotation, just aimed at a fresh epoch 1 instead of the next one. Best
+/// effort on coverage, deliberately unlike [`prewrap_key_for`]'s caller-facing
+/// contract: this runs silently on room open with no dialog to report a
+/// refusal to, and an admin who has never signed in (so has no published key
+/// yet) must not block the owner's own Lobby from being sealed at all — they
+/// are covered on the next rotation, the same healing path a member added
+/// after epoch 1 already goes through.
+async fn establish_lobby_encryption(store: &Store, room_id: &RoomId) {
+    let Ok(members) = store.client.members(room_id).await else {
+        return;
+    };
+    let roster: Vec<WalletAddress> = members.into_iter().map(|m| m.user_address).collect();
+    if roster.is_empty() {
+        return;
+    }
+    let Ok(entries) = store.client.public_keys(&roster).await else {
+        return;
+    };
+    let Ok(key) = crypto::new_room_key() else {
+        return;
+    };
+    let (wraps, _refusals) = crypto::wrap_room_key_for(&key, room_id, &roster, &entries, None);
+    for wrap in &wraps {
+        let _ = store.client.put_room_key(room_id, wrap).await;
+    }
+}
+
+/// Key a built-in room the first time this device finds it still plaintext,
+/// and heal a device that is missing its wrap for one that is already keyed.
+///
+/// My Note and My Jarvis have exactly one real member — Jarvis's second
+/// "member" is the owner's own agent address, which can never sign in and so
+/// can never publish a key to wrap to; every message under it is written by
+/// the owner's own browser (`routes/messages.rs::agent_reply`), so there is
+/// nobody else to cover. My Lobby's other members are real accounts, so it
+/// goes through the multi-recipient path and can end up with a gap on this
+/// device the other two never can (an admin added after epoch 1); rotating —
+/// the same self-heal any member uses after a rotation they missed — is what
+/// closes it, never a fresh `establish`, which would collide with the epoch
+/// that already exists.
+async fn ensure_static_encryption(store: &Store, room_id: &RoomId, kind: crate::rooms::StaticRoom) {
+    if !store.auth.can_decrypt() {
+        return;
+    }
+    let has_encryption = store.room(room_id).is_some_and(|r| r.has_encryption);
+    if !has_encryption {
+        match kind {
+            crate::rooms::StaticRoom::Note | crate::rooms::StaticRoom::Jarvis => {
+                let Some(session) = store.auth.session() else {
+                    return;
+                };
+                let _ = establish_encryption(&store.client, session, room_id).await;
+            }
+            crate::rooms::StaticRoom::Lobby => {
+                establish_lobby_encryption(store, room_id).await;
+            }
+        }
+        refresh_keys(store.clone(), room_id.clone()).await;
+        refresh_rooms(store.clone()).await;
+    } else if kind == crate::rooms::StaticRoom::Lobby && store.bundle(room_id).is_none() {
+        let _ = rotate_key(store.clone(), room_id.clone()).await;
     }
 }
 

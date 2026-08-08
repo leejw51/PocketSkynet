@@ -286,12 +286,22 @@ async fn list_rooms(
 /// for a room they administer. This one exists for the case that endpoint
 /// cannot reach: a room whose last admin has gone, which nobody remaining can
 /// delete or rename, and which would otherwise be permanent.
+///
+/// It stops at the three built-in rooms, and an operator's reach is exactly why
+/// the check has to be repeated here rather than left to the room-level guard.
+/// This route exists to reach past a room's own admins; if it also reached past
+/// the rule that a person's note cannot be destroyed, then "nobody else can
+/// ever read this" would quietly mean "except whoever runs the server", which
+/// is not what the room promises. Provisioning would recreate it empty on the
+/// owner's next fetch, so the only thing the destroy could accomplish is
+/// deleting somebody's notes.
 async fn delete_room(
     State(state): State<AppState>,
     admin: ServerAdmin,
     Path(room_id): Path<String>,
 ) -> ApiResult<Response> {
     let room = validate::room_id(&room_id)?;
+    super::rooms::refuse_static_removal(&state, &room, "destroy").await?;
     let room_id = room.as_str().to_owned();
 
     let members = state
@@ -486,7 +496,7 @@ async fn disconnect(state: &AppState, wallet: &WalletAddress) {
 #[cfg(test)]
 mod tests {
     use crate::routes::build;
-    use crate::test_support::{arm_server_admin, boss, register, send, state, wallet};
+    use crate::test_support::{arm_server_admin, boss, made_rooms, register, send, state, wallet};
     use axum::http::StatusCode;
     use sha2::Digest;
 
@@ -821,12 +831,20 @@ mod tests {
         )
         .await;
         assert_eq!(deleted.status, StatusCode::OK, "{:?}", deleted.body);
-        assert!(send(&router, "GET", "/api/rooms", Some(&alice_token), None)
-            .await
-            .json()
-            .as_array()
-            .unwrap()
-            .is_empty());
+        // Alice's three built-in rooms survive, as they must — this route can
+        // reach past a room's own admins but not past those. Checked against
+        // the *whole* listing, not `made_rooms` (which filters built-in kinds
+        // out and would read the same "nothing left" whether they survived or
+        // this route wrongly swept them up too): three rows, one of each
+        // built-in kind, and nothing else.
+        let listing = send(&router, "GET", "/api/rooms", Some(&alice_token), None).await;
+        assert!(made_rooms(&listing).is_empty());
+        let all = listing.json();
+        let all = all.as_array().expect("a room listing");
+        assert_eq!(all.len(), 3, "{all:?}");
+        let mut kinds: Vec<&str> = all.iter().map(|r| r["kind"].as_str().unwrap()).collect();
+        kinds.sort_unstable();
+        assert_eq!(kinds, ["jarvis", "lobby", "note"]);
     }
 
     #[tokio::test]

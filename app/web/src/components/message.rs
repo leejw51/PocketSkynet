@@ -190,10 +190,15 @@ pub fn message_row(p: &MessageProps) -> Html {
                     <strong>{ &sender_name }</strong>
                     // A robot is not a member and must not read as one. The
                     // reserved sender prefix is the wire-level attribution
-                    // (core `webhook_sender`); this chip is what it looks
-                    // like. Colour is never the only signal — the word is
-                    // right there for screen readers and greyscale alike.
-                    if m.sender_address.is_webhook_sender() {
+                    // (core `webhook_sender` / `agent_of`); this chip is what
+                    // it looks like. Colour is never the only signal — the word
+                    // is right there for screen readers and greyscale alike. An
+                    // agent gets its own label rather than the webhook one:
+                    // "webhook" over a Jarvis reply would be simply wrong, and
+                    // the two are different kinds of non-person.
+                    if m.sender_address.is_agent_sender() {
+                        <span class="fn-badge fn-badge--info">{ t(lang, Key::agent_badge) }</span>
+                    } else if m.sender_address.is_webhook_sender() {
                         <span class="fn-badge fn-badge--info">{ t(lang, Key::webhook_badge) }</span>
                     }
                     <Addr address={m.sender_address.clone()} />

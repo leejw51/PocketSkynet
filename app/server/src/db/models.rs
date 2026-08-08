@@ -116,11 +116,11 @@ pub struct Room {
     pub current_key_version: i64,
     #[serde(rename = "keyRotationPending")]
     pub key_rotation_pending: bool,
-    /// `"channel"`, `"dm"` or `"group_dm"` — see [`ROOM_KIND_CHANNEL`] and
-    /// friends. Always sent, never omitted: a client that files rooms into a
-    /// channel list and a DM list needs an answer for every room, and an
-    /// absent field would put DMs under the wrong heading rather than fail
-    /// loudly.
+    /// `"channel"`, `"dm"`, `"group_dm"`, `"note"`, `"jarvis"` or `"lobby"` —
+    /// see [`ROOM_KIND_CHANNEL`] and friends. Always sent, never omitted: a
+    /// client that files rooms into a channel list and a DM list needs an
+    /// answer for every room, and an absent field would put DMs under the
+    /// wrong heading rather than fail loudly.
     pub kind: String,
     #[serde(rename = "createdAt")]
     pub created_at: String,
@@ -132,6 +132,37 @@ pub const ROOM_KIND_CHANNEL: &str = "channel";
 pub const ROOM_KIND_DM: &str = "dm";
 /// Three or more people, opened the same way and with the same restrictions.
 pub const ROOM_KIND_GROUP_DM: &str = "group_dm";
+
+// --- the built-in rooms ------------------------------------------------------
+//
+// Three more kinds rather than an `is_builtin` flag beside `kind`, and that is
+// a decision worth writing down because the flag looked cheaper.
+//
+// `kind` already answers exactly the question these rooms raise: *which
+// management verbs apply, and which list does the client file this under*. A
+// parallel boolean would answer half of it and leave every call site to join
+// the two — `if room.is_builtin && room.kind == "channel"` — which is the shape
+// that eventually disagrees with itself. It would also make the room list's
+// categories a function of two fields instead of one, and the wire carry a
+// field older clients would ignore *while still showing the room under
+// "Channels"*. A kind they do not recognise is at least visibly unknown.
+//
+// The cost is the honest one: every `match` on kind, and every `is_direct()`
+// caller, has to be revisited. That happened once, here, rather than
+// indefinitely at each site that forgot the flag.
+
+/// The owner's private notebook. Exactly one member, forever: a place to talk
+/// to yourself, which nobody else can read, join or be invited to.
+pub const ROOM_KIND_NOTE: &str = "note";
+/// The owner and their own AI agent. The agent's replies are ordinary messages
+/// sent from [`pocketskynet_core::WalletAddress::agent_of`].
+pub const ROOM_KIND_JARVIS: &str = "jarvis";
+/// The owner and this server's administrators — the standing line to whoever
+/// runs the box, without either side having to invite the other.
+pub const ROOM_KIND_LOBBY: &str = "lobby";
+
+/// The three built-in kinds, in the order a client pins them.
+pub const STATIC_ROOM_KINDS: [&str; 3] = [ROOM_KIND_NOTE, ROOM_KIND_JARVIS, ROOM_KIND_LOBBY];
 
 impl Room {
     pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
@@ -152,6 +183,32 @@ impl Room {
     /// leave one of those checks behind.
     pub fn is_direct(&self) -> bool {
         self.kind == ROOM_KIND_DM || self.kind == ROOM_KIND_GROUP_DM
+    }
+
+    /// Whether this room is one of the three the server provisions for every
+    /// account ([`STATIC_ROOM_KINDS`]).
+    pub fn is_static(&self) -> bool {
+        STATIC_ROOM_KINDS.contains(&self.kind.as_str())
+    }
+
+    /// The noun phrase for "this room's roster and name are not yours to
+    /// change", or `None` when they are.
+    ///
+    /// One predicate rather than two checks at every call site, because the
+    /// *rule* is one rule — rename, invite, kick, promote and demote all need
+    /// a room whose membership somebody chose — and it was the DM half of it
+    /// that had already been open-coded at half a dozen places. Returning the
+    /// phrase rather than a bool keeps the refusal readable: the caller says
+    /// what the verb was, this says what the room is, and the sentence reads
+    /// correctly for a kind that did not exist when the caller was written.
+    pub fn fixed_roster(&self) -> Option<&'static str> {
+        if self.is_static() {
+            Some("a built-in room")
+        } else if self.is_direct() {
+            Some("a direct message")
+        } else {
+            None
+        }
     }
 }
 

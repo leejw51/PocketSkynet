@@ -45,6 +45,14 @@ async fn invite(
 ) -> ApiResult<Response> {
     let room = validate::room_id(&room_id)?;
     let invitee = validate::wallet_address("userAddress", body.user_address.as_deref())?;
+    // A webhook or an agent is not a person to invite: it holds no key and
+    // would sit in the roster as a member nobody can reach. Checked before the
+    // room is touched so the answer does not depend on which room was named.
+    if invitee.is_reserved() {
+        return Err(ApiError::bad_request(
+            "That address cannot be invited to a room.",
+        ));
+    }
 
     let room_id = room.as_str().to_owned();
     let inviter = caller.as_str().to_owned();
@@ -53,9 +61,33 @@ async fn invite(
     state
         .db
         .call(move |conn| {
+            // Authority first, and before the room is even looked up, so a
+            // caller who cannot invite here learns nothing about the room —
+            // not whether it exists, and not whether it is one of the built-in
+            // kinds. `is_admin` is false for a room the caller does not
+            // administer *and* for one that does not exist, so a non-member
+            // probing the derivable id of somebody's note gets the same 403 as
+            // for any channel they do not run: the enumeration oracle that
+            // would otherwise confirm the victim is an active account is
+            // closed. Only an admin — who is a member — reaches the classifying
+            // checks below, where a leak would tell them nothing new.
+            if !rooms::is_admin(conn, &room_id, &inviter)? {
+                return Err(ApiError::forbidden("Only room admins can invite users"));
+            }
             let Some(record) = rooms::get_room(conn, &room_id)? else {
                 return Err(ApiError::not_found("Room not found"));
             };
+            // A built-in room's roster is recomputed from its owner and the
+            // server's admin list on every listing, so an invitation into one
+            // is a promise the next fetch would break. "My Note" is the sharp
+            // case: it is the one room on the server whose whole contract is
+            // that nobody else is ever in it, and an invitation is precisely
+            // the request that would end that.
+            if record.is_static() {
+                return Err(ApiError::bad_request(
+                    "Cannot invite anyone to a built-in room. Its members are decided by the server.",
+                ));
+            }
             // A DM is the conversation between the people in it. Adding a
             // third would silently turn the room two people believed was
             // private into one that is not, and there is no notion of
@@ -64,9 +96,6 @@ async fn invite(
                 return Err(ApiError::bad_request(
                     "Cannot invite anyone to a direct message. Start a group message instead.",
                 ));
-            }
-            if !rooms::is_admin(conn, &room_id, &inviter)? {
-                return Err(ApiError::forbidden("Only room admins can invite users"));
             }
             if !users::user_exists(conn, &target)? {
                 return Err(ApiError::not_found("User not found"));
@@ -192,7 +221,7 @@ async fn decline(
 mod tests {
     use super::*;
     use crate::routes::build;
-    use crate::test_support::{register, send, state, wallet};
+    use crate::test_support::{made_rooms, register, send, state, wallet};
     use axum::http::StatusCode;
     use axum::Router;
 
@@ -259,7 +288,7 @@ mod tests {
         assert_eq!(accepted.json()["roomId"], room);
 
         let rooms_now = send(&router, "GET", "/api/rooms", Some(&bob_token), None).await;
-        assert_eq!(rooms_now.json().as_array().unwrap().len(), 1);
+        assert_eq!(made_rooms(&rooms_now).len(), 1);
 
         // The invitation is consumed.
         let empty = send(&router, "GET", "/api/invitations", Some(&bob_token), None).await;

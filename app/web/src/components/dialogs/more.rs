@@ -69,7 +69,13 @@ pub fn more_sheet(p: &MoreProps) -> Html {
                           None, go(Route::Publish, &p.on_navigate)) }
                     { row(icons::bank(20), t(lang, Key::menu_bank), current == "bank",
                           None, go(Route::Bank, &p.on_navigate)) }
-                    { row(icons::lock(20), t(lang, Key::nav_passwords), current == "passwords",
+                    // `pw_title`, not a generic "Passwords": below 800px this
+                    // row *is* the feature's only entrance, and a person who
+                    // has seen "Skynet Password" in the top bar does not
+                    // recognise "비밀번호" as the same destination. Naming the
+                    // door differently from the room is why it was reported
+                    // missing.
+                    { row(icons::lock(20), t(lang, Key::pw_title), current == "passwords",
                           None, go(Route::Passwords, &p.on_navigate)) }
                     // Admin-only, exactly as the top bar offers it: hiding it
                     // is a courtesy, the access control is server-side.

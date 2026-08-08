@@ -148,8 +148,13 @@ async fn rooms_are_not_publicly_discoverable() {
     let bob = new_user(&server, "bob").await;
     create_room(&alice.api, "private").await;
 
+    // Bob's listing is his own three built-in rooms and nothing else. Asserted
+    // as "nothing anybody made" rather than "empty" because every account now
+    // starts with My Note, My Jarvis and My Lobby — and asserting a count of
+    // three would still pass if Alice's room had appeared and one of Bob's had
+    // not.
     assert!(
-        bob.api.get("/api/rooms").await.array().is_empty(),
+        made_rooms(&bob.api.get("/api/rooms").await).is_empty(),
         "membership arrives only via creation or an accepted invitation"
     );
 }

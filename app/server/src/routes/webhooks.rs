@@ -65,9 +65,32 @@ fn check_admin(
     caller: &str,
     is_server_admin: bool,
 ) -> ApiResult<()> {
+    // Authority first, and before the room is even classified — the same
+    // ordering `routes/keys.rs::store` and `routes/invitations.rs::invite`
+    // use, for the same reason. `is_admin` is false both for a room the
+    // caller does not administer and for one that does not exist, so a
+    // non-admin probing the derivable id of somebody's note gets the same
+    // 403 either way and learns nothing about whether it is a built-in room —
+    // or whether it exists at all. A server admin is exempt, matching
+    // `rooms::require_admin`.
+    if !is_server_admin && !rooms::is_admin(conn, room_id, caller)? {
+        return Err(ApiError::forbidden("Only room admins can manage webhooks"));
+    }
     let Some(record) = rooms::get_room(conn, room_id)? else {
         return Err(ApiError::not_found("Room not found"));
     };
+    // A built-in room's roster is decided by the server, and My Note's whole
+    // contract is that nobody else can put anything in it. A webhook is a
+    // bearer token that posts through the *unauthenticated* path, so wiring one
+    // into a note would be a way for anyone holding the token to write into a
+    // room that promised it was private — and it would survive every
+    // provisioning reconcile, because the token lives in `room_webhooks`, not
+    // the roster. None of the three accept one.
+    if record.is_static() {
+        return Err(ApiError::bad_request(
+            "Webhooks cannot post into a built-in room.",
+        ));
+    }
     // A DM is the conversation between the people in it. Wiring a feed into
     // one turns it into something neither person opened; a channel is free
     // and says what it is.
@@ -75,9 +98,6 @@ fn check_admin(
         return Err(ApiError::bad_request(
             "Webhooks cannot post into direct messages. Use a channel instead.",
         ));
-    }
-    if !is_server_admin && !rooms::is_admin(conn, room_id, caller)? {
-        return Err(ApiError::forbidden("Only room admins can manage webhooks"));
     }
     Ok(())
 }

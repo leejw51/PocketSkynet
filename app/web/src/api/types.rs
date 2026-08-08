@@ -75,13 +75,25 @@ fn channel_kind() -> String {
     RoomKind::CHANNEL.to_owned()
 }
 
-/// The three room kinds, as the wire spells them.
+/// The room kinds, as the wire spells them.
+///
+/// Six of them now: the three a person makes, and the three the server
+/// provisions for every account. The built-in three are kinds rather than a
+/// flag beside `kind` for the reason `server/src/db/models.rs` spells out at
+/// length — `kind` already answers "which verbs apply and which list is this
+/// filed under", and a parallel boolean would answer half of it.
 pub struct RoomKind;
 
 impl RoomKind {
     pub const CHANNEL: &'static str = "channel";
     pub const DM: &'static str = "dm";
     pub const GROUP_DM: &'static str = "group_dm";
+    /// The owner's private notebook — one member, forever.
+    pub const NOTE: &'static str = "note";
+    /// The owner and their own AI agent.
+    pub const JARVIS: &'static str = "jarvis";
+    /// The owner and this server's administrators.
+    pub const LOBBY: &'static str = "lobby";
 }
 
 impl Room {
@@ -90,6 +102,12 @@ impl Room {
     /// so a third kind of DM later cannot leave one of them behind.
     pub fn is_direct(&self) -> bool {
         self.kind == RoomKind::DM || self.kind == RoomKind::GROUP_DM
+    }
+
+    /// Whether the server provisioned this room rather than a person creating
+    /// it. See [`crate::rooms::StaticRoom`] for what each one is.
+    pub fn is_static(&self) -> bool {
+        crate::rooms::StaticRoom::from_kind(&self.kind).is_some()
     }
 }
 
@@ -786,6 +804,29 @@ pub fn attachment_id_in(token: &str) -> Option<&str> {
     ok.then_some(id)
 }
 
+/// Every attachment a message's text points at, in order, without repeats.
+///
+/// The plural of [`attachment_id_in`], and the reason it exists is deletion:
+/// an attachment outlives the message that showed it unless somebody says
+/// otherwise, and in an encrypted room the server cannot read the text to know
+/// which files a message named. Only the client can, so only the client can
+/// clean up after one (`dialogs/delete_message.rs`).
+///
+/// Split on *whitespace*, not on `' '` the way the renderer does: a message
+/// that put its attachment on its own line is the ordinary case, and a
+/// newline-separated URL is exactly the one a space-only split misses.
+pub fn attachment_ids_in(text: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for token in text.split_whitespace() {
+        if let Some(id) = attachment_id_in(token) {
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -899,6 +940,40 @@ mod tests {
         // Bounded, so a megabyte-long token cannot become a request.
         let long = format!("/api/files/{}/raw", "a".repeat(200));
         assert_eq!(attachment_id_in(&long), None);
+    }
+
+    #[test]
+    fn every_attachment_in_a_message_is_found_once_however_it_is_laid_out() {
+        // The layout that matters most is the one the composer actually
+        // produces: the URL on a line of its own. A split on ' ' — which is
+        // what the renderer does — finds nothing here, and a deletion that
+        // cleaned up nothing was the bug.
+        let text = "look at this\n/api/files/file_1_aaa/raw\nand this one \
+                    /api/files/file_2_bbb/raw plus the first again \
+                    /api/files/file_1_aaa/raw";
+        assert_eq!(
+            attachment_ids_in(text),
+            vec!["file_1_aaa", "file_2_bbb"],
+            "each attachment exactly once, in the order it appears"
+        );
+    }
+
+    #[test]
+    fn a_message_with_no_attachments_yields_none_to_delete() {
+        // The common case, and the one where a false positive would delete a
+        // file the message never showed.
+        for text in [
+            "just words",
+            "",
+            "https://evil.example/api/files/file_x/raw",
+            "/api/images/deadbeef.png",
+            "/api/files/file_x",
+        ] {
+            assert!(
+                attachment_ids_in(text).is_empty(),
+                "found something to delete in {text:?}"
+            );
+        }
     }
 
     #[test]

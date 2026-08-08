@@ -139,10 +139,67 @@ impl WalletAddress {
     pub fn is_webhook_sender(&self) -> bool {
         self.0.starts_with(WEBHOOK_SENDER_PREFIX)
     }
+
+    /// The sender address of one person's AI agent — the other half of the
+    /// "My Jarvis" room: `0x000000a1` ‖ first 32 hex chars of
+    /// `SHA-256("jarvis:" ‖ owner)`.
+    ///
+    /// Exactly the same trick as [`Self::webhook_sender`], and for exactly the
+    /// same reason: an agent's reply is an ordinary message, so it needs an
+    /// ordinary `senderAddress` that avatars, block lists, mention resolution
+    /// and the roster can all read without learning a second grammar. Deriving
+    /// it from the owner makes it stable across replies and distinct per
+    /// person, so two people's agents never share an identity — which matters
+    /// because the address is also the avatar seed, and one shared Jarvis face
+    /// on a family server would read as everybody talking to the same machine.
+    ///
+    /// Held by nobody, like a webhook's: finding a private key for a chosen
+    /// address is a preimage attack on Keccak, so this address can never sign
+    /// a login challenge. The agent therefore cannot *act* — it can only be
+    /// spoken as, by the server, on behalf of the one wallet whose room it is.
+    ///
+    /// The `a1` byte is the machine-readable attribution and the only thing
+    /// separating this from the webhook block; clients badge anything under it
+    /// as an agent (see [`Self::is_agent_sender`]). The derivation lives in
+    /// core so the server that writes the address and the client that badges
+    /// it cannot drift apart.
+    pub fn agent_of(owner: &WalletAddress) -> Self {
+        use sha2::{Digest, Sha256};
+        let digest = hex::encode(Sha256::digest(
+            format!("jarvis:{}", owner.as_str()).as_bytes(),
+        ));
+        Self(format!("{AGENT_SENDER_PREFIX}{}", &digest[..32]))
+    }
+
+    /// Whether this address was minted by [`Self::agent_of`].
+    pub fn is_agent_sender(&self) -> bool {
+        self.0.starts_with(AGENT_SENDER_PREFIX)
+    }
+
+    /// Whether this address belongs to a machine speaker rather than a person —
+    /// a webhook poster or a personal agent.
+    ///
+    /// The one predicate the "acting on a person" endpoints reach for. A DM, an
+    /// invitation and a block all name an address the caller expects to be
+    /// somebody they can reach; a reserved address is held by nobody, so the
+    /// request could only ever open a conversation that never answers or block
+    /// an account that cannot act. Both reserved kinds are refused together
+    /// because the reason is the same for each — there is no one there.
+    pub fn is_reserved(&self) -> bool {
+        self.is_webhook_sender() || self.is_agent_sender()
+    }
 }
 
 /// The reserved leading bytes of every webhook sender address.
 pub const WEBHOOK_SENDER_PREFIX: &str = "0x00000000";
+
+/// The reserved leading bytes of every AI-agent sender address.
+///
+/// One byte apart from [`WEBHOOK_SENDER_PREFIX`] on purpose: both name a
+/// speaker that is not a person, and keeping them in the same all-but-empty
+/// corner of the address space means a future third kind has an obvious place
+/// to go rather than a fresh argument about where to put it.
+pub const AGENT_SENDER_PREFIX: &str = "0x000000a1";
 
 impl fmt::Display for WalletAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -435,5 +492,37 @@ mod tests {
         // An ordinary wallet is never mistaken for one.
         let person = WalletAddress::new("0x742d35Cc6634C0532925a3b844Bc9e7595f06b22").unwrap();
         assert!(!person.is_webhook_sender());
+    }
+
+    #[test]
+    fn agent_senders_are_derived_from_their_owner_and_nobody_else() {
+        let alice = WalletAddress::new("0x742d35Cc6634C0532925a3b844Bc9e7595f06b22").unwrap();
+        let bob = WalletAddress::new("0x1111111111111111111111111111111111111111").unwrap();
+        let agent = WalletAddress::agent_of(&alice);
+
+        assert!(WalletAddress::new(agent.as_str()).is_ok());
+        assert!(agent.is_agent_sender());
+        assert!(agent.as_str().starts_with(AGENT_SENDER_PREFIX));
+
+        // Stable for one owner — the agent keeps the same face across every
+        // reply it ever posts — and never shared between two people.
+        assert_eq!(agent, WalletAddress::agent_of(&alice));
+        assert_ne!(agent, WalletAddress::agent_of(&bob));
+
+        // The two reserved kinds do not overlap, in either direction.
+        assert!(!agent.is_webhook_sender());
+        assert!(!WalletAddress::webhook_sender("hook_1749652746620_ab12cd34").is_agent_sender());
+        assert!(!alice.is_agent_sender());
+    }
+
+    #[test]
+    fn is_reserved_covers_both_machine_kinds_and_no_person() {
+        let alice = WalletAddress::new("0x742d35Cc6634C0532925a3b844Bc9e7595f06b22").unwrap();
+        assert!(WalletAddress::agent_of(&alice).is_reserved());
+        assert!(WalletAddress::webhook_sender("hook_1749652746620_ab12cd34").is_reserved());
+        assert!(
+            !alice.is_reserved(),
+            "an ordinary wallet is the thing DM/invite/block are meant to act on"
+        );
     }
 }
