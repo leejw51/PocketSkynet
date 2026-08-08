@@ -65,6 +65,17 @@ fn check_admin(
     caller: &str,
     is_server_admin: bool,
 ) -> ApiResult<()> {
+    // Authority first, and before the room is even classified — the same
+    // ordering `routes/keys.rs::store` and `routes/invitations.rs::invite`
+    // use, for the same reason. `is_admin` is false both for a room the
+    // caller does not administer and for one that does not exist, so a
+    // non-admin probing the derivable id of somebody's note gets the same
+    // 403 either way and learns nothing about whether it is a built-in room —
+    // or whether it exists at all. A server admin is exempt, matching
+    // `rooms::require_admin`.
+    if !is_server_admin && !rooms::is_admin(conn, room_id, caller)? {
+        return Err(ApiError::forbidden("Only room admins can manage webhooks"));
+    }
     let Some(record) = rooms::get_room(conn, room_id)? else {
         return Err(ApiError::not_found("Room not found"));
     };
@@ -87,9 +98,6 @@ fn check_admin(
         return Err(ApiError::bad_request(
             "Webhooks cannot post into direct messages. Use a channel instead.",
         ));
-    }
-    if !is_server_admin && !rooms::is_admin(conn, room_id, caller)? {
-        return Err(ApiError::forbidden("Only room admins can manage webhooks"));
     }
     Ok(())
 }

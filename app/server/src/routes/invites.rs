@@ -105,11 +105,14 @@ async fn create(
     ValidJson(body): ValidJson<CreateBody>,
 ) -> ApiResult<Response> {
     let room = validate::room_id(&room_id)?;
-    // Same guard order as the address invite (§6.7): existence, then kind,
-    // then role — so a DM member hears "this doesn't apply here" rather than
-    // a 403 about admin rights no DM has.
-    super::rooms::require_room_exists(&state, &room).await?;
-    super::rooms::require_channel(&state, &room, "create an invite link for").await?;
+    // Authority first, and before the room is even classified — the ordering
+    // `routes/invitations.rs::invite` and `routes/keys.rs::store` already use,
+    // and for the same reason: `require_admin` is false both for a room the
+    // caller does not administer and for one that does not exist, so a
+    // non-admin probing the derivable id of somebody's note learns nothing
+    // about it — not whether it exists, and not whether it is a built-in room
+    // or a DM. `require_channel` (which needs the room fetched to classify
+    // it) only runs once that is settled.
     super::rooms::require_admin(
         &state,
         &room,
@@ -117,6 +120,7 @@ async fn create(
         "Only room admins can create invite links",
     )
     .await?;
+    super::rooms::require_channel(&state, &room, "create an invite link for").await?;
 
     let hours = body.expires_in_hours.unwrap_or(DEFAULT_EXPIRY_HOURS);
     if !(1..=MAX_EXPIRY_HOURS).contains(&hours) {

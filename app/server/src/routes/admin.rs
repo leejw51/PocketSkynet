@@ -832,11 +832,19 @@ mod tests {
         .await;
         assert_eq!(deleted.status, StatusCode::OK, "{:?}", deleted.body);
         // Alice's three built-in rooms survive, as they must — this route can
-        // reach past a room's own admins but not past those.
-        assert!(
-            made_rooms(&send(&router, "GET", "/api/rooms", Some(&alice_token), None).await)
-                .is_empty()
-        );
+        // reach past a room's own admins but not past those. Checked against
+        // the *whole* listing, not `made_rooms` (which filters built-in kinds
+        // out and would read the same "nothing left" whether they survived or
+        // this route wrongly swept them up too): three rows, one of each
+        // built-in kind, and nothing else.
+        let listing = send(&router, "GET", "/api/rooms", Some(&alice_token), None).await;
+        assert!(made_rooms(&listing).is_empty());
+        let all = listing.json();
+        let all = all.as_array().expect("a room listing");
+        assert_eq!(all.len(), 3, "{all:?}");
+        let mut kinds: Vec<&str> = all.iter().map(|r| r["kind"].as_str().unwrap()).collect();
+        kinds.sort_unstable();
+        assert_eq!(kinds, ["jarvis", "lobby", "note"]);
     }
 
     #[tokio::test]
