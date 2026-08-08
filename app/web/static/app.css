@@ -2791,6 +2791,67 @@ input.fn-mono, textarea.fn-mono { color: var(--fn-fg); }
   transform: rotate(-90deg);
 }
 
+/* --- In-room search --------------------------------------------------------
+   Client-side only: the server never indexes an encrypted room's content, so
+   this is scoped to whatever this device already has loaded and decrypted in
+   memory (`web/src/components/chat.rs`). Sits between the header and the
+   stream, closed by default. */
+.fn-room-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px;
+  border-block-end: 1px solid var(--fn-border, rgb(255 255 255 / 0.08));
+  background: var(--fn-surface-2, rgb(255 255 255 / 0.03));
+}
+.fn-room-search input {
+  inline-size: 100%;
+}
+.fn-room-search__results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-block-size: 240px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fn-room-search__hit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--fn-r-sm, 6px);
+}
+.fn-room-search__hit:hover {
+  background: var(--fn-surface-3, rgb(255 255 255 / 0.06));
+}
+.fn-room-search__who {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: var(--fn-t-xs);
+  opacity: 0.85;
+}
+.fn-room-search__snippet {
+  flex-grow: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fn-t-sm, 0.875rem);
+}
+.fn-room-search__time {
+  flex-shrink: 0;
+  font-size: var(--fn-t-xs);
+  opacity: 0.6;
+}
+.fn-room-search__empty {
+  padding: 6px 8px;
+  font-size: var(--fn-t-sm, 0.875rem);
+  opacity: 0.6;
+}
+
 /* --- Mentions inbox ------------------------------------------------------- */
 .fn-mention-row {
   inline-size: 100%;

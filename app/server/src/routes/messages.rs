@@ -151,18 +151,10 @@ async fn send(
     let is_encrypted = body.is_encrypted.unwrap_or(false);
 
     // Unencrypted rooms skip the epoch machinery entirely — the room is not
-    // even fetched, which is what keeps plaintext rooms cheap.
+    // even fetched, which is what keeps plaintext rooms cheap. Built-in rooms
+    // key exactly like any other room (`routes/keys.rs`), so nothing here
+    // singles them out.
     if is_encrypted {
-        // The built-in rooms hold no keys (`routes/keys.rs::plaintext_only`),
-        // so ciphertext here could only be a client sealing under a key nobody
-        // else has. Refused at the door rather than left to fail the epoch
-        // check, whose message would blame a rotation that cannot happen.
-        if super::rooms::fetch_room(&state, &room).await?.is_static() {
-            return Err(ApiError::conflict(
-                "Built-in rooms are plaintext so their contents stay searchable; \
-                 they cannot carry encrypted messages.",
-            ));
-        }
         check_epoch(&state, &room, key_version).await?;
     }
 
@@ -217,6 +209,16 @@ async fn send(
 #[derive(Debug, Deserialize)]
 struct AgentBody {
     text: Option<String>,
+    #[serde(rename = "msgHash")]
+    msg_hash: Option<String>,
+    #[serde(rename = "isEncrypted")]
+    is_encrypted: Option<bool>,
+    iv: Option<String>,
+    hmac: Option<String>,
+    #[serde(rename = "encVer")]
+    enc_ver: Option<i64>,
+    #[serde(rename = "keyVersion")]
+    key_version: Option<i64>,
 }
 
 /// `POST /api/rooms/{roomId}/agent` — post the AI's reply into "My Jarvis".
@@ -247,6 +249,16 @@ struct AgentBody {
 /// the sender written is [`WalletAddress::agent_of`] the caller — never a value
 /// from the request. The most a caller can do with this endpoint is put words
 /// in their own agent's mouth, in a room only they can read.
+///
+/// # Encryption
+///
+/// My Jarvis keys like any other room now, but there is still only one real
+/// party to it — the owner, on whichever device is talking to the model — so
+/// the ciphertext this endpoint stores was sealed by the same browser that is
+/// about to call it, under the room's current epoch. The fields below mirror
+/// `MessageBody`'s exactly for that reason: this is the same sealed-message
+/// shape as [`send`], just written under a sender the caller cannot claim
+/// directly.
 async fn agent_reply(
     State(state): State<AppState>,
     AuthUser(caller): AuthUser,
@@ -261,12 +273,42 @@ async fn agent_reply(
         // are somebody's, which is exactly the oracle `require_member` avoids.
         return Err(ApiError::access_denied());
     }
+    // Self-heal the same gap `routes::rooms::list` closes: a client that
+    // painted its sidebar from a cached room list can reach the Jarvis
+    // composer and answer before its first `/api/rooms` call has provisioned
+    // this room server-side, and `require_member` below would otherwise 403 a
+    // caller who owns this room in every sense but the database's. Best
+    // effort, the same degrade-not-fail choice `list` makes — a failure here
+    // just leaves `require_member` as the backstop it already is.
+    {
+        let address = caller.as_str().to_owned();
+        let admins = super::misc::server_admins();
+        let _ = state
+            .db
+            .call(move |conn| rooms::provision_static_rooms(conn, &address, &admins))
+            .await;
+    }
     require_member(&state, &room, &caller).await?;
 
     let content = validate::message_content(body.text.as_deref())?;
-    // Computed here for the same reason a webhook's is: the caller is relaying
-    // somebody else's words and has no business asserting their hash.
-    let msg_hash = pocketskynet_core::msg_hash_plaintext(&content);
+    let iv = validate::message_iv(body.iv.as_deref())?;
+    let hmac = validate::message_hmac(body.hmac.as_deref())?;
+    let enc_ver = validate::enc_ver(body.enc_ver, 1)?;
+    let key_version = validate::key_version("keyVersion", body.key_version, 1)?;
+    let is_encrypted = body.is_encrypted.unwrap_or(false);
+
+    let msg_hash = if is_encrypted {
+        // The caller sealed this, so only the caller's browser knows the
+        // plaintext — the server hashes the ciphertext, exactly as `send` does
+        // for an encrypted message, never as `msg_hash_plaintext` would.
+        check_epoch(&state, &room, key_version).await?;
+        validate::msg_hash(body.msg_hash.as_deref())?
+    } else {
+        // Computed here for the same reason a webhook's is: the caller is
+        // relaying somebody else's words and has no business asserting their
+        // hash.
+        pocketskynet_core::msg_hash_plaintext(&content)
+    };
 
     let id = format!("msg_{}_{}", crate::db::now_ms(), uuid::Uuid::new_v4());
     let room_id = room.as_str().to_owned();
@@ -274,8 +316,8 @@ async fn agent_reply(
     let message = state
         .db
         .call(move |conn| {
-            let mentions = resolve_mentions(conn, &room_id, &content, false, Vec::new())?;
-            let media = resolve_media(&content, false, Vec::new());
+            let mentions = resolve_mentions(conn, &room_id, &content, is_encrypted, Vec::new())?;
+            let media = resolve_media(&content, is_encrypted, Vec::new());
             messages::create_message(
                 conn,
                 NewMessage {
@@ -284,11 +326,11 @@ async fn agent_reply(
                     sender,
                     content,
                     msg_hash,
-                    is_encrypted: false,
-                    iv: None,
-                    hmac: None,
-                    enc_ver: 1,
-                    key_version: 1,
+                    is_encrypted,
+                    iv,
+                    hmac,
+                    enc_ver,
+                    key_version,
                     parent_message_id: None,
                     mentions,
                     media,

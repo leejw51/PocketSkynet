@@ -2,6 +2,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use super::keys::has_encryption;
 use super::models::{
     iso_ms, HiddenRoom, InvitationView, Room, RoomMemberWithUser, User, ROOM_KIND_CHANNEL,
     ROOM_KIND_DM, ROOM_KIND_GROUP_DM, ROOM_KIND_JARVIS, ROOM_KIND_LOBBY, ROOM_KIND_NOTE,
@@ -197,6 +198,11 @@ pub fn provision_static_rooms(
             params![id, owner.to_lowercase(), now],
         )?;
 
+        // Whether this pass actually reseated or dropped anyone in *this*
+        // room — as opposed to `changed`, which accumulates across all three
+        // kinds and would still be non-empty on Alice's first sign-in even
+        // though her Lobby's roster, on its own, never moved.
+        let mut roster_changed = false;
         for member in &roster {
             // The row count distinguishes a genuine seating from a no-op
             // re-run, which is what keeps the common path from waking every
@@ -208,6 +214,7 @@ pub fn provision_static_rooms(
             )?;
             if inserted > 0 {
                 changed.insert(member.clone());
+                roster_changed = true;
             }
         }
         // Anyone the roster no longer names goes, along with their read pointer
@@ -233,6 +240,7 @@ pub fn provision_static_rooms(
             let removed = stmt.query_map(binds.as_slice(), |r| r.get::<_, String>(0))?;
             for address in removed {
                 changed.insert(address?);
+                roster_changed = true;
             }
         }
         for table in ["room_members", "room_reads"] {
@@ -250,6 +258,18 @@ pub fn provision_static_rooms(
             ),
             binds.as_slice(),
         )?;
+        // My Lobby is the one built-in room whose roster can move after it is
+        // first keyed — the operator edits `VITE_FRUITNATION_ADMIN` and
+        // restarts. Nobody drives a rotation for that the way an admin drives
+        // one after a kick, so this is where it has to happen: the same
+        // `keyRotationPending` signal leave/kick set, so whichever member
+        // opens the room next re-keys it, dropping a departed admin's access
+        // and picking up a new one's. A no-op before anyone has established
+        // encryption here — `has_encryption` is false until then, and
+        // `roster_changed` is otherwise only true again for a config edit.
+        if roster_changed && has_encryption(&tx, &id)? {
+            set_key_rotation_pending(&tx, &id, true)?;
+        }
         tx.commit()?;
     }
 

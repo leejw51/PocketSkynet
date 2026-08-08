@@ -278,6 +278,11 @@ strings! {
 
     // --- Rooms --------------------------------------------------------------
     (search_rooms, "Search rooms", "채팅방 검색", "ルームを検索", "搜尋聊天室", "Hledat místnosti", "Buscar salas", "搜索聊天室", "Räume durchsuchen"),
+    // Client-side, within one open room — the server never indexes an
+    // encrypted room's content, so this is the only search a built-in room
+    // gets (`web/src/components/chat.rs`).
+    (search_this_room, "Search this room", "이 채팅방 검색", "このルームを検索", "搜尋此聊天室", "Hledat v této místnosti", "Buscar en esta sala", "搜索此聊天室", "Diesen Raum durchsuchen"),
+    (search_no_results, "No matches", "일치하는 결과 없음", "一致する結果なし", "沒有相符結果", "Žádné shody", "Sin coincidencias", "没有匹配结果", "Keine Treffer"),
     (no_rooms_yet, "No rooms yet", "아직 채팅방이 없습니다", "ルームがまだありません", "尚未有聊天室", "Zatím žádné místnosti", "Aún no hay salas", "还没有聊天室", "Noch keine Räume"),
     (no_rooms_body, "Create one and invite someone by wallet address.", "채팅방을 만들고 지갑 주소로 초대하세요.", "ルームを作成し、ウォレットアドレスで招待しましょう。", "建立一個聊天室，用錢包地址邀請其他人。", "Vytvořte místnost a pozvěte někoho podle adresy peněženky.", "Crea una y invita a alguien con su dirección de cartera.", "创建一个，然后按钱包地址邀请别人。", "Erstelle einen und lade jemanden per Wallet-Adresse ein."),
     (fast_create_room, "Fast create room", "빠른 채팅방 만들기", "ルームをすぐ作成", "快速建立聊天室", "Rychle vytvořit místnost", "Crear sala rápida", "快速创建聊天室", "Raum schnell erstellen"),

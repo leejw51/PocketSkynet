@@ -57,6 +57,13 @@ pub fn chat(p: &ChatProps) -> Html {
     // indicator on (`web/src/ai.rs` awaits the whole answer), so this is the
     // only "something is happening" the room has.
     let jarvis_busy = use_state(|| false);
+    // Search within this room, client-side: the server never indexes
+    // ciphertext, so an encrypted room — every built-in room, now — has to be
+    // searchable this way or not at all. Scoped to what is already loaded and
+    // decrypted in memory; nothing here fetches more history or persists a
+    // plaintext index anywhere.
+    let search_open = use_state(|| false);
+    let search_query = use_state(String::new);
     let picker_for = use_state(|| Option::<Option<MessageId>>::None);
     // The message the picker is reacting to, flattened out of the two-level
     // Option: outer = "picker is open", inner = "a specific message, or the
@@ -614,6 +621,39 @@ pub fn chat(p: &ChatProps) -> Html {
     let now = format::now_ms();
     let tz = format::tz_offset_minutes();
 
+    // Matches for the search panel — computed only while it is open with a
+    // non-empty query, so the common case (panel closed) does no extra
+    // decryption beyond what the stream below already does.
+    let search_hits: Vec<(MessageId, String, String, i64)> = if *search_open {
+        let q = search_query.trim().to_lowercase();
+        if q.is_empty() {
+            Vec::new()
+        } else {
+            state
+                .ordered(&store.blocks)
+                .iter()
+                .filter(|m| !m.is_deleted)
+                .filter_map(|m| {
+                    let text = match &bundle {
+                        Some(b) => decrypt_message(b, &p.room_id, m).text().map(str::to_owned),
+                        None => (!m.is_encrypted).then(|| m.content.clone()),
+                    };
+                    text.filter(|t| t.to_lowercase().contains(&q)).map(|t| {
+                        let who = room
+                            .members
+                            .iter()
+                            .find(|mm| mm.user_address == m.sender_address)
+                            .map(|mm| mm.user.display_name())
+                            .unwrap_or_else(|| m.sender_address.abbreviated());
+                        (m.id.clone(), who, t, m.message_timestamp)
+                    })
+                })
+                .collect()
+        }
+    } else {
+        Vec::new()
+    };
+
     // --- callbacks -------------------------------------------------------
 
     let on_send = {
@@ -659,9 +699,13 @@ pub fn chat(p: &ChatProps) -> Html {
                 // just posted, which the store snapshot this task holds does
                 // not yet contain (see `actions::jarvis_reply`).
                 let question = ask.then(|| text.clone());
-                actions::send_message(store2.clone(), room_id.clone(), local_id, text, extras)
-                    .await;
-                if let Some(question) = question {
+                let sent =
+                    actions::send_message(store2.clone(), room_id.clone(), local_id, text, extras)
+                        .await;
+                // A failed send left nothing in the room to answer — asking
+                // anyway would put a reply in the transcript to a question
+                // Jarvis, reading the same room, never actually saw.
+                if let Some(question) = question.filter(|_| sent) {
                     jarvis_busy.set(true);
                     actions::jarvis_reply(store2, room_id, question).await;
                     jarvis_busy.set(false);
@@ -1071,6 +1115,24 @@ pub fn chat(p: &ChatProps) -> Html {
                     <button
                         type="button"
                         class="topcoat-icon-button--quiet"
+                        aria-label={t(lang, Key::search_this_room)}
+                        title={t(lang, Key::search_this_room)}
+                        aria-expanded={search_open.to_string()}
+                        onclick={{
+                            let search_open = search_open.clone();
+                            let search_query = search_query.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                let opening = !*search_open;
+                                search_open.set(opening);
+                                if !opening {
+                                    search_query.set(String::new());
+                                }
+                            })
+                        }}
+                    >{ icons::search(18) }</button>
+                    <button
+                        type="button"
+                        class="topcoat-icon-button--quiet"
                         aria-label={t(lang, Key::sync_this_room)}
                         title={t(lang, Key::sync_now)}
                         onclick={{
@@ -1096,6 +1158,48 @@ pub fn chat(p: &ChatProps) -> Html {
             // false to run the exit, which it cannot do if the parent has
             // already stopped rendering it.
             { room_menu(lang, &store, &room, &title, is_admin, menu_open.clone(), &p.on_navigate) }
+
+            if *search_open {
+                <div class="fn-room-search">
+                    <input
+                        type="search"
+                        class="topcoat-text-input"
+                        placeholder={t(lang, Key::search_this_room)}
+                        aria-label={t(lang, Key::search_this_room)}
+                        value={(*search_query).clone()}
+                        oninput={{
+                            let search_query = search_query.clone();
+                            Callback::from(move |e: InputEvent| {
+                                let value = e
+                                    .target_dyn_into::<web_sys::HtmlInputElement>()
+                                    .map(|i| i.value())
+                                    .unwrap_or_default();
+                                search_query.set(value);
+                            })
+                        }}
+                    />
+                    if !search_query.trim().is_empty() {
+                        <ul class="fn-room-search__results">
+                            { for search_hits.iter().map(|(id, who, snippet, ts)| html! {
+                                <li key={id.to_string()} class="fn-room-search__hit">
+                                    <span class="fn-room-search__who">{ who }</span>
+                                    <span class="fn-room-search__snippet">
+                                        { format::preview(snippet, 140) }
+                                    </span>
+                                    <span class="fn-room-search__time">
+                                        { format::hhmm(*ts, tz) }
+                                    </span>
+                                </li>
+                            }) }
+                            if search_hits.is_empty() {
+                                <li class="fn-room-search__empty">
+                                    { t(lang, Key::search_no_results) }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+            }
 
             if offline {
                 <super::common::OfflineBanner />

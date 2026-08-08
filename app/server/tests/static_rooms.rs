@@ -280,17 +280,18 @@ async fn nobody_can_be_let_into_a_note_by_any_door() {
 }
 
 #[tokio::test]
-async fn a_built_in_room_refuses_to_be_encrypted() {
+async fn a_built_in_room_can_be_encrypted() {
     let server = TestServer::start().await;
     let alice = new_user(&server, "alice").await;
     open_the_app(&alice).await;
 
-    // The trade is deliberate and documented in `routes/keys.rs`: the server
-    // never indexes ciphertext, so an encrypted note is a notebook you cannot
-    // search, which is the only reason to keep one on a server at all.
+    // Built-in rooms key exactly like any other room now: the server never
+    // indexed their ciphertext either way (search is a client-side concern —
+    // `web/src/components/search.rs`), so there was nothing left that a
+    // plaintext-only rule bought except an operator being able to read My Note.
     for kind in ["note", "jarvis", "lobby"] {
         let room = static_room_id(kind, &alice.address);
-        let stored = alice
+        alice
             .api
             .post(
                 &format!("/api/rooms/{room}/keys"),
@@ -303,12 +304,11 @@ async fn a_built_in_room_refuses_to_be_encrypted() {
                     "keyVersion": 1,
                 }),
             )
-            .await;
-        stored.expect_status(409);
-        assert!(stored.message().contains("searchable"), "{kind}");
+            .await
+            .expect_status(200);
 
-        // And ciphertext is refused at the door too, so a client that skipped
-        // the key upload cannot write something nobody can ever read.
+        // And a ciphertext message now lands normally, under the epoch just
+        // established.
         alice
             .api
             .post(
@@ -323,7 +323,7 @@ async fn a_built_in_room_refuses_to_be_encrypted() {
                 }),
             )
             .await
-            .expect_status(409);
+            .expect_status(200);
     }
 }
 
