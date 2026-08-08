@@ -104,8 +104,9 @@ const FALLBACK_CHUNK: f64 = 8.0 * 1024.0 * 1024.0;
 /// it actually is, and the loop re-reads the offset and continues from there.
 const CHUNK_ATTEMPTS: u32 = 4;
 
-/// How long `begin`, `append` and `upload_status` may run before they are
-/// treated as failed and retried.
+/// How long `begin` and `upload_status` may run before they are treated as
+/// failed and retried. `append` gets this *plus* time for its body — see
+/// [`append_timeout_ms`].
 ///
 /// The gap this closes: a dead mobile connection often stops answering rather
 /// than erroring, and a `fetch` in that state resolves neither `Ok` nor `Err`
@@ -113,29 +114,57 @@ const CHUNK_ATTEMPTS: u32 = 4;
 /// never engages, because there is never an `Err` to trigger it, and the
 /// transfer sits exactly where the transfer rail's own stall timer
 /// (`components/transfers.rs::STALL_AFTER_MS`) finds it: stuck at one byte
-/// count, forever, with cancel-and-reattach as the only way out.
+/// count, forever, with cancel-and-reattach as the only way out. Seen in the
+/// field as a phone stalled at exactly one chunk boundary while the server's
+/// session row said the next chunk had fully landed — the chunk arrived, the
+/// *response* was lost, and the request that would never settle was the only
+/// thing the client was waiting on.
 ///
-/// Generous rather than tight — the request is racing a timer, not a stopwatch
-/// against a bandwidth estimate, and a single ~8 MB chunk on a genuinely slow
-/// but *working* link can legitimately take a while. The goal is only to rule
-/// out "will never answer", which a live connection clears with room to spare;
-/// `finish` is deliberately not raced against this, since the server re-hashes
-/// the whole file there and a multi-gigabyte upload can legitimately hold it
-/// well past any bound that would still catch a dead chunk request promptly.
+/// `finish` is deliberately not raced against any clock: the server re-hashes
+/// the whole file there, and a multi-gigabyte upload can legitimately hold it
+/// well past any bound that would still catch a dead control request promptly.
 const REQUEST_TIMEOUT_MS: u32 = 45_000;
 
+/// The floor transfer rate an `append` is budgeted against, in bytes per
+/// millisecond (128 KB/s).
+///
+/// A chunk's timeout is [`REQUEST_TIMEOUT_MS`] plus its size at this rate, so
+/// an 8 MB chunk gets ~109 s before it is called dead. Deliberately far below
+/// any usable link — even a relayed Tailscale path clears it easily — because
+/// this only exists to separate "slow" from "never", and a link genuinely
+/// under it still converges: every timed-out chunk halves the next attempt
+/// (see [`MIN_CHUNK`]), so the budget shrinks toward one a struggling link can
+/// meet.
+const FLOOR_BYTES_PER_MS: f64 = 131.0;
+
+/// Where the halving stops. Small enough that a link this side of unusable can
+/// finish one inside its budget; large enough that progress is still real.
+const MIN_CHUNK: f64 = 512.0 * 1024.0;
+
+/// The message every timed-out request carries, and the marker
+/// [`upload_in_chunks`] checks to tell "the link is slow" from an ordinary
+/// refusal — only the former should shrink the next chunk.
+const TIMED_OUT: &str = "The request timed out";
+
+/// The clock an `append` of `bytes` races: the control-request bound plus the
+/// body itself at the floor rate.
+fn append_timeout_ms(bytes: f64) -> u32 {
+    REQUEST_TIMEOUT_MS.saturating_add((bytes / FLOOR_BYTES_PER_MS) as u32)
+}
+
 /// Race a request that already carries `controller`'s abort signal against
-/// [`REQUEST_TIMEOUT_MS`], aborting it on the clock rather than leaving it to
-/// hang. The controller must be the one whose signal was attached when the
-/// request was built — aborting any other one does nothing to this request.
+/// `timeout_ms`, aborting it on the clock rather than leaving it to hang. The
+/// controller must be the one whose signal was attached when the request was
+/// built — aborting any other one does nothing to this request.
 async fn send_with_timeout(
     req: gloo_net::http::Request,
     controller: web_sys::AbortController,
+    timeout_ms: u32,
 ) -> ApiResult<gloo_net::http::Response> {
     use futures::future::{select, Either};
     match select(
         Box::pin(req.send()),
-        Box::pin(gloo_timers::future::TimeoutFuture::new(REQUEST_TIMEOUT_MS)),
+        Box::pin(gloo_timers::future::TimeoutFuture::new(timeout_ms)),
     )
     .await
     {
@@ -147,7 +176,7 @@ async fn send_with_timeout(
             // than racing a chunk this attempt is still, unknown to it, in the
             // middle of sending.
             controller.abort();
-            Err(ApiError::Network("The request timed out".to_owned()))
+            Err(ApiError::Network(TIMED_OUT.to_owned()))
         }
     }
 }
@@ -214,7 +243,7 @@ impl Client {
                 started
             }
         };
-        let chunk = if session.chunk_size > 0.0 {
+        let mut chunk = if session.chunk_size > 0.0 {
             session.chunk_size
         } else {
             FALLBACK_CHUNK
@@ -236,6 +265,14 @@ impl Client {
             match self.append(&session.id, offset, &part).await {
                 Ok(next) => offset = next,
                 Err(e) => {
+                    // A timeout means the link could not move this much inside
+                    // its budget, so the next attempt asks less of it. The
+                    // server does not care that chunks stop being uniform, and
+                    // without this a link slower than the budget's floor rate
+                    // would retry the same too-big chunk forever.
+                    if matches!(&e, ApiError::Network(m) if m == TIMED_OUT) {
+                        chunk = (chunk / 2.0).max(MIN_CHUNK);
+                    }
                     // Ask the server where it really is and carry on from
                     // there. This covers the common case — the chunk landed
                     // and the response was lost — and it covers a genuine
@@ -327,7 +364,7 @@ impl Client {
             .abort_signal(Some(&controller.signal()))
             .json(&body)
             .map_err(|e| ApiError::Network(e.to_string()))?;
-        let resp = send_with_timeout(req, controller).await?;
+        let resp = send_with_timeout(req, controller, REQUEST_TIMEOUT_MS).await?;
         super::decode(resp).await
     }
 
@@ -351,7 +388,7 @@ impl Client {
             .abort_signal(Some(&controller.signal()))
             .body(part)
             .map_err(|e| ApiError::Network(e.to_string()))?;
-        let resp = send_with_timeout(req, controller).await?;
+        let resp = send_with_timeout(req, controller, append_timeout_ms(part.size())).await?;
         let ack: Ack = super::decode(resp).await?;
         Ok(ack.offset)
     }
@@ -382,7 +419,7 @@ impl Client {
             .abort_signal(Some(&controller.signal()))
             .build()
             .map_err(|e| ApiError::Network(e.to_string()))?;
-        let resp = send_with_timeout(req, controller).await?;
+        let resp = send_with_timeout(req, controller, REQUEST_TIMEOUT_MS).await?;
         super::decode(resp).await
     }
 
@@ -591,6 +628,24 @@ mod tests {
             )
         };
         assert_eq!(site("0xdead"), site("0xbeef"));
+    }
+
+    #[test]
+    fn a_chunks_clock_scales_with_its_size() {
+        // The control bound alone for an empty body…
+        assert_eq!(append_timeout_ms(0.0), REQUEST_TIMEOUT_MS);
+        // …an 8 MB chunk gets over a minute on top of it…
+        let eight_mb = append_timeout_ms(8.0 * 1024.0 * 1024.0);
+        assert!(eight_mb > REQUEST_TIMEOUT_MS + 60_000, "{eight_mb}");
+        // …and the floor rate is far below any usable link, so a live
+        // connection clears the budget with room to spare: even at ten times
+        // the floor, an 8 MB chunk finishes inside a fifth of its clock.
+        let at_ten_times_floor = (8.0 * 1024.0 * 1024.0 / (FLOOR_BYTES_PER_MS * 10.0)) as u32;
+        assert!(at_ten_times_floor < eight_mb / 5, "{at_ten_times_floor}");
+        // The halving floor stays under the fallback chunk, so shrinking is
+        // real: a first retry already sends less than the first attempt did.
+        let halved = (FALLBACK_CHUNK / 2.0).max(MIN_CHUNK);
+        assert!(halved < FALLBACK_CHUNK);
     }
 
     #[test]
