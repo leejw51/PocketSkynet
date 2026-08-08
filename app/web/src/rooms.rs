@@ -26,6 +26,8 @@
 //! notebook in English — so they are translated here exactly as a DM is titled
 //! after its members rather than after the placeholder the column holds.
 
+use pocketskynet_core::WalletAddress;
+
 use crate::api::{RoomKind, RoomWithMembers};
 use crate::i18n::Key;
 
@@ -100,11 +102,36 @@ impl StaticRoom {
             StaticRoom::Lobby => "my-lobby",
         }
     }
+
+    pub fn kind(self) -> &'static str {
+        match self {
+            StaticRoom::Note => RoomKind::NOTE,
+            StaticRoom::Jarvis => RoomKind::JARVIS,
+            StaticRoom::Lobby => RoomKind::LOBBY,
+        }
+    }
 }
 
-/// Which built-in room this is, if it is one.
-pub fn static_room(room: &RoomWithMembers) -> Option<StaticRoom> {
-    StaticRoom::from_kind(&room.room.kind)
+/// The id the server derives for one person's built-in room:
+/// `room_<kind>_<owner>`. Mirrors `db::rooms::static_room_id` so the client can
+/// ask "is this *my* built-in room" without a lookup.
+pub fn static_room_id(kind: &str, owner: &WalletAddress) -> String {
+    format!("room_{kind}_{}", owner.as_str())
+}
+
+/// Which built-in room this is **for `viewer`** — `None` unless the room is the
+/// viewer's own.
+///
+/// The ownership check is the whole point, and its absence was a bug. A server
+/// admin is a member of *every* user's My Lobby, so those rooms all arrive with
+/// `kind = "lobby"`; keying the title, the logo and the pinning on the kind
+/// alone painted a stack of identical "My Lobby" rows at the top of the admin's
+/// sidebar, one per user on the server. A built-in room is only "mine" when its
+/// id is the one the server derives from *me* — anyone else's lobby I happen to
+/// sit in is, to me, just a room.
+pub fn mine(room: &RoomWithMembers, viewer: &WalletAddress) -> Option<StaticRoom> {
+    let kind = StaticRoom::from_kind(&room.room.kind)?;
+    (room.id().as_str() == static_room_id(kind.kind(), viewer)).then_some(kind)
 }
 
 /// The headings the sidebar groups rooms under.
@@ -133,8 +160,12 @@ impl Category {
     /// one fixed landmark in the sidebar.
     pub const ALL: [Category; 3] = [Category::Mine, Category::Channels, Category::Directs];
 
-    pub fn of(room: &RoomWithMembers) -> Self {
-        if static_room(room).is_some() {
+    /// The category `room` belongs in from `viewer`'s point of view. A built-in
+    /// room is `Mine` only when it is the viewer's own — see [`mine`]; a lobby
+    /// belonging to somebody else, which a server admin sits in, is an ordinary
+    /// room to them and files under `Channels`.
+    pub fn of(room: &RoomWithMembers, viewer: &WalletAddress) -> Self {
+        if mine(room, viewer).is_some() {
             Category::Mine
         } else if room.is_direct() {
             Category::Directs
@@ -227,6 +258,55 @@ mod tests {
     fn an_unknown_kind_is_filed_as_an_ordinary_channel() {
         assert_eq!(category_of_kind("holodeck"), Category::Channels);
         assert_eq!(StaticRoom::from_kind("holodeck"), None);
+    }
+
+    fn wallet(hex_byte: &str) -> WalletAddress {
+        WalletAddress::new(&format!("0x{}", hex_byte.repeat(40))).unwrap()
+    }
+
+    fn room(kind: &str, id: &str) -> RoomWithMembers {
+        serde_json::from_value(serde_json::json!({ "id": id, "name": "x", "kind": kind })).unwrap()
+    }
+
+    #[test]
+    fn a_lobby_is_mine_only_when_its_id_derives_from_me() {
+        // The bug this pins: a server admin is a member of *every* user's My
+        // Lobby, so their room list holds many `kind = "lobby"` rooms. Only the
+        // one whose id is `room_lobby_<me>` is theirs to relabel and pin; the
+        // rest are, to them, ordinary rooms.
+        let me = wallet("a");
+        let stranger = wallet("b");
+
+        let mine_lobby = room(RoomKind::LOBBY, &static_room_id(RoomKind::LOBBY, &me));
+        assert_eq!(mine(&mine_lobby, &me), Some(StaticRoom::Lobby));
+        assert_eq!(Category::of(&mine_lobby, &me), Category::Mine);
+
+        let their_lobby = room(RoomKind::LOBBY, &static_room_id(RoomKind::LOBBY, &stranger));
+        assert_eq!(
+            mine(&their_lobby, &me),
+            None,
+            "somebody else's lobby is not my built-in room"
+        );
+        assert_eq!(
+            Category::of(&their_lobby, &me),
+            Category::Channels,
+            "…so it files as an ordinary room, not pinned above mine"
+        );
+    }
+
+    #[test]
+    fn my_note_and_jarvis_are_mine_and_an_ordinary_channel_never_is() {
+        let me = wallet("a");
+        for kind in [RoomKind::NOTE, RoomKind::JARVIS, RoomKind::LOBBY] {
+            let r = room(kind, &static_room_id(kind, &me));
+            assert_eq!(mine(&r, &me), StaticRoom::from_kind(kind));
+        }
+        // A room whose id does not follow the derivation is never mine, even
+        // with a built-in kind — a spoofed listing cannot relabel a channel.
+        let spoof = room(RoomKind::NOTE, "room_note_but_not_derived_at_all");
+        assert_eq!(mine(&spoof, &me), None);
+        let channel = room(RoomKind::CHANNEL, "room_1749652739650_ab");
+        assert_eq!(mine(&channel, &me), None);
     }
 
     /// The three kinds paired with what they must resolve to. Written out

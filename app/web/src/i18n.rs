@@ -546,6 +546,7 @@ strings! {
     (revoke, "Revoke", "철회", "取り消す", "撤銷", "Odvolat", "Revocar", "撤销", "Widerrufen"),
     (webhook_url_copied, "Webhook URL copied", "웹훅 URL을 복사했습니다", "Webhook URLをコピーしました", "已複製Webhook URL", "URL webhooku zkopírována", "URL del webhook copiada", "已复制 Webhook URL", "Webhook-URL kopiert"),
     (webhook_badge, "webhook", "웹훅", "Webhook", "Webhook", "webhook", "webhook", "Webhook", "Webhook"),
+    (agent_badge, "AI", "AI", "AI", "AI", "AI", "IA", "AI", "KI"),
 
     // --- Dialogs: invite ----------------------------------------------------
     (invite, "Invite", "초대", "招待", "邀請", "Pozvat", "Invitar", "邀请", "Einladen"),

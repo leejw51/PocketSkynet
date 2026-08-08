@@ -52,6 +52,11 @@ pub fn chat(p: &ChatProps) -> Html {
     let rotating = use_state(|| false);
     let rotate_error = use_state(|| Option::<String>::None);
     let loading_older = use_state(|| false);
+    // Set while the user's own AI is composing a reply in My Jarvis, so the
+    // room can show it is thinking. There is no token stream to hang a live
+    // indicator on (`web/src/ai.rs` awaits the whole answer), so this is the
+    // only "something is happening" the room has.
+    let jarvis_busy = use_state(|| false);
     let picker_for = use_state(|| Option::<Option<MessageId>>::None);
     // The message the picker is reacting to, flattened out of the two-level
     // Option: outer = "picker is open", inner = "a specific message, or the
@@ -568,8 +573,10 @@ pub fn chat(p: &ChatProps) -> Html {
     // See `RoomWithMembers::title_for` — the answer differs per viewer, so it
     // can only be worked out here.
     // …and a built-in room has neither: its stored name is the fallback the
-    // `NOT NULL` column needs, and the label is translated from its kind.
-    let built_in = crate::rooms::static_room(&room);
+    // `NOT NULL` column needs, and the label is translated from its kind — but
+    // only for the viewer's *own* built-in room. Somebody else's My Lobby that
+    // a server admin sits in is, to them, just a room with its stored name.
+    let built_in = crate::rooms::mine(&room, &me);
     let title = match built_in {
         Some(r) => t(lang, r.title()).to_owned(),
         None => room.title_for(&me),
@@ -615,6 +622,7 @@ pub fn chat(p: &ChatProps) -> Html {
         let reply_to = reply_to.clone();
         let roster = room.members.clone();
         let me_for_send = me.clone();
+        let jarvis_busy = jarvis_busy.clone();
         Callback::from(move |text: String| {
             let now = format::now_ms();
             let local_id = crate::state::next_local_id();
@@ -644,11 +652,19 @@ pub fn chat(p: &ChatProps) -> Html {
             // and so the agent's turn list contains the message it is
             // answering.
             let ask = built_in == Some(crate::rooms::StaticRoom::Jarvis);
+            let jarvis_busy = jarvis_busy.clone();
             wasm_bindgen_futures::spawn_local(async move {
+                // The question is kept for the agent turn: `send_message`
+                // consumes `text`, and the reply must see the message that was
+                // just posted, which the store snapshot this task holds does
+                // not yet contain (see `actions::jarvis_reply`).
+                let question = ask.then(|| text.clone());
                 actions::send_message(store2.clone(), room_id.clone(), local_id, text, extras)
                     .await;
-                if ask {
-                    actions::jarvis_reply(store2, room_id).await;
+                if let Some(question) = question {
+                    jarvis_busy.set(true);
+                    actions::jarvis_reply(store2, room_id, question).await;
+                    jarvis_busy.set(false);
                 }
             });
         })
@@ -1159,6 +1175,24 @@ pub fn chat(p: &ChatProps) -> Html {
                 }}
             />
 
+            // My Jarvis says two things above the composer nowhere else does.
+            // Without a text-provider key on this device the agent cannot
+            // answer at all, and a room that silently swallows every message
+            // reads as broken — so it says where to put a key. And while a
+            // reply is being composed it says so, because there is no message
+            // in the room yet to show that anything is happening.
+            if built_in == Some(crate::rooms::StaticRoom::Jarvis) {
+                if *jarvis_busy {
+                    <div class="fn-banner" role="status" aria-live="polite">
+                        { t(lang, Key::jarvis_thinking) }
+                    </div>
+                } else if crate::ai::AiSettings::load().text_provider().is_none() {
+                    <div class="fn-banner" role="note">
+                        { t(lang, Key::jarvis_needs_key) }
+                    </div>
+                }
+            }
+
             <Composer
                 members={room.members.clone()}
                 me={Some(me.clone())}
@@ -1374,8 +1408,12 @@ fn room_menu(
     let direct = room.is_direct();
     // A built-in room refuses leave and delete server-side and would be
     // provisioned straight back on the next listing, so the only thing those
-    // buttons could accomplish is an error dialog. Hiding — below, and
-    // reversible — is the verb that works, which is why it stays.
+    // buttons could accomplish is an error dialog. It refuses the roster verbs
+    // for the same reason — invite, rename and manage-admins all 400 — so
+    // every one of those is hidden too. Hiding and clear-transcript are the
+    // verbs that work, and they stay. Keyed on the *kind*, not on ownership:
+    // the server refuses these for anybody's built-in room, including a lobby a
+    // server admin merely sits in.
     let built_in = room.room.is_static();
 
     let item = |label: &'static str, action: Modal, open: UseStateHandle<bool>| {
@@ -1436,10 +1474,10 @@ fn room_menu(
             // conversation, no name anybody chose to change, and every member
             // of a DM is already an admin of it. Offering a control that
             // always errors is worse than not offering it.
-            if !direct && (is_admin || room.has_encryption) {
+            if !direct && !built_in && (is_admin || room.has_encryption) {
                 { item(t(lang, Key::invite_people), Modal::Invite(id.clone()), open.clone()) }
             }
-            if !direct && is_admin {
+            if !direct && !built_in && is_admin {
                 // Share-by-link sits beside share-by-address: the first is for
                 // people whose wallet address nobody has yet.
                 { item(t(lang, Key::invite_links), Modal::InviteLinks(id.clone()), open.clone()) }
@@ -1448,8 +1486,9 @@ fn room_menu(
             }
             // Only where the server would say yes: a webhook holds no room
             // key, so an encrypted room has nothing to manage behind this
-            // item and offering it would open a dialog that only errors.
-            if !direct && is_admin && !room.has_encryption {
+            // item and offering it would open a dialog that only errors — and
+            // a built-in room refuses webhooks outright.
+            if !direct && !built_in && is_admin && !room.has_encryption {
                 { item(t(lang, Key::webhooks_menu), Modal::Webhooks(id.clone()), open.clone()) }
             }
             <button

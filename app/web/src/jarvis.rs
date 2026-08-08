@@ -92,29 +92,13 @@ pub fn system_prompt(cx: &AgentContext) -> String {
 /// Trim untrusted text down to something safe to interpolate into a prompt.
 ///
 /// A username is chosen by its owner and is the one string here that somebody
-/// picked rather than typed as a question. Control characters and the two
-/// Unicode line separators go, because they are what lets a name close the
-/// sentence it is embedded in and start issuing instructions; whitespace is
-/// collapsed and the result is truncated. The same treatment
-/// `bank_agent::sanitize_onchain_text` gives token names, applied for the same
-/// reason.
+/// picked rather than typed as a question. It gets exactly the treatment
+/// `bank_agent::sanitize_onchain_text` gives a token name, and *is* that
+/// function rather than a copy of it: this is a prompt-injection guard, and two
+/// of them that could drift apart is one that eventually does — a fix to the
+/// set of neutralised characters in one would silently leave the other open.
 fn sanitize(value: &str, max_len: usize) -> String {
-    let cleaned: String = value
-        .chars()
-        .map(|c| {
-            if c.is_control() || c == '\u{2028}' || c == '\u{2029}' {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect();
-    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() > max_len {
-        collapsed.chars().take(max_len).collect()
-    } else {
-        collapsed
-    }
+    crate::bank_agent::sanitize_onchain_text(value, max_len)
 }
 
 /// One message as the room holds it, reduced to what the agent needs.

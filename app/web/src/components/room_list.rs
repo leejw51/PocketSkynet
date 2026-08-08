@@ -10,7 +10,7 @@
 //! tab stop; ↑/↓ move, Home/End jump, and typing a letter jumps to the next
 //! room starting with it.
 
-use pocketskynet_core::RoomId;
+use pocketskynet_core::{RoomId, WalletAddress};
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement};
 use yew::prelude::*;
@@ -503,7 +503,7 @@ fn body(
                     // for *all* of them, and every row was then matched by
                     // position. Marking one room read renumbered the sections
                     // and rebuilt the whole sidebar.
-                    { for sectioned(rooms).into_iter().flat_map(|(heading, section)| {
+                    { for sectioned(rooms, me.as_ref()).into_iter().flat_map(|(heading, section)| {
                         let head = heading.map(|h| html! {
                             <span key={format!("section-{h:?}")}
                                   class="fn-room-section" role="presentation">
@@ -557,9 +557,26 @@ fn body(
 /// Splitting it that way is what lets "the built-in rooms are pinned above
 /// everything else" be checked by `cargo test` instead of by looking at a
 /// screenshot.
-fn sectioned(rooms: &[&RoomWithMembers]) -> Vec<crate::rooms::Section<RoomWithMembers>> {
+fn sectioned(
+    rooms: &[&RoomWithMembers],
+    me: Option<&WalletAddress>,
+) -> Vec<crate::rooms::Section<RoomWithMembers>> {
     let owned: Vec<RoomWithMembers> = rooms.iter().map(|r| (*r).clone()).collect();
-    crate::rooms::sectioned(&owned, crate::rooms::Category::of)
+    // Without a signed-in address there is no "mine" to pin — a built-in room
+    // is only the viewer's own — so everything files under its plain category.
+    match me {
+        Some(me) => {
+            let me = me.clone();
+            crate::rooms::sectioned(&owned, move |r| crate::rooms::Category::of(r, &me))
+        }
+        None => crate::rooms::sectioned(&owned, |r| {
+            if r.is_direct() {
+                crate::rooms::Category::Directs
+            } else {
+                crate::rooms::Category::Channels
+            }
+        }),
+    }
 }
 
 /// The ⚡ shortcut's whole journey: auto-name, create encrypted, greet, open.
@@ -1010,9 +1027,12 @@ fn room_row(p: &RoomRowProps) -> Html {
     // rather than stored, so it also stays right when somebody renames
     // themselves.
     // A built-in room's stored name is the fallback the `NOT NULL` column
-    // needs, not its label — see `crate::rooms`. Checked first so a Korean
-    // reader's notebook is not called "My Note".
-    let built_in = crate::rooms::static_room(r);
+    // needs, not its label — see `crate::rooms`. Only *the viewer's own*
+    // built-in room is relabelled: a server admin sits in everybody's My
+    // Lobby, and calling all of them "My Lobby" would stack identical rows at
+    // the top of their sidebar. Checked first so a Korean reader's notebook is
+    // not called "My Note".
+    let built_in = store.me().and_then(|me| crate::rooms::mine(r, me));
     let title = match built_in {
         Some(room) => t(lang, room.title()).to_owned(),
         None => store

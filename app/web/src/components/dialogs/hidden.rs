@@ -106,7 +106,9 @@ pub fn hidden_rooms(p: &HiddenProps) -> Html {
                             // sidebar resolves it, or the one place that
                             // offers to bring the room back would be the one
                             // place calling it something else.
-                            let built_in = h.room.as_ref().and_then(crate::rooms::static_room);
+                            let built_in = h.room.as_ref().zip(store.me()).and_then(
+                                |(room, me)| crate::rooms::mine(room, me),
+                            );
                             html! {
                                 <div key={h.room_id.to_string()} class="fn-picklist__row"
                                      style={format!("--i: {i}")}>

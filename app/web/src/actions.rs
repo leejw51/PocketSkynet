@@ -171,7 +171,22 @@ pub async fn refresh_rooms(store: Store) {
 /// a line in the console, but posting "the provider answered HTTP 500" into a
 /// chatroom would leave a permanent message in a persistent transcript that the
 /// user then has to delete.
-pub async fn jarvis_reply(store: Store, room_id: RoomId) {
+///
+/// # Why `question` is passed in rather than read back
+///
+/// This runs inside the `spawn_local` that follows the send, holding the
+/// `Store` handle the enclosing render captured — a *snapshot*, frozen at that
+/// render. The message just sent was dispatched into the reducer, but the
+/// reducer's next state is only visible to a *later* render's handle, never to
+/// this one. So `store.room_state(...)` here does not contain the question, and
+/// an earlier version of this function read that stale history, found its last
+/// turn was the previous agent reply, and silently returned — the agent almost
+/// never answered. The question is therefore handed in explicitly and appended
+/// as the trailing user turn, which is the same trick `banker.rs` uses for its
+/// own post-dispatch snapshot. The surrounding history is still read from the
+/// snapshot, which is correct: it is every message up to but not including this
+/// one, i.e. exactly the context.
+pub async fn jarvis_reply(store: Store, room_id: RoomId, question: String) {
     let settings = crate::ai::AiSettings::load();
     let (Some(provider), Some(me)) = (settings.text_provider(), store.me().cloned()) else {
         return;
@@ -182,7 +197,7 @@ pub async fn jarvis_reply(store: Store, room_id: RoomId) {
     // which is what lets the transcript be split into two sides without the
     // client having to be told which member is the machine.
     let agent = WalletAddress::agent_of(&me);
-    let lines: Vec<crate::jarvis::RoomLine> = match store.room_state(&room_id) {
+    let mut lines: Vec<crate::jarvis::RoomLine> = match store.room_state(&room_id) {
         Some(state) => state
             .ordered(&store.blocks)
             .iter()
@@ -195,12 +210,26 @@ pub async fn jarvis_reply(store: Store, room_id: RoomId) {
                 text: m.content.clone(),
             })
             .collect(),
-        None => return,
+        None => Vec::new(),
     };
+    // The just-sent question, which the snapshot above cannot see. Appended
+    // only when the snapshot does not already end with it, so a stray
+    // re-render that *did* capture it cannot make the model read the question
+    // twice.
+    if lines
+        .last()
+        .map(|l| l.from_agent || l.text != question)
+        .unwrap_or(true)
+    {
+        lines.push(crate::jarvis::RoomLine {
+            from_agent: false,
+            text: question,
+        });
+    }
 
     let turns = crate::jarvis::turns(&lines);
-    // Nothing to answer. Reached when the send that triggered this failed, so
-    // the question the reply would be replying to is not in the room.
+    // With the question guaranteed above, the only way the transcript still
+    // ends on a non-user turn is an empty question — nothing to answer.
     if turns.last().map(|t| !t.user).unwrap_or(true) {
         return;
     }
