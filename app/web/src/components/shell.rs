@@ -318,7 +318,7 @@ pub fn shell(p: &ShellProps) -> Html {
                     <button
                         type="button"
                         class="topcoat-icon-button--quiet fn-topbar__wide"
-                        aria-label={t(lang, Key::nav_passwords)}
+                        aria-label={t(lang, Key::pw_title)}
                         title={t(lang, Key::pw_title)}
                         aria-current={(p.route.nav_key() == "passwords").then_some("page")}
                         onclick={go(Route::Passwords, p.on_navigate.clone())}
