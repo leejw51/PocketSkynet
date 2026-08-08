@@ -885,6 +885,54 @@ pub fn copy_then(_text: &str, done: impl FnOnce(bool) + 'static) {
     done(false);
 }
 
+/// Read the clipboard, then hand what was on it to `done`.
+///
+/// The mirror of [`copy_then`], with one asymmetry that cannot be papered over:
+/// **there is no legacy fallback for reading.** The copy path can fall back to
+/// `document.execCommand("copy")` on an insecure origin; the reading half of
+/// that API was never given to pages, because a document that could silently
+/// read your clipboard is a keylogger. So on the plain-`http://` LAN address
+/// this app is meant to be opened on, paste is simply unavailable.
+///
+/// The two failure modes are kept apart, because the user can act on one and
+/// not the other:
+///
+/// - `None` — the clipboard could not be read at all (no secure context,
+///   permission denied). The caller must say so and offer the manual route.
+/// - `Some("")` — it was read, and there was nothing on it. A different
+///   sentence, and not an error in this app's sense.
+#[cfg(target_arch = "wasm32")]
+pub fn paste_then(done: impl FnOnce(Option<String>) + 'static) {
+    wasm_bindgen_futures::spawn_local(async move { done(read_clipboard().await) });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn paste_then(done: impl FnOnce(Option<String>) + 'static) {
+    done(None);
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn read_clipboard() -> Option<String> {
+    let win = web_sys::window()?;
+
+    // The same probe the copy path makes, for the same reason: outside a secure
+    // context `navigator.clipboard` is `undefined`, and reaching through it
+    // throws a `TypeError` that would abort the handler rather than return an
+    // outcome we could report.
+    let has_async_api = js_sys::Reflect::get(&win.navigator(), &JsValue::from_str("clipboard"))
+        .map(|v| !v.is_undefined() && !v.is_null())
+        .unwrap_or(false);
+    if !has_async_api {
+        return None;
+    }
+
+    let promise = win.navigator().clipboard().read_text();
+    let value = wasm_bindgen_futures::JsFuture::from(promise).await.ok()?;
+    // Deliberately *not* filtered for emptiness — an empty clipboard is a
+    // `Some("")` the caller reports differently from a refusal.
+    value.as_string()
+}
+
 /// `document.execCommand("copy")` over a temporary, off-screen textarea.
 ///
 /// Deprecated, and the only thing that works on an insecure origin. It must be

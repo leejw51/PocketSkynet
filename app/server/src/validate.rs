@@ -523,6 +523,31 @@ pub fn enc_ver(raw: Option<i64>, default: i64) -> ApiResult<i64> {
     }
 }
 
+/// `encVer` for a Skynet Password entry — only `SECRET_ENC_VER` (1) exists.
+///
+/// A separate validator from [`enc_ver`] on purpose. That one accepts 1..=2,
+/// the range the *message* scheme defines, and the password scheme has no
+/// version 2. Reusing it would let a client store rows stamped `encVer: 2` that
+/// no reader knows how to open — and because `encVer` is **not** inside the
+/// sealing MAC (`core/src/secrets.rs`), the value is server-tamperable too, so
+/// the bound is the only thing keeping it honest. The accepted set is sourced
+/// from the one core constant, so a future v2 lands here, in the sealer, and in
+/// the client's writer together rather than in one of the three alone.
+pub fn secret_enc_ver(raw: Option<i64>) -> ApiResult<i64> {
+    let v = raw.unwrap_or(pocketskynet_core::secrets::SECRET_ENC_VER);
+    if v == pocketskynet_core::secrets::SECRET_ENC_VER {
+        Ok(v)
+    } else {
+        Err(ApiError::field(
+            "encVer",
+            &format!(
+                "Encryption version must be {}",
+                pocketskynet_core::secrets::SECRET_ENC_VER
+            ),
+        ))
+    }
+}
+
 /// `keyVersion` — the room epoch a payload is sealed under.
 pub fn key_version(field: &str, raw: Option<i64>, default: i64) -> ApiResult<i64> {
     match raw {
@@ -603,6 +628,56 @@ pub fn wrapped_key(raw: Option<&str>) -> ApiResult<String> {
         return Err(ApiError::field(
             "encryptedSymmetricKey",
             "Encrypted symmetric key must be 1-1024 characters",
+        ));
+    }
+    Ok(raw.to_owned())
+}
+
+/// Longest sealed-field ciphertext the password store accepts, in characters.
+///
+/// `core::secrets::MAX_SECRET_BYTES` is 4096 bytes of plaintext, which PKCS#7
+/// pads to at most 4112 and base64 expands to 5484 characters. 8192 leaves
+/// room for a future scheme with a larger frame without inviting somebody to
+/// use this table as a file store — the body limit above is 100 KB, and two
+/// fields at this cap fit inside it with room to spare.
+pub const MAX_SEALED_CIPHERTEXT: usize = 8192;
+
+/// A Skynet Password entry id: `[A-Za-z0-9_-]`, 10–100 characters.
+///
+/// The same charset as a message id, for the same reason plus one more: the id
+/// is part of the MAC input the *client* computes over each sealed field
+/// (`core/src/secrets.rs`), and that framing is `|`-delimited with no length
+/// prefix. A `|` here would make it ambiguous, so the check has to happen on
+/// both sides of the wire and this is the server's half.
+pub fn secret_entry_id(raw: &str) -> ApiResult<String> {
+    // No `.trim()`: the id is bound into the client's MAC exactly as sent
+    // (`core/src/secrets.rs`'s `secret_mac_input`), so silently normalising
+    // whitespace here would store a different string than the one the seal
+    // authenticates, and the entry could never be decrypted again. The
+    // `[A-Za-z0-9_-]` charset already excludes whitespace, so a raw id that
+    // needed trimming was never valid to begin with.
+    if !pocketskynet_core::secrets::is_valid_entry_id(raw) {
+        return Err(ApiError::field(
+            "id",
+            "Entry id must be 10-100 characters of [A-Za-z0-9_-]",
+        ));
+    }
+    Ok(raw.to_owned())
+}
+
+/// One sealed field's ciphertext.
+///
+/// Opaque: only the owner can tell whether it decodes to anything, so the
+/// content is bounded and otherwise untouched. The empty string is refused —
+/// an empty *plaintext* is legitimate (a note with no password yet) but it
+/// still produces a full padding block, so an empty ciphertext could only be a
+/// client bug or a truncated request.
+pub fn sealed_ciphertext(field: &str, raw: Option<&str>) -> ApiResult<String> {
+    let raw = raw.ok_or_else(|| ApiError::field(field, "Ciphertext is required"))?;
+    if !(1..=MAX_SEALED_CIPHERTEXT).contains(&raw.len()) {
+        return Err(ApiError::field(
+            field,
+            &format!("Ciphertext must be 1-{MAX_SEALED_CIPHERTEXT} characters"),
         ));
     }
     Ok(raw.to_owned())

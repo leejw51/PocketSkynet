@@ -150,7 +150,7 @@ pub fn derive_subkey(key: &[u8; 32], label: &str) -> [u8; 32] {
 }
 
 /// Compute `HMAC-SHA256(key, utf8(input))` and return it as lowercase hex.
-fn mac_hex(key: &[u8; 32], input: &str) -> String {
+pub(crate) fn mac_hex(key: &[u8; 32], input: &str) -> String {
     let mut mac = <HmacSha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(input.as_bytes());
     hex::encode(mac.finalize().into_bytes())
@@ -164,7 +164,7 @@ fn mac_hex(key: &[u8; 32], input: &str) -> String {
 /// in a way that changes the security decision. A length mismatch short-circuits
 /// (length leakage is acceptable; content leakage is not), and the 32-byte
 /// comparison itself goes through [`subtle`] so it does not branch on data.
-fn verify_mac(key: &[u8; 32], input: &str, expected_hex: &str) -> bool {
+pub(crate) fn verify_mac(key: &[u8; 32], input: &str, expected_hex: &str) -> bool {
     let Ok(expected) = hex::decode(expected_hex) else {
         return false;
     };
@@ -181,7 +181,7 @@ fn verify_mac(key: &[u8; 32], input: &str, expected_hex: &str) -> bool {
 // AES-256-CBC helpers
 // ---------------------------------------------------------------------------
 
-fn aes_cbc_encrypt(key: &[u8; 32], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
+pub(crate) fn aes_cbc_encrypt(key: &[u8; 32], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
     Aes256CbcEnc::new(key.into(), iv.into()).encrypt_padded_vec_mut::<Pkcs7>(plaintext)
 }
 
@@ -190,7 +190,7 @@ fn aes_cbc_encrypt(key: &[u8; 32], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
 /// Callers must have verified the MAC first, so a padding error here means a
 /// key mismatch rather than an attacker probing — but the error stays opaque
 /// regardless, so no future refactor can turn it into an oracle.
-fn aes_cbc_decrypt(
+pub(crate) fn aes_cbc_decrypt(
     key: &[u8; 32],
     iv: &[u8; 16],
     ciphertext: &[u8],
@@ -216,7 +216,7 @@ pub fn generate_room_key() -> Result<[u8; 32], CryptoError> {
     random::bytes::<32>()
 }
 
-fn decode_iv(iv_hex: &str) -> Option<[u8; 16]> {
+pub(crate) fn decode_iv(iv_hex: &str) -> Option<[u8; 16]> {
     let mut iv = [0u8; 16];
     hex::decode_to_slice(iv_hex, &mut iv).ok()?;
     Some(iv)

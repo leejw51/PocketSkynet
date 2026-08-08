@@ -116,6 +116,29 @@ impl Api {
     /// POST a body verbatim, bypassing JSON serialization — used for the
     /// oversized-body (413) and malformed-JSON checks.
     pub async fn post_raw(&self, path: &str, body: String) -> Resp {
+        Resp::of(self.raw_request(path, body)).await
+    }
+
+    /// [`post_raw`](Self::post_raw), but `None` instead of a panic when the
+    /// request never completes at the transport level.
+    ///
+    /// For the body-limit tests, and only those. When a body exceeds the
+    /// limit, the server answers 413 off the `Content-Length` header without
+    /// ever reading the body — so it closes a socket that still has unread
+    /// bytes in its receive queue, and Linux answers that with an RST rather
+    /// than a FIN. The RST races the client: it either reads the 413 first, or
+    /// its own in-flight write dies with `EPIPE` and the response is discarded
+    /// along with the receive buffer. Both are correct refusals, the outcome
+    /// depends on kernel buffering and load, and on a busy CI runner it goes
+    /// the second way often enough to be seen. macOS effectively never does.
+    ///
+    /// So a test that must survive both spellings of "refused" calls this one.
+    pub async fn try_post_raw(&self, path: &str, body: String) -> Option<Resp> {
+        Resp::try_of(self.raw_request(path, body)).await.ok()
+    }
+
+    /// The shared builder behind the two `post_raw` flavours.
+    fn raw_request(&self, path: &str, body: String) -> reqwest::RequestBuilder {
         let mut req = self
             .http
             .post(format!("{}{}", self.base, path))
@@ -124,7 +147,7 @@ impl Api {
         if let Some(t) = &self.token {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
-        Resp::of(req).await
+        req
     }
 
     /// Issue a request with an `Origin` header, for the CORS checks.
@@ -176,18 +199,28 @@ pub struct Resp {
 
 impl Resp {
     async fn of(req: reqwest::RequestBuilder) -> Resp {
-        let resp = req
-            .send()
-            .await
-            .expect("request failed at the transport level");
+        match Resp::try_of(req).await {
+            Ok(resp) => resp,
+            Err(e) => panic!("request failed at the transport level: {e:?}"),
+        }
+    }
+
+    /// The same, handing the transport error back rather than panicking on it.
+    ///
+    /// Almost every test wants the panic — a connection that died is a bug in
+    /// whatever it was probing. The exception is a request the server is
+    /// entitled to refuse *by* tearing the connection down; see
+    /// [`Api::try_post_raw`].
+    async fn try_of(req: reqwest::RequestBuilder) -> Result<Resp, reqwest::Error> {
+        let resp = req.send().await?;
         let status = resp.status();
         let headers = resp.headers().clone();
         let text = resp.text().await.unwrap_or_default();
-        Resp {
+        Ok(Resp {
             status,
             headers,
             text,
-        }
+        })
     }
 
     pub fn code(&self) -> u16 {

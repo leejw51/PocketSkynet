@@ -19,8 +19,10 @@ pub mod events;
 pub mod hash;
 pub mod ids;
 pub mod keys;
+pub mod password;
 pub mod progression;
 pub mod random;
+pub mod secrets;
 pub mod username;
 pub mod wallet;
 
@@ -31,7 +33,9 @@ pub use events::{ClientMessage, PresenceStatus, ResyncReason, ServerEvent, Targe
 pub use hash::{msg_hash_encrypted, msg_hash_plaintext, EmoticonAction};
 pub use ids::{IdError, MessageId, RoomId, WalletAddress, WEBHOOK_SENDER_PREFIX};
 pub use keys::{verify_key_binding, EncryptionKeypair};
+pub use password::{PasswordError, Recipe as PasswordRecipe};
 pub use progression::{Award, Directive, Rank, Snapshot, Trophy};
+pub use secrets::{Field as SecretField, SealedField, VaultKey};
 pub use username::{deterministic_username, room_name_from_entropy};
 pub use wallet::{MnemonicLength, Wallet};
 

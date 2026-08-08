@@ -22,6 +22,7 @@ pub mod members;
 pub mod message;
 pub mod modal;
 pub mod operator;
+pub mod passwords;
 pub mod publish;
 pub mod room_list;
 pub mod settings;

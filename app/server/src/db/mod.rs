@@ -36,6 +36,7 @@ pub mod mentions;
 pub mod messages;
 pub mod models;
 pub mod operators;
+pub mod passwords;
 pub mod rooms;
 pub mod shouts;
 pub mod sites;

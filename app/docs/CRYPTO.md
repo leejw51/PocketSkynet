@@ -1221,3 +1221,84 @@ then re-read the winner). There is no documented salt-rotation flow.
 **Answer:** treat the salt as immutable per account. If it ever changed, every
 existing room-key wrap for that account would become unreadable and would need
 the same heal-and-rewrap treatment as the legacy derivation.
+
+---
+
+## 14. Skynet Password sealing (PocketSkynet extension)
+
+Not part of the FruitNation protocol — no reference implementation and no
+canonical vector file. It is specified here because it reuses §5's label-KDF
+and §6's encrypt-then-MAC shape, and a reader who finds `PSv1|secret|…` in a
+database is owed the derivation.
+
+Implementation: `core/src/secrets.rs`. API: `docs/API.md` §18.
+
+### 14.1 Key derivation
+
+```
+vaultKey = HMAC-SHA256(key = encPriv (32 RAW bytes), msg = ascii("PocketSkynet/v1/password/vault"))
+encKey   = HMAC-SHA256(key = vaultKey,               msg = ascii("PocketSkynet/v1/password/enc"))
+macKey   = HMAC-SHA256(key = vaultKey,               msg = ascii("PocketSkynet/v1/password/mac"))
+```
+
+Same primitive, same argument order and same "the full 32-byte tag is the key"
+rule as §5. `encPriv` is the v2 (salted) E2EE private key of §3.1 — the 32 raw
+scalar bytes, **not** the `0x…` hex string.
+
+The three labels are new and are deliberately outside the `FruitNation/v2/…`
+namespace: a password entry must never be decryptable by anything derived for a
+room, and vice versa.
+
+### 14.2 Sealing one field
+
+An entry has two fields, `key` and `value`, sealed independently:
+
+```
+iv    = 16 CSPRNG bytes                    (fresh per seal, including on edit)
+ct    = AES-256-CBC-PKCS7(encKey, iv, utf8(plaintext))
+ctB64 = b64(ct)                            (standard alphabet, WITH padding)
+macIn = "PSv1|secret|" ‖ entryId ‖ "|" ‖ field ‖ "|" ‖ hex(iv) ‖ "|" ‖ ctB64
+hmac  = hex(HMAC-SHA256(macKey, utf8(macIn)))
+```
+
+MAC input layout, exactly:
+
+```
+PSv1|secret|{entryId}|{key|value}|{ivHex}|{ciphertextBase64}
+```
+
+- Literal tag `PSv1` — uppercase P, S, lowercase v, digit 1.
+- Exactly five `|` separators, no spaces.
+- `field` is the literal ASCII `key` or `value`, case-sensitive. It is
+  protocol: renaming either makes every existing entry undecryptable.
+- `entryId` is client-minted, `[A-Za-z0-9_-]`, 10–100 chars, so `|` cannot
+  appear and the framing needs no length prefix.
+
+Both bindings exist to stop the server *rearranging* what it cannot read:
+without `field`, an entry's key ciphertext could be moved into its value slot
+(the UI would then display a password as the entry's label); without `entryId`,
+a value could be moved to a different entry and mislabelled.
+
+Plaintext is bounded at 4096 bytes. The empty string is a legitimate plaintext
+and still produces one full padding block; an empty *ciphertext* is refused.
+
+### 14.3 Opening
+
+Verify before decrypting, exactly as §6.2:
+
+1. Rebuild `macIn` from the entry id the row was **fetched under**, the slot it
+   was **read from**, and the `iv` / `ciphertext` strings **verbatim**.
+2. Constant-time compare against `hmac`. Mismatch → abort, no AES.
+3. Decrypt, unpad, decode UTF-8. Every failure reports identically.
+
+### 14.4 What it does not provide
+
+- **No rollback protection.** The MAC binds a ciphertext to its entry and field,
+  not to a version. A server that keeps an old row can serve the previous
+  password back after an edit and the client cannot tell.
+- **No metadata privacy.** Entry count, creation and edit times, and field
+  lengths to a 16-byte granularity are all visible to the server.
+- **No protection from a compromised wallet.** `vaultKey` is derived, not
+  random, so the trade in §9.4 applies unchanged: whoever holds the wallet
+  credential can re-derive it and open every entry it ever sealed.
+

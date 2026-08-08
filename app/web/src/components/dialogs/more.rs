@@ -69,6 +69,8 @@ pub fn more_sheet(p: &MoreProps) -> Html {
                           None, go(Route::Publish, &p.on_navigate)) }
                     { row(icons::bank(20), t(lang, Key::menu_bank), current == "bank",
                           None, go(Route::Bank, &p.on_navigate)) }
+                    { row(icons::lock(20), t(lang, Key::nav_passwords), current == "passwords",
+                          None, go(Route::Passwords, &p.on_navigate)) }
                     // Admin-only, exactly as the top bar offers it: hiding it
                     // is a courtesy, the access control is server-side.
                     if store.is_server_admin {
