@@ -10855,7 +10855,17 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
   gap: var(--fn-s3);
 }
 
-.fn-pw__addbtn {
+/* "Add a secret" and "Fast password" side by side, wrapping to two lines on a
+   narrow phone rather than shrinking either past its label. */
+.fn-pw__addrow {
+  display: flex;
+  align-items: center;
+  gap: var(--fn-s2);
+  flex-wrap: wrap;
+}
+
+.fn-pw__addbtn,
+.fn-pw__fastbtn {
   display: inline-flex;
   align-items: center;
   gap: var(--fn-s2);
@@ -11033,4 +11043,12 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
 .fn-pwcard__remove--armed {
   color: var(--fn-danger-text, #ff6b6b);
   border-color: var(--fn-danger-text, #ff6b6b);
+}
+
+/* Armed paste is amber, not red: it is destructive, but it is not delete, and
+   two identically red buttons a thumb apart is how the wrong one gets a second
+   click. */
+.fn-pwcard__paste--armed {
+  color: var(--fn-crown-text, #d99b1b);
+  border-color: var(--fn-crown-text, #d99b1b);
 }

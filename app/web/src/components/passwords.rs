@@ -19,7 +19,7 @@
 //! field while it is being typed — is exactly that; everything else is
 //! minimized.
 //!
-//! # Three decisions worth stating
+//! # Four decisions worth stating
 //!
 //! **Values are masked until asked for.** A password manager whose list shows
 //! every password is a screenshot waiting to happen, and the person most likely
@@ -38,6 +38,15 @@
 //! `http://` LAN address, where `navigator.clipboard` does not exist. A failure
 //! says so and points at the reveal button, rather than claiming a copy that
 //! never happened.
+//!
+//! **Paste is armed, and can be refused outright.** Replacing a row's value
+//! with the clipboard is the one action here that destroys a secret while the
+//! wallet is still in hand, so it takes two clicks like delete does, and it
+//! reads the clipboard only on the second. It can also simply be unavailable:
+//! [`super::common::paste_then`] has no legacy fallback, because the reading
+//! half of the clipboard API was never given to insecure origins — on the LAN
+//! address this app is meant to be opened on, the button says so and sends you
+//! to the edit field instead of failing quietly.
 
 use pocketskynet_core::password::{self, Recipe, MAX_LENGTH, MIN_LENGTH};
 use pocketskynet_core::secrets::{VaultKey, MAX_SECRET_BYTES};
@@ -115,6 +124,12 @@ pub fn passwords(p: &PasswordsProps) -> Html {
     // *only* place a decrypted value lives, and it lives here transiently.
     let revealed = use_state(|| Option::<(String, Opened)>::None);
     let arming = use_state(|| Option::<String>::None);
+    // Paste is armed the same way delete is, and for the same reason: it
+    // destroys a stored secret irreversibly. "Lose the wallet and these are
+    // gone" is printed at the top of this screen; overwriting a row with
+    // whatever happens to be on the clipboard is the one way to lose one
+    // *without* losing the wallet, and a stray tap should not be able to do it.
+    let arming_paste = use_state(|| Option::<String>::None);
 
     let gen_open = use_state(|| false);
     let recipe = use_state(Recipe::default);
@@ -252,30 +267,68 @@ pub fn passwords(p: &PasswordsProps) -> Html {
         let draft_secret = draft_secret.clone();
         let error = error.clone();
         let recipe = recipe.clone();
-        Callback::from(move |_: MouseEvent| {
-            match password::generate(&recipe) {
-                Ok(pw) => {
-                    draft_secret.set(pw);
-                    error.set(None);
-                }
-                // The refusal path. Nothing is written to the field — a
-                // half-generated or fallback password is worse than none,
-                // because the person holding it cannot tell.
-                Err(password::PasswordError::NoCharacterClasses) => {
-                    error.set(Some(t(lang, Key::pw_gen_no_classes).to_owned()))
-                }
-                Err(password::PasswordError::Randomness) => {
-                    error.set(Some(t(lang, Key::pw_gen_failed).to_owned()))
-                }
-                // Unreachable from this UI — the slider clamps to the valid
-                // range — but if it ever fired, the message has to be about
-                // length, not about character classes.
-                Err(password::PasswordError::Length) => error.set(Some(
-                    t(lang, Key::pw_gen_length_bad)
-                        .replace("{min}", &MIN_LENGTH.to_string())
-                        .replace("{max}", &MAX_LENGTH.to_string()),
-                )),
+        Callback::from(move |_: MouseEvent| match password::generate(&recipe) {
+            Ok(pw) => {
+                draft_secret.set(pw);
+                error.set(None);
             }
+            // The refusal path. Nothing is written to the field — a
+            // half-generated or fallback password is worse than none, because
+            // the person holding it cannot tell.
+            Err(e) => error.set(Some(gen_error_message(lang, e))),
+        })
+    };
+
+    // "Fast password": generate one and put it on the clipboard, without
+    // storing anything. The case it exists for is signing up for something
+    // *elsewhere* — you want a strong password in the paste buffer, and this
+    // vault has no row to put it in yet. Saving it here would be the wrong
+    // guess: a secret filed under no name is worse than one you never kept.
+    let fast = {
+        let store = store.clone();
+        let recipe = recipe.clone();
+        let draft = draft.clone();
+        let draft_name = draft_name.clone();
+        let draft_secret = draft_secret.clone();
+        let error = error.clone();
+        Callback::from(move |_: MouseEvent| {
+            let pw = match password::generate(&recipe) {
+                Ok(pw) => pw,
+                Err(e) => {
+                    // Surfaced as a toast, not as the form's inline error: the
+                    // form may well be closed, and an error nobody can see is
+                    // indistinguishable from a button that does nothing.
+                    toast::warn(
+                        &store,
+                        t(store.language, Key::pw_gen_title),
+                        Some(gen_error_message(store.language, e)),
+                    );
+                    return;
+                }
+            };
+
+            let store = store.clone();
+            let draft = draft.clone();
+            let draft_name = draft_name.clone();
+            let draft_secret = draft_secret.clone();
+            let error = error.clone();
+            // `fallback` is the same string, kept only for the branch where the
+            // clipboard refused it. A generated password that reached neither
+            // the clipboard nor the screen is simply lost, and the person is
+            // left unable to tell that from a no-op — so on failure it goes
+            // into the draft field, where it can be read and selected by hand.
+            let fallback = pw.clone();
+            super::common::copy_then(&pw, move |ok| {
+                if ok {
+                    toast::success(&store, t(store.language, Key::pw_fast_done));
+                } else {
+                    draft.set(Draft::New);
+                    draft_name.set(String::new());
+                    draft_secret.set(fallback);
+                    error.set(None);
+                    toast::warn(&store, t(store.language, Key::pw_fast_copy_failed), None);
+                }
+            });
         })
     };
 
@@ -446,14 +499,118 @@ pub fn passwords(p: &PasswordsProps) -> Html {
         })
     };
 
+    // Paste: take what is on the clipboard and make it this entry's new value,
+    // keeping its name. Two clicks — the first arms, the second commits — and
+    // the clipboard is only *read* on the second, so an armed-but-abandoned
+    // button never touches it.
+    let paste = {
+        let store = store.clone();
+        let rows = rows.clone();
+        let vault_key = vault_key.clone();
+        let arming = arming.clone();
+        let arming_paste = arming_paste.clone();
+        let reload = reload.clone();
+        Callback::from(move |id: String| {
+            if arming_paste.as_ref() != Some(&id) {
+                // Only one destructive button is ever armed at a time. Two
+                // rows of "are you sure" lit at once is how the wrong one
+                // gets confirmed.
+                arming.set(None);
+                arming_paste.set(Some(id));
+                return;
+            }
+            arming_paste.set(None);
+
+            let (Some(k), Some(row)) = (vault_key.as_ref(), rows.iter().find(|r| r.id == id))
+            else {
+                return;
+            };
+            let vault = Vault::from_key(k.clone());
+            // The name has to survive the paste, so it has to be readable
+            // first. A row whose label this session cannot open would otherwise
+            // be rewritten with an empty name — the same trap `start_edit`
+            // refuses, for the same reason.
+            let Opened::Text(name) = vault.open_label(row).key else {
+                toast::warn(&store, t(store.language, Key::pw_sealed), None);
+                return;
+            };
+
+            let id = row.id.clone();
+            let store = store.clone();
+            let reload = reload.clone();
+            super::common::paste_then(move |text| {
+                let lang = store.language;
+                let text = match text {
+                    Some(value) if !value.is_empty() => value,
+                    // Read, but empty. Replacing a password with "" is never
+                    // what the tap meant, so it is refused rather than obeyed.
+                    Some(_) => {
+                        toast::warn(&store, t(lang, Key::pw_paste_empty), None);
+                        return;
+                    }
+                    // Not readable at all — an insecure origin or a denied
+                    // permission. Point at the route that still works.
+                    None => {
+                        toast::warn(&store, t(lang, Key::pw_paste_unavailable), None);
+                        return;
+                    }
+                };
+
+                let (sealed_key, sealed_value) = match vault.seal(&id, &name, &text) {
+                    Ok(pair) => pair,
+                    Err(SealError::TooLong) => {
+                        toast::warn(
+                            &store,
+                            t(lang, Key::pw_secret_too_long)
+                                .replace("{max}", &MAX_SECRET_BYTES.to_string()),
+                            None,
+                        );
+                        return;
+                    }
+                    Err(SealError::Failed) => {
+                        toast::warn(&store, t(lang, Key::pw_seal_failed), None);
+                        return;
+                    }
+                };
+
+                wasm_bindgen_futures::spawn_local(async move {
+                    match store
+                        .client
+                        .update_password(&id, &sealed_key, &sealed_value)
+                        .await
+                    {
+                        Ok(_) => {
+                            toast::success(&store, t(store.language, Key::pw_pasted));
+                            // Refetch rather than splice, as `remove` does: the
+                            // row snapshot this closure captured predates an
+                            // await *and* a clipboard round trip, which is long
+                            // enough for another save to have landed. Only
+                            // `updated_at` is visibly affected — the list shows
+                            // labels, and this changed a value — so the extra
+                            // request buys correctness at no visible cost.
+                            reload.emit(());
+                        }
+                        Err(e) => toast::error(
+                            &store,
+                            t(store.language, Key::pw_title),
+                            Some(e.user_message()),
+                        ),
+                    }
+                });
+            });
+        })
+    };
+
     let remove = {
         let store = store.clone();
         let arming = arming.clone();
+        let arming_paste = arming_paste.clone();
         let reload = reload.clone();
         Callback::from(move |id: String| {
             // First click arms, second fires — the same two-step the Publish
             // wall uses. A modal for a one-row delete is heavier than the act.
             if arming.as_ref() != Some(&id) {
+                arming_paste.set(None);
                 arming.set(Some(id));
                 return;
             }
@@ -478,6 +635,17 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                 }
             });
         })
+    };
+
+    // The row's five actions as one value. `entry_card` already carried a
+    // waiver for its argument count, and paste would have been the argument
+    // that tipped it from long into unreadable.
+    let actions = RowActions {
+        reveal,
+        copy,
+        paste,
+        edit: start_edit,
+        remove,
     };
 
     let now = format::now_ms();
@@ -526,14 +694,28 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                             &busy, &error, &generate, &save, &close_draft,
                         ) }
                     } else {
-                        <button
-                            type="button"
-                            class="topcoat-button--large--cta fn-pw__addbtn"
-                            onclick={start_new}
-                        >
-                            { icons::plus(16) }
-                            <span>{ t(lang, Key::pw_add) }</span>
-                        </button>
+                        <div class="fn-pw__addrow">
+                            <button
+                                type="button"
+                                class="topcoat-button--large--cta fn-pw__addbtn"
+                                onclick={start_new}
+                            >
+                                { icons::plus(16) }
+                                <span>{ t(lang, Key::pw_add) }</span>
+                            </button>
+                            // Beside "Add a secret", not inside the form: this
+                            // is the one generator path that stores nothing,
+                            // and burying it behind "add" would ask for a name
+                            // for something that is never going to be filed.
+                            <button
+                                type="button"
+                                class="topcoat-button--large fn-pw__fastbtn"
+                                onclick={fast}
+                            >
+                                { icons::spark(16) }
+                                <span>{ t(lang, Key::pw_fast) }</span>
+                            </button>
+                        </div>
                     }
                 </section>
             }
@@ -569,8 +751,7 @@ pub fn passwords(p: &PasswordsProps) -> Html {
                 } else {
                     <ul class="fn-pw__rows">
                         { for visible.iter().map(|label| entry_card(
-                            lang, label, now, &revealed, &arming,
-                            &remove, &copy, &reveal, &start_edit,
+                            lang, label, now, &revealed, &arming, &arming_paste, &actions,
                         )) }
                     </ul>
                 }
@@ -770,28 +951,38 @@ fn class_toggle(
     }
 }
 
+/// What a row can do, as one value.
+///
+/// Each callback takes the entry's id, so one instance serves every row.
+#[derive(Clone, PartialEq)]
+struct RowActions {
+    reveal: Callback<String>,
+    copy: Callback<String>,
+    paste: Callback<String>,
+    edit: Callback<String>,
+    remove: Callback<String>,
+}
+
 /// One stored entry, rendered from its label.
 ///
 /// The value is not on the label — it is decrypted on demand into `revealed`
 /// when this entry is shown, and read from there. An entry whose label is
 /// sealed (a foreign wallet's row, or a locked session) offers only delete.
-#[allow(clippy::too_many_arguments)]
 fn entry_card(
     lang: Lang,
     label: &SecretLabel,
     now: i64,
     revealed: &UseStateHandle<Option<(String, Opened)>>,
     arming: &UseStateHandle<Option<String>>,
-    remove: &Callback<String>,
-    copy: &Callback<String>,
-    reveal: &Callback<String>,
-    start_edit: &Callback<String>,
+    arming_paste: &UseStateHandle<Option<String>>,
+    actions: &RowActions,
 ) -> Html {
     let is_revealed = revealed.as_ref().map(|(i, _)| i.as_str()) == Some(label.id.as_str());
     let revealed_value = is_revealed
         .then(|| revealed.as_ref().map(|(_, o)| o.clone()))
         .flatten();
     let armed = arming.as_ref() == Some(&label.id);
+    let paste_armed = arming_paste.as_ref() == Some(&label.id);
     let readable = label.is_readable();
 
     html! {
@@ -838,7 +1029,7 @@ fn entry_card(
                         type="button"
                         class="topcoat-button fn-pwcard__reveal"
                         onclick={{
-                            let reveal = reveal.clone();
+                            let reveal = actions.reveal.clone();
                             let id = label.id.clone();
                             Callback::from(move |_: MouseEvent| reveal.emit(id.clone()))
                         }}
@@ -852,7 +1043,7 @@ fn entry_card(
                         class="topcoat-button fn-pwcard__copy"
                         title={t(lang, Key::pw_copy)}
                         onclick={{
-                            let copy = copy.clone();
+                            let copy = actions.copy.clone();
                             let id = label.id.clone();
                             Callback::from(move |_: MouseEvent| copy.emit(id.clone()))
                         }}
@@ -861,11 +1052,32 @@ fn entry_card(
                         { " " }
                         { t(lang, Key::pw_copy) }
                     </button>
+                    // Armed once before it fires, like delete: this replaces a
+                    // stored secret with the clipboard, and there is no undo
+                    // and no copy of what was there.
+                    <button
+                        type="button"
+                        class={classes!(
+                            "topcoat-button",
+                            "fn-pwcard__paste",
+                            paste_armed.then_some("fn-pwcard__paste--armed")
+                        )}
+                        title={t(lang, Key::pw_paste)}
+                        onclick={{
+                            let paste = actions.paste.clone();
+                            let id = label.id.clone();
+                            Callback::from(move |_: MouseEvent| paste.emit(id.clone()))
+                        }}
+                    >
+                        { icons::paste(14) }
+                        { " " }
+                        { if paste_armed { t(lang, Key::pw_paste_arm) } else { t(lang, Key::pw_paste) } }
+                    </button>
                     <button
                         type="button"
                         class="topcoat-button fn-pwcard__edit"
                         onclick={{
-                            let start_edit = start_edit.clone();
+                            let start_edit = actions.edit.clone();
                             let id = label.id.clone();
                             Callback::from(move |_: MouseEvent| start_edit.emit(id.clone()))
                         }}
@@ -883,7 +1095,7 @@ fn entry_card(
                         armed.then_some("fn-pwcard__remove--armed")
                     )}
                     onclick={{
-                        let remove = remove.clone();
+                        let remove = actions.remove.clone();
                         let id = label.id.clone();
                         Callback::from(move |_: MouseEvent| remove.emit(id.clone()))
                     }}
@@ -894,6 +1106,25 @@ fn entry_card(
                 </button>
             </div>
         </li>
+    }
+}
+
+/// What to say when the generator refuses.
+///
+/// Shared by the two callers — the form's Generate button, which shows it
+/// inline, and "Fast password", which has no form open to show it in and
+/// raises it as a toast. One function so the two can never drift into
+/// describing the same refusal differently.
+fn gen_error_message(lang: Lang, e: password::PasswordError) -> String {
+    match e {
+        password::PasswordError::NoCharacterClasses => t(lang, Key::pw_gen_no_classes).to_owned(),
+        password::PasswordError::Randomness => t(lang, Key::pw_gen_failed).to_owned(),
+        // Unreachable from this UI — the slider clamps to the valid range —
+        // but if it ever fired, the message has to be about length, not about
+        // character classes.
+        password::PasswordError::Length => t(lang, Key::pw_gen_length_bad)
+            .replace("{min}", &MIN_LENGTH.to_string())
+            .replace("{max}", &MAX_LENGTH.to_string()),
     }
 }
 
@@ -970,18 +1201,77 @@ mod tests {
         // to copy that tells the user what to do about it — collapsing them
         // into one string is how "your browser has no CSPRNG" ends up reading
         // as "you ticked the wrong box".
-        let no_classes = t(Lang::En, Key::pw_gen_no_classes);
-        let randomness = t(Lang::En, Key::pw_gen_failed);
-        let length = t(Lang::En, Key::pw_gen_length_bad);
+        //
+        // Asserted through `gen_error_message` rather than against the raw
+        // table, because that function is now what both callers use, and going
+        // through it also proves the placeholders are substituted.
+        let no_classes = gen_error_message(Lang::En, password::PasswordError::NoCharacterClasses);
+        let randomness = gen_error_message(Lang::En, password::PasswordError::Randomness);
+        let length = gen_error_message(Lang::En, password::PasswordError::Length);
         // All three distinct — including Length, which used to alias the
         // "no character classes" string.
         assert_ne!(no_classes, randomness);
         assert_ne!(no_classes, length);
         assert_ne!(randomness, length);
         assert!(length.to_lowercase().contains("length"));
+        // The length message names the real bounds, with nothing left unfilled.
+        assert!(length.contains(&MIN_LENGTH.to_string()));
+        assert!(length.contains(&MAX_LENGTH.to_string()));
+        assert!(!length.contains("{min}") && !length.contains("{max}"));
         // And the randomness one must say nothing was generated, because the
         // field staying empty is otherwise indistinguishable from a bug.
         assert!(randomness.to_lowercase().contains("nothing was generated"));
+    }
+
+    #[test]
+    fn the_two_clipboard_refusals_do_not_read_the_same() {
+        // `paste_then` reports "read it, it was empty" and "could not read it
+        // at all" apart, because the fixes differ: copy something and try
+        // again, versus give up on the button and paste into the field by
+        // hand. If the two strings ever collapse into one, that distinction
+        // dies here — the code would still branch, and the user could not tell.
+        let empty = t(Lang::En, Key::pw_paste_empty);
+        let unavailable = t(Lang::En, Key::pw_paste_unavailable);
+        assert_ne!(empty, unavailable);
+        // Neither may be mistakable for the success line: both are paths where
+        // the stored secret was deliberately left alone.
+        let done = t(Lang::En, Key::pw_pasted);
+        assert_ne!(empty, done);
+        assert_ne!(unavailable, done);
+        // The refusal has to name the way out, since it is the only one left.
+        assert!(unavailable.to_lowercase().contains("paste into the field"));
+    }
+
+    #[test]
+    fn paste_is_armed_before_it_fires_and_says_what_it_will_do() {
+        // The armed label is the only warning between a tap and an
+        // unrecoverable overwrite, so it must not read as the resting label —
+        // that is the whole mechanism.
+        let resting = t(Lang::En, Key::pw_paste);
+        let armed = t(Lang::En, Key::pw_paste_arm);
+        assert_ne!(resting, armed);
+        // And it has to say that something existing gets destroyed, not merely
+        // that something is about to be inserted.
+        assert!(armed.to_lowercase().contains("overwrite"));
+        // Distinct from delete's arm text too: adjacent buttons whose confirm
+        // states read alike are how the wrong one gets the second click.
+        assert_ne!(armed, t(Lang::En, Key::pw_remove_arm));
+    }
+
+    #[test]
+    fn fast_password_promises_a_clipboard_and_no_stored_row() {
+        // The button's whole contract: it generates and copies, and files
+        // nothing. If the confirmation stops saying so, people will go looking
+        // in the list for a password that was never put there.
+        let done = t(Lang::En, Key::pw_fast_done).to_lowercase();
+        assert!(done.contains("clipboard"));
+        assert!(done.contains("nothing was saved"));
+        // The clipboard-refused path must instead point at the field, because
+        // after that failure the generated password exists nowhere else and a
+        // toast that only apologised would lose it.
+        let failed = t(Lang::En, Key::pw_fast_copy_failed).to_lowercase();
+        assert_ne!(done, failed);
+        assert!(failed.contains("field below"));
     }
 
     #[test]
