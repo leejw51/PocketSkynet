@@ -18,6 +18,12 @@ const { BASE, walletFor } = require("./helpers");
 // where the whole `--wide` top-bar row disappears.
 test.use({ viewport: { width: 744, height: 1133 }, hasTouch: true });
 
+// Two controls open this sheet — the bottom nav's tab and the top bar's button
+// — so a bare name lookup is ambiguous by design. Naming which one a test
+// means is the point, not a workaround.
+const bottomNavMore = (page) =>
+  page.locator(".fn-bottomnav").getByRole("button", { name: "More" });
+
 let counter = 0;
 const freshLabel = (tag) => `${tag}-${Date.now().toString(36)}-${counter++}`;
 
@@ -59,10 +65,30 @@ test.describe("on a tablet in portrait", () => {
     ).toBeHidden();
   });
 
+  test("the top bar offers More where its own row is gone", async ({
+    page,
+  }) => {
+    // The bottom nav's More sits in the far corner, and below 800px the top
+    // bar is otherwise a wallet, a power button and a lot of nothing. This is
+    // the same sheet, put where the row that vanished used to be.
+    await signInAs(page, freshLabel("tabt"));
+
+    const topbar = page.locator(".fn-topbar__narrow");
+    await expect(topbar).toBeVisible();
+    await topbar.click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(
+      page.getByRole("dialog").getByRole("button", {
+        name: "Skynet Password",
+        exact: true,
+      }),
+    ).toBeVisible();
+  });
+
   test("More reaches every section the top bar gave up", async ({ page }) => {
     await signInAs(page, freshLabel("tabm"));
 
-    await page.getByRole("button", { name: "More" }).click();
+    await bottomNavMore(page).click();
     const sheet = page.getByRole("dialog");
     await expect(sheet).toBeVisible();
 
@@ -79,7 +105,7 @@ test.describe("on a tablet in portrait", () => {
     // and the screen behind it has to render at this width.
     await signInAs(page, freshLabel("tabo"));
 
-    await page.getByRole("button", { name: "More" }).click();
+    await bottomNavMore(page).click();
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "Skynet Password", exact: true })
@@ -89,5 +115,23 @@ test.describe("on a tablet in portrait", () => {
     await expect(
       page.getByRole("heading", { name: "Skynet Password" }),
     ).toBeVisible({ timeout: 10_000 });
+  });
+});
+
+// The other side of the same breakpoint. A desktop-width top bar carries every
+// destination as its own button, so a More sheet there would be a door into the
+// room you are already standing in.
+test.describe("on a wide window", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+
+  test("there is no top-bar More, because nothing is hidden", async ({
+    page,
+  }) => {
+    await signInAs(page, freshLabel("wide"));
+    await expect(
+      page.getByRole("button", { name: "Skynet Password" }),
+    ).toBeVisible();
+    await expect(page.locator(".fn-topbar__narrow")).toBeHidden();
+    await expect(page.locator(".fn-bottomnav")).toBeHidden();
   });
 });

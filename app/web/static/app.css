@@ -3396,6 +3396,11 @@ span.fn-conn { cursor: default; }
 .fn-more__row[aria-current="page"] { color: var(--fn-primary-text); }
 .fn-more__row[aria-current="page"] > svg { color: var(--fn-primary); }
 
+/* The top bar's More, the mirror image of `fn-topbar__wide`: hidden wherever
+   that row is shown, because a wide top bar already *is* the menu and a sheet
+   listing what is on screen is a door into the room you are standing in. */
+.fn-topbar__narrow { display: none; }
+
 /* Back button appears only in the single-column layout (§16). */
 .fn-back { display: none; }
 
@@ -6558,6 +6563,8 @@ span.fn-conn { cursor: default; }
      below through the nav or the More sheet behind its fifth tab, so what is
      left up here is the identity, the wallet, and the way out. */
   .fn-topbar__wide { display: none; }
+  /* …and the sheet that reaches all of it takes their place. */
+  .fn-topbar__narrow { display: inline-flex; }
 
   .fn-topbar__addr .fn-addr--full { display: none; }
   .fn-stream { padding-inline: var(--fn-s3); }
