@@ -232,6 +232,11 @@ pub async fn reply(store: Store, room_id: RoomId, question: String, ui: Ui) {
         return;
     }
 
+    // My Note goes in whole, on every question. It is bounded (jarvis::NOTE_BUDGET)
+    // precisely so that it can, which is what makes "Jarvis knows what I wrote
+    // down" true without the model having to decide to go and look.
+    let note = note_text(&d).await;
+
     let system = jarvis::system_prompt(&jarvis::AgentContext {
         owner: store
             .room(&room_id)
@@ -241,6 +246,7 @@ pub async fn reply(store: Store, room_id: RoomId, question: String, ui: Ui) {
         lang: store.language,
         now: local_now(),
         caps,
+        note,
     });
 
     let Some(text) = run_turn(&d, &system, turns).await else {
@@ -309,8 +315,6 @@ pub fn handles(name: &str) -> bool {
             | "search_server"
             | "search_rooms"
             | "search_people"
-            | "read_note"
-            | "search_note"
             | "append_note"
             | "list_rooms"
             | "read_room"
@@ -396,46 +400,20 @@ async fn exec_tool(d: &Deps, name: &str, args: &Value) -> Result<String, String>
         }
 
         // -- notes --------------------------------------------------------
-        "read_note" => {
-            let limit = args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(40)
-                .clamp(1, 200) as usize;
-            let note = d.note_room();
-            let lines = room_lines(d, &note, limit).await;
-            if lines.is_empty() {
-                return Ok("My Note is empty.".into());
-            }
-            Ok(lines
-                .iter()
-                .map(|(_, text, _)| format!("- {}", clamp(text, SNIPPET)))
-                .collect::<Vec<_>>()
-                .join("\n"))
-        }
-        "search_note" => {
-            let q = banker::arg_str(args, "query")?.to_lowercase();
-            let note = d.note_room();
-            let hits: Vec<String> = room_lines(d, &note, 500)
-                .await
-                .into_iter()
-                .filter(|(_, text, _)| text.to_lowercase().contains(&q))
-                .map(|(_, text, ts)| {
-                    format!(
-                        "- [{}] {}",
-                        crate::format::short_date(ts, crate::format::tz_offset_minutes()),
-                        clamp(&text, SNIPPET)
-                    )
-                })
-                .collect();
-            if hits.is_empty() {
-                return Ok("nothing in My Note matched.".into());
-            }
-            Ok(hits.join("\n"))
-        }
         "append_note" => {
             let text = banker::arg_str(args, "text")?;
             let note = d.note_room();
+            // The note is bounded because all of it rides in every prompt.
+            // Refusing here, with the numbers, lets the model tell the owner
+            // what to delete rather than silently writing a line that pushes
+            // the oldest one out of its own context.
+            let used = note_text(d).await.chars().count();
+            if used + text.chars().count() > jarvis::NOTE_BUDGET {
+                return Err(format!(
+                    "My Note is full ({used} of {} characters). Ask the owner to delete something first.",
+                    jarvis::NOTE_BUDGET
+                ));
+            }
             if !ask(
                 &d.ui,
                 crate::i18n::t(d.lang, crate::i18n::Key::jarvis_confirm_note).to_owned(),
@@ -785,6 +763,29 @@ fn resolve_room(d: &Deps, want: &str) -> Result<RoomId, String> {
         })
 }
 
+/// The whole of My Note as one block, oldest first, clamped to the budget.
+///
+/// Kept from the *end* when it overflows: a notebook's newest lines are the
+/// ones a question is usually about, and dropping the oldest is the only
+/// truncation that stays useful as the note fills.
+async fn note_text(d: &Deps) -> String {
+    let lines = room_lines(d, &d.note_room(), 500).await;
+    let joined = lines
+        .iter()
+        .map(|(_, text, _)| text.trim())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if joined.chars().count() <= jarvis::NOTE_BUDGET {
+        return joined;
+    }
+    let keep: String = joined
+        .chars()
+        .skip(joined.chars().count() - jarvis::NOTE_BUDGET)
+        .collect();
+    format!("…{keep}")
+}
+
 /// This room's transcript, split into the two sides the agent needs.
 fn transcript(store: &Store, room_id: &RoomId, me: &WalletAddress) -> Vec<jarvis::RoomLine> {
     let agent = WalletAddress::agent_of(me);
@@ -814,28 +815,84 @@ fn transcript(store: &Store, room_id: &RoomId, me: &WalletAddress) -> Vec<jarvis
     }
 }
 
+/// This room's rows, from the snapshot if it has them and from the server if
+/// it does not — **returned**, never read back off the store.
+///
+/// The distinction is the whole bug this function exists to avoid. `d.store`
+/// is a handle frozen at the render that spawned this task: `dispatch` updates
+/// the reducer, but the next state is only visible to a *later* handle. So the
+/// obvious shape — dispatch the fetched page, then ask the store for it —
+/// reads the same empty snapshot back and reports an empty room. That is
+/// exactly how `jarvis_reply` was broken once before, and how `read_note`
+/// answered "My Note is empty" for anyone who had not already opened My Note
+/// in this tab. The dispatch still happens, because warming the store is worth
+/// it; the *answer* comes from the value in hand.
+async fn fetch_rows(d: &Deps, room_id: &RoomId, limit: usize) -> Vec<crate::api::Message> {
+    if let Some(state) = d.store.room_state(room_id) {
+        let rows: Vec<crate::api::Message> = state
+            .ordered(&d.store.blocks)
+            .into_iter()
+            .cloned()
+            .collect();
+        if !rows.is_empty() {
+            return rows;
+        }
+    }
+    let want = limit.clamp(1, 100) as u32;
+    let Ok(fetched) = d.store.client.messages(room_id, None, want).await else {
+        return Vec::new();
+    };
+    d.store.dispatch(Action::History(
+        room_id.clone(),
+        fetched.clone(),
+        fetched.len() as u32 >= want,
+    ));
+    let mut rows = fetched;
+    // `/messages` is already chronological, but the store's own ordering is
+    // the one every other reader sees, so sort by it rather than trusting two
+    // orderings to agree forever.
+    rows.sort_by_key(|m| (m.message_timestamp, m.msg_serial));
+    rows
+}
+
+/// This room's key bundle, unwrapped **here** rather than fetched into the
+/// store and read back.
+///
+/// `actions::refresh_keys` ends in a `SetBundle` dispatch, which this task's
+/// frozen handle will never see — so calling it and then asking the store for
+/// the bundle yields `None`, and every encrypted row is silently dropped. For
+/// My Note, which this PR made end-to-end encrypted, "silently dropped" means
+/// every single line. The unwrap happens against the live session keys, which
+/// are a `RefCell` and therefore genuinely shared, not snapshotted.
+async fn fetch_bundle(d: &Deps, room_id: &RoomId) -> Option<Rc<crate::crypto::RoomKeyBundle>> {
+    let session = d.store.auth.session()?;
+    let wraps = d.store.client.room_key_versions(room_id).await.ok()?;
+    if wraps.is_empty() {
+        return None;
+    }
+    let bundle = {
+        let mut keys = session.keys.borrow_mut();
+        crypto::unwrap_bundle(&mut keys, room_id, &wraps).0
+    };
+    let bundle = Rc::new(bundle);
+    d.store
+        .dispatch(Action::SetBundle(room_id.clone(), bundle.clone()));
+    Some(bundle)
+}
+
 /// Decrypted `(who, text, timestamp)` for one room, newest last.
 ///
 /// Reads what is in memory, and fetches when there is nothing there — a room
 /// this tab has never opened has no `RoomState` at all, and "search
 /// everything" that silently skipped every unopened room would be a lie.
 async fn room_lines(d: &Deps, room_id: &RoomId, limit: usize) -> Vec<(String, String, i64)> {
-    if d.store.room_state(room_id).is_none() {
-        // Keys before rows: a fetched page decrypts on arrival or not at all.
-        crate::actions::refresh_keys(d.store.clone(), room_id.clone()).await;
-        let want = limit.min(100) as u32;
-        if let Ok(history) = d.store.client.messages(room_id, None, want).await {
-            let more = history.len() as u32 >= want;
-            d.store
-                .dispatch(Action::History(room_id.clone(), history, more));
-        }
-    }
-    let bundle = d.store.bundle(room_id).cloned();
-    let names = d.store.room(room_id).map(|r| r.members.clone());
-    let Some(state) = d.store.room_state(room_id) else {
-        return Vec::new();
+    let rows = fetch_rows(d, room_id, limit).await;
+    let bundle = match d.store.bundle(room_id).cloned() {
+        Some(b) => Some(b),
+        None => fetch_bundle(d, room_id).await,
     };
-    let all = state.ordered(&d.store.blocks);
+    let names = d.store.room(room_id).map(|r| r.members.clone());
+    let all: Vec<&crate::api::Message> = rows.iter().collect();
     all.iter()
         .filter(|m| !m.is_deleted)
         .skip(all.len().saturating_sub(limit))
