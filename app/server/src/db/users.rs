@@ -222,15 +222,18 @@ pub fn get_public_keys(conn: &Connection, addresses: &[String]) -> ApiResult<Vec
 /// concurrent first logins both end up with the winner's salt rather than one
 /// of them silently deriving a different encryption identity.
 ///
-/// The candidate comes from `auth::random_hex_32` — the one generator — and is
-/// drawn *before* the insert even though it is usually thrown away. That order
-/// is deliberate: a salt is what separates this account's E2EE identity from
-/// the one the same wallet would derive on another deployment, and a predictable
-/// salt would quietly undo that for the first login it ever served. Refusing the
-/// login is the correct answer; there is no salt worth writing that the OS did
-/// not produce.
+/// The candidate is 64 hex characters from [`pocketskynet_core::random::hex_32`]
+/// — the same choke point every secret in the deployment draws from, but *not*
+/// `auth::random_hex_32`, whose name is reserved for bearer tokens; a salt is
+/// key-derivation input, not a credential anybody presents. It is drawn *before*
+/// the insert even though it is usually thrown away. That order is deliberate: a
+/// salt is what separates this account's E2EE identity from the one the same
+/// wallet would derive on another deployment, and a predictable salt would
+/// quietly undo that for the first login it ever served. Refusing the login is
+/// the correct answer; there is no salt worth writing that the OS did not
+/// produce.
 pub fn get_or_create_salt(conn: &Connection, address: &str) -> ApiResult<String> {
-    let candidate = crate::auth::random_hex_32()?;
+    let candidate = pocketskynet_core::random::hex_32()?;
 
     conn.execute(
         "INSERT INTO encryption_salts (wallet_address, salt, created_at)

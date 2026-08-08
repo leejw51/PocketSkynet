@@ -449,11 +449,12 @@ pub fn load_or_create_secret(path: &Path) -> Result<Secret, ConfigError> {
         Err(e) => return Err(ConfigError::ReadSecret(path.to_path_buf(), e)),
     }
 
-    // Through `core::random` like every other secret in the deployment. This
-    // is the highest-value one of them all — it signs every session — so it is
-    // the last place that should have its own generator.
-    let buf = pocketskynet_core::random::bytes::<32>().map_err(ConfigError::SecretEntropy)?;
-    let hex = hex::encode(buf);
+    // The same `hex_32` the bearer tokens and the encryption salt draw from —
+    // not a private `bytes::<32>() + hex::encode` pair, which is how a second
+    // spelling of the draw creeps back in. This is the highest-value secret of
+    // them all: it signs every session, so it is the last place that should
+    // have its own generator. A refusal is `SecretEntropy`, fatal at startup.
+    let hex = pocketskynet_core::random::hex_32().map_err(ConfigError::SecretEntropy)?;
 
     std::fs::write(path, &hex).map_err(|e| ConfigError::WriteSecret(path.to_path_buf(), e))?;
     restrict_permissions(path);

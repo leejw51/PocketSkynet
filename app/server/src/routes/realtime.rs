@@ -93,9 +93,13 @@ impl TicketStore {
     /// Mint a ticket. Returns the opaque id and its expiry in epoch millis.
     ///
     /// Fallible only because the id is: a ticket is a bearer credential, and
-    /// `random_hex_32` refuses rather than hand back a guessable one. The
-    /// sweep happens first regardless, so an entropy failure still leaves the
-    /// map bounded.
+    /// `random_hex_32` refuses rather than hand back a guessable one. The code
+    /// below sweeps expired tickets before drawing the id, so on the rare
+    /// entropy failure nothing new is inserted — though note that is a claim
+    /// about the statements as written here, not one any server test exercises:
+    /// the entropy seam is `#[cfg(test)]` inside `core` and unreachable from
+    /// this crate, by design (see `core::random` on why there is no run-time
+    /// substitution point).
     pub fn issue(&self, wallet: &WalletAddress, ip: IpAddr) -> ApiResult<(String, i64)> {
         let now = now_ms();
         // Sweeping on issue keeps the map bounded without a background task;

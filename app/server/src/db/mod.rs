@@ -133,6 +133,14 @@ impl Db {
     /// which `busy_timeout` does not retry — so any test with concurrent
     /// writers fails for a reason that has nothing to do with the code under
     /// test. A real file in WAL mode exercises exactly the production paths.
+    ///
+    /// `#[cfg(test)]` on purpose: this is the only thing in the crate that drew
+    /// `rand` outside a test module, so an ungated `pub fn` here kept `rand` in
+    /// `[dependencies]` and left a second entropy source compiled into every
+    /// release binary — the exact door this branch is closing. Gating it lets
+    /// `rand` move to `[dev-dependencies]`, so the compiler now enforces that a
+    /// future secret path cannot silently reach for `thread_rng` again.
+    #[cfg(test)]
     pub fn open_temp() -> Result<Self, DbError> {
         let mut tag = [0u8; 8];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut tag);
