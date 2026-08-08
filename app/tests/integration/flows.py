@@ -260,10 +260,21 @@ def flow_invitations(ctx):
         404, "invitation is gone"
     )
 
+    # An address nobody holds an account for is a 404 — the invitee does not
+    # exist. A high address so it does not collide with the reserved
+    # `0x00000000…` prefix exercised just below.
+    alice.api.post(
+        f"/api/rooms/{room_id}/invite",
+        {"userAddress": "0xdead00000000000000000000000000000000beef"},
+    ).expect(404)
+
+    # A reserved address — a webhook or agent sender, never a person — is
+    # refused before the room is even consulted, so it is a 400 whether or not
+    # any account claims it.
     alice.api.post(
         f"/api/rooms/{room_id}/invite",
         {"userAddress": "0x0000000000000000000000000000000000000002"},
-    ).expect(404)
+    ).expect(400)
 
 
 def flow_admins_and_kick(ctx):
