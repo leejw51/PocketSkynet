@@ -505,6 +505,13 @@ async fn serve_thumb(
     let dir = state.cfg.images_dir();
     let path = crate::thumbs::sidecar_path(&dir, &name)
         .ok_or_else(|| ApiError::not_found("Image not found"))?;
+    // Rebuilt on demand, exactly as `files.rs::serve_thumbnail` does and for
+    // the same reason: deleting a stale sidecar has to be the whole repair, or
+    // a thumbnail rendered by an older version of `thumbs::render` — one that
+    // ignored Exif orientation, say — can never be corrected.
+    if !path.exists() {
+        crate::thumbs::accompany_file(&dir, &name, MAX_IMAGE_BYTES as u64).await;
+    }
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| ApiError::not_found("Image not found"))?;

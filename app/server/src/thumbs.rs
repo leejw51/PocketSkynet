@@ -332,6 +332,33 @@ mod tests {
         out
     }
 
+    #[tokio::test]
+    async fn a_deleted_sidecar_is_drawn_again_from_the_original() {
+        // What makes "delete the stale ones" a complete repair. Thumbnails
+        // used to be generated only at upload, so a sidecar rendered by an
+        // older `render` — one that ignored Exif orientation — could never be
+        // corrected: deleting it left nothing, because nothing rebuilt it.
+        // The serve routes now call this on a miss.
+        let dir = std::env::temp_dir().join(format!("thumbs-heal-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let stored = format!("{}.png", "d".repeat(64));
+        tokio::fs::write(dir.join(&stored), big_png(800, 400))
+            .await
+            .unwrap();
+
+        accompany_file(&dir, &stored, 10_000_000).await;
+        assert!(exists(&dir, &stored), "the first pass draws one");
+
+        let sidecar = sidecar_path(&dir, &stored).unwrap();
+        tokio::fs::remove_file(&sidecar).await.unwrap();
+        assert!(!exists(&dir, &stored));
+
+        accompany_file(&dir, &stored, 10_000_000).await;
+        assert!(exists(&dir, &stored), "and a later pass draws it again");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
     #[test]
     fn a_sideways_photograph_is_stood_up_before_it_is_scaled() {
         // The reported bug. A phone does not rotate what it recorded — it
