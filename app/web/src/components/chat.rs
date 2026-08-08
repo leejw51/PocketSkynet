@@ -1334,6 +1334,38 @@ pub fn chat(p: &ChatProps) -> Html {
                     </div>
                 }
 
+                // A tool-using agent is invisible until somebody asks it for
+                // something it can actually do, and "ask me anything" teaches
+                // nobody what those things are. Four concrete sentences, shown
+                // only in an empty room, each one exercising a different tool
+                // group — they stop being clutter the moment there is a
+                // conversation to read instead.
+                if visible_count == 0 {
+                    <div class="fn-jarvis-starters">
+                        <span class="fn-jarvis-starters__lead">{ t(lang, Key::jarvis_try) }</span>
+                        <div class="fn-jarvis-starters__row">
+                            { for [
+                                Key::jarvis_try_search,
+                                Key::jarvis_try_note,
+                                Key::jarvis_try_rooms,
+                                Key::jarvis_try_time,
+                            ].iter().map(|k| {
+                                let text = t(lang, *k).to_owned();
+                                let click = {
+                                    let on_send = on_send.clone();
+                                    let text = text.clone();
+                                    Callback::from(move |_: MouseEvent| on_send.emit(text.clone()))
+                                };
+                                html! {
+                                    <button type="button" class="fn-jarvis-starter" onclick={click}>
+                                        { text }
+                                    </button>
+                                }
+                            }) }
+                        </div>
+                    </div>
+                }
+
                 // Vault access is a switch, not a setting: it lives beside the
                 // composer where it is used, defaults to off, and is forgotten
                 // when the tab closes. Offered only where it could work — a

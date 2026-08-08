@@ -11240,3 +11240,53 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
   background: var(--fn-surface-2, rgb(255 255 255 / 0.04));
   white-space: pre-wrap;
 }
+
+/* The starter chips. Only ever on screen in an empty My Jarvis — the job is to
+   teach the tool surface exists, and once there is a transcript the transcript
+   does that better. */
+.fn-jarvis-starters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 16px 10px;
+}
+.fn-jarvis-starters__lead {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fn-text-3, rgb(255 255 255 / 0.5));
+}
+.fn-jarvis-starters__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fn-jarvis-starter {
+  padding: 8px 14px;
+  border: 1px solid var(--fn-border, rgb(255 255 255 / 0.12));
+  border-radius: 999px;
+  background: var(--fn-surface-2, rgb(255 255 255 / 0.04));
+  color: inherit;
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    transform 120ms ease;
+}
+.fn-jarvis-starter:hover {
+  border-color: var(--fn-accent, rgb(120 170 255));
+  background: var(--fn-accent-wash, rgb(120 170 255 / 0.12));
+}
+.fn-jarvis-starter:active {
+  transform: translateY(1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .fn-jarvis-starter {
+    transition: none;
+  }
+  .fn-jarvis-starter:active {
+    transform: none;
+  }
+}
