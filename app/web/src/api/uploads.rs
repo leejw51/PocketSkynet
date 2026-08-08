@@ -104,6 +104,61 @@ const FALLBACK_CHUNK: f64 = 8.0 * 1024.0 * 1024.0;
 /// it actually is, and the loop re-reads the offset and continues from there.
 const CHUNK_ATTEMPTS: u32 = 4;
 
+/// How long `begin`, `append` and `upload_status` may run before they are
+/// treated as failed and retried.
+///
+/// The gap this closes: a dead mobile connection often stops answering rather
+/// than erroring, and a `fetch` in that state resolves neither `Ok` nor `Err`
+/// — it just never settles. Without a bound on it, `recover`'s retry loop
+/// never engages, because there is never an `Err` to trigger it, and the
+/// transfer sits exactly where the transfer rail's own stall timer
+/// (`components/transfers.rs::STALL_AFTER_MS`) finds it: stuck at one byte
+/// count, forever, with cancel-and-reattach as the only way out.
+///
+/// Generous rather than tight — the request is racing a timer, not a stopwatch
+/// against a bandwidth estimate, and a single ~8 MB chunk on a genuinely slow
+/// but *working* link can legitimately take a while. The goal is only to rule
+/// out "will never answer", which a live connection clears with room to spare;
+/// `finish` is deliberately not raced against this, since the server re-hashes
+/// the whole file there and a multi-gigabyte upload can legitimately hold it
+/// well past any bound that would still catch a dead chunk request promptly.
+const REQUEST_TIMEOUT_MS: u32 = 45_000;
+
+/// Race a request that already carries `controller`'s abort signal against
+/// [`REQUEST_TIMEOUT_MS`], aborting it on the clock rather than leaving it to
+/// hang. The controller must be the one whose signal was attached when the
+/// request was built — aborting any other one does nothing to this request.
+async fn send_with_timeout(
+    req: gloo_net::http::Request,
+    controller: web_sys::AbortController,
+) -> ApiResult<gloo_net::http::Response> {
+    use futures::future::{select, Either};
+    match select(
+        Box::pin(req.send()),
+        Box::pin(gloo_timers::future::TimeoutFuture::new(REQUEST_TIMEOUT_MS)),
+    )
+    .await
+    {
+        Either::Left((result, _)) => result.map_err(|e| ApiError::Network(e.to_string())),
+        Either::Right(_) => {
+            // Stops the browser doing the work for a response nothing is
+            // waiting for any more, and — for `append` specifically — is what
+            // lets the *next* attempt at this same offset land cleanly rather
+            // than racing a chunk this attempt is still, unknown to it, in the
+            // middle of sending.
+            controller.abort();
+            Err(ApiError::Network("The request timed out".to_owned()))
+        }
+    }
+}
+
+/// A fresh [`web_sys::AbortController`], as the one map-error site for the
+/// constructor every timed request needs.
+fn abort_controller() -> ApiResult<web_sys::AbortController> {
+    web_sys::AbortController::new()
+        .map_err(|_| ApiError::Network("Could not prepare the request".to_owned()))
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionView {
@@ -266,7 +321,14 @@ impl Client {
                 "sha256": digest,
             }),
         };
-        self.send_json(Method::POST, "/api/uploads", &body).await
+        let controller = abort_controller()?;
+        let req = self
+            .build(Method::POST, "/api/uploads")
+            .abort_signal(Some(&controller.signal()))
+            .json(&body)
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp = send_with_timeout(req, controller).await?;
+        super::decode(resp).await
     }
 
     /// Send one chunk — as a `Blob` slice, never as bytes the wasm side has
@@ -280,17 +342,16 @@ impl Client {
         // a fraction today, but the server parses this as an integer and a
         // formatting change would be a 400 rather than a compile error.
         let path = format!("/api/uploads/{id}?offset={}", offset as u64);
+        let controller = abort_controller()?;
         // The explicit header wins over the Blob's own (empty) type, so the
         // server sees the same request it always did.
         let req = self
             .build(Method::PATCH, &path)
             .header("Content-Type", "application/octet-stream")
+            .abort_signal(Some(&controller.signal()))
             .body(part)
             .map_err(|e| ApiError::Network(e.to_string()))?;
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp = send_with_timeout(req, controller).await?;
         let ack: Ack = super::decode(resp).await?;
         Ok(ack.offset)
     }
@@ -315,7 +376,14 @@ impl Client {
     }
 
     async fn upload_status(&self, id: &str) -> ApiResult<SessionView> {
-        self.send(Method::GET, &format!("/api/uploads/{id}")).await
+        let controller = abort_controller()?;
+        let req = self
+            .build(Method::GET, &format!("/api/uploads/{id}"))
+            .abort_signal(Some(&controller.signal()))
+            .build()
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp = send_with_timeout(req, controller).await?;
+        super::decode(resp).await
     }
 
     async fn finish(&self, id: &str) -> ApiResult<serde_json::Value> {
