@@ -32,6 +32,39 @@ async fn dissolve_sleep(ms: u32) {
 #[cfg(not(target_arch = "wasm32"))]
 async fn dissolve_sleep(_ms: u32) {}
 
+/// Delete the attachments a deleted message was showing.
+///
+/// # Why the client does this and the server cannot
+///
+/// An attachment is its own row in `files`, with no column naming the message
+/// that displayed it — the link is the URL inside the message text, and in an
+/// encrypted room the server holds ciphertext and can never read it. So
+/// deleting a message left its picture in the room's Files drawer and in the
+/// gallery, both of which read `files` directly: the image was "deleted" and
+/// still on screen. Only the client holds the key, so only the client can
+/// close that gap. Same division of labour as `mentions.rs` and `media.rs`.
+///
+/// # Best effort, deliberately
+///
+/// Every failure here is ignored. `DELETE /api/files/{id}` admits the uploader
+/// or a room admin, and any member may delete any *message* — so deleting
+/// somebody else's photo post legitimately answers 403, and that is not an
+/// error the person deleting should be shown. The message is already gone;
+/// reporting a partial cleanup they cannot act on would turn a success into a
+/// scary dialog.
+///
+/// A sealed message (`preview == None`) cleans up nothing, because this device
+/// cannot read which files it named. That is the honest outcome: the
+/// alternative is guessing.
+async fn remove_attachments(store: &crate::state::Store, preview: Option<&str>) {
+    let Some(text) = preview else {
+        return;
+    };
+    for id in crate::api::attachment_ids_in(text) {
+        let _ = store.client.delete_file(id).await;
+    }
+}
+
 /// Delete one message. Any member may delete any message — the copy says so
 /// rather than implying it is only your own.
 #[derive(Properties, PartialEq)]
@@ -58,6 +91,9 @@ pub fn delete_message(p: &DeleteMessageProps) -> Html {
         let error = error.clone();
         let id = p.message_id.clone();
         let on_deleted = p.on_deleted.clone();
+        // Captured before the task: the dialog is unmounted by the time the
+        // cleanup runs, so its props are not there to read.
+        let preview = p.preview.clone();
         Callback::from(move |_: ()| {
             busy.set(true);
             // The readout first: the machine acquires the target and purges the
@@ -71,6 +107,7 @@ pub fn delete_message(p: &DeleteMessageProps) -> Html {
             let error = error.clone();
             let id = id.clone();
             let on_deleted = on_deleted.clone();
+            let preview = preview.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 // 1. The machine works. Nothing has been destroyed yet, so a
                 //    failure after this point still has a row to restore.
@@ -99,7 +136,10 @@ pub fn delete_message(p: &DeleteMessageProps) -> Html {
                 // already reads as gone.
                 dissolve_sleep(DISSOLVE_MS).await;
                 match store.client.delete_message(&id).await {
-                    Ok(()) => on_deleted.emit(()),
+                    Ok(()) => {
+                        remove_attachments(&store, preview.as_deref()).await;
+                        on_deleted.emit(())
+                    }
                     Err(e) => {
                         // It is still there. Stop pretending otherwise.
                         store.dispatch(crate::state::Action::UndoDissolve(id.clone()));
