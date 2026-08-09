@@ -219,17 +219,21 @@ pub fn avatar_picker() -> Html {
             let busy = busy.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let lang = store.language;
-                let blob: web_sys::Blob = file.into();
-                let Ok(buffer) = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await
-                else {
-                    busy.set(false);
-                    return;
-                };
-                let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-                match store.client.upload_image(&mime, bytes).await {
-                    Ok(url) => {
-                        save(&store, &username, &url).await;
-                    }
+                // Chunked like a message attachment (`actions::attach_files`)
+                // — a picked avatar is a `File` handle already, so there is
+                // no reason for this path to read it whole either.
+                let target = crate::api::uploads::Target::Image { mime };
+                match store.client.upload_in_chunks(&file, target, |_| {}).await {
+                    Ok(resp) => match resp.get("url").and_then(|v| v.as_str()) {
+                        Some(url) => {
+                            save(&store, &username, url).await;
+                        }
+                        None => toast::error(
+                            &store,
+                            t(lang, Key::avatar_update_failed),
+                            Some("server response had no url".to_owned()),
+                        ),
+                    },
                     Err(e) => {
                         toast::error(
                             &store,

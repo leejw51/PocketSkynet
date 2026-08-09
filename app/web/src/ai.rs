@@ -641,10 +641,22 @@ pub async fn poll_video(
 /// send no CORS headers for the browser to read the bytes itself.
 pub async fn host_generation(client: &crate::api::Client, out: ImageOut) -> Result<String, String> {
     match out {
-        ImageOut::Bytes { mime, bytes } => client
-            .upload_image(&mime, bytes)
-            .await
-            .map_err(|e| e.user_message()),
+        // Chunked, like every other upload — a generated video can be tens of
+        // megabytes, and there is no reason for this path alone to still send
+        // it as one request just because the bytes started out in memory.
+        ImageOut::Bytes { mime, bytes } => {
+            let file = crate::api::uploads::file_from_bytes(&bytes, &mime, "generated")
+                .ok_or_else(|| "could not prepare the generated file for upload".to_owned())?;
+            let target = crate::api::uploads::Target::Image { mime };
+            let resp = client
+                .upload_in_chunks(&file, target, |_| {})
+                .await
+                .map_err(|e| e.user_message())?;
+            resp.get("url")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .ok_or_else(|| "server response had no url".to_owned())
+        }
         ImageOut::Url(url) => client
             .import_media(&url)
             .await

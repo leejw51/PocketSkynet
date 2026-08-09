@@ -148,7 +148,7 @@ pub fn is_video_file(file: &web_sys::File) -> bool {
         return true;
     }
     let name = file.name().to_ascii_lowercase();
-    [".mp4", ".m4v", ".webm", ".ogv"]
+    [".mp4", ".m4v", ".webm", ".ogv", ".mov"]
         .iter()
         .any(|ext| name.ends_with(ext))
 }

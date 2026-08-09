@@ -4,9 +4,7 @@ use gloo_net::http::Method;
 use pocketskynet_core::WalletAddress;
 use serde::Serialize;
 
-use super::{
-    ApiError, ApiResult, BlockchainInfo, Challenge, Client, LoginResponse, SaltResponse, User,
-};
+use super::{ApiResult, BlockchainInfo, Challenge, Client, LoginResponse, SaltResponse, User};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,22 +183,6 @@ impl Client {
     /// deserialize the same struct, so the two cannot drift.
     pub async fn networks(&self) -> ApiResult<Vec<pocketskynet_core::chain::Network>> {
         self.send(Method::GET, "/api/networks").await
-    }
-
-    /// Upload raw image or video bytes (an AI generation) and get back a
-    /// same-origin URL that can be pasted into a room.
-    pub async fn upload_image(&self, mime: &str, bytes: Vec<u8>) -> ApiResult<String> {
-        let req = self
-            .build(Method::POST, "/api/images")
-            .header("Content-Type", mime)
-            .body(js_sys::Uint8Array::from(bytes.as_slice()))
-            .map_err(|e| ApiError::Network(e.to_string()))?;
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ApiError::Network(e.to_string()))?;
-        let hosted: Hosted = super::decode(resp).await?;
-        Ok(hosted.url)
     }
 
     /// Re-host a provider's **temporary** media URL on this server, and get

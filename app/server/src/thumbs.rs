@@ -94,7 +94,7 @@ pub fn is_thumbable_image(ext: &str) -> bool {
 /// The video extensions the stores serve — the set a client-captured frame
 /// may be posted for.
 pub fn is_video(ext: &str) -> bool {
-    matches!(ext, "mp4" | "m4v" | "webm" | "ogv")
+    matches!(ext, "mp4" | "m4v" | "webm" | "ogv" | "mov")
 }
 
 /// Decode, downscale and re-encode. `None` for anything that is not a

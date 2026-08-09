@@ -1,7 +1,21 @@
 # Browser tests for large file transfers
 
-Two things about a 4 GB upload cannot be tested anywhere but a real browser, and
-both were found by these scripts rather than by review:
+Two kinds of test live here, and they answer different questions.
+
+`chunksize.js` is hermetic — it boots its own throwaway server (`harness.js`,
+the same contract as `tests/integration/supervisor.py::Backend`) and tears it
+down when it's done — and is part of plain `make test` (`make
+test-chunksize`, or transitively via `integrationtest`). It exists because
+`server/tests/uploads.rs` can only check what the server *advertises*
+(`chunkSize` in the `begin` response); it cannot see whether the real WASM
+client obeys it. This does: a small file goes up through a real browser, and
+every `PATCH …?offset=` on the wire is checked against the 500 KiB default.
+
+`upload.js`, `resume.js`, `movie.js`, `storm.js` are not — they drive a
+**running** server rather than starting one, and move real 120 MB–400 MB
+files, because what they're checking cannot be shrunk without checking
+something else. Both things below were found by these scripts rather than
+by review:
 
 * **The client must never hold the file.** A `Vec<u8>` of the attachment is one
   line away at all times, and nothing in the Rust type system objects — the
@@ -19,8 +33,18 @@ that suite structurally cannot: the browser.
 
 ## Running them
 
-They drive a **running server** rather than starting one, because they are
-checking the thing that was actually built:
+`chunksize.js` needs nothing running first — `make test-chunksize` (from
+`app/`) builds what it needs and boots its own server. Run it directly for
+faster iteration once `make build` has already happened:
+
+```sh
+cd tests/browser
+npm install && npx playwright install chromium   # once
+node chunksize.js
+```
+
+The other four drive a **running server** rather than starting one, because
+they are checking the thing that was actually built:
 
 ```sh
 make restart          # from app/
@@ -37,12 +61,22 @@ Both accept `SIZE_MB` (default 120) and `BIG` (the scratch file path);
 `resume.js` also takes `BREAK_AT_PCT`, the point at which it reloads the page
 mid-transfer.
 
-`resume.js` exits non-zero when the second attempt fails to resume, so it works
-as a check. `upload.js` reports rather than asserts — its value is the network
-log it prints, which is what tells you whether a change quietly went back to
+`resume.js` and `chunksize.js` exit non-zero on failure, so both work as a
+check. `upload.js` reports rather than asserts — its value is the network log
+it prints, which is what tells you whether a change quietly went back to
 sending the file in one request.
 
 ## What they assert
+
+`chunksize.js`
+
+* the server's `POST /api/uploads` response advertises `chunkSize: 512000`
+  (500 KiB)
+* every `PATCH …?offset=` on the wire is exactly 500 KiB, except the final
+  (short) one — not adaptive, not the old 8 MB default
+* offsets are contiguous and sum to the file size, and the upload arrives in
+  more than one request — catching a regression back to sending the file in
+  one shot, the same failure mode `upload.js` watches for at a larger size
 
 `movie.js`
 

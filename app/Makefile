@@ -304,7 +304,7 @@ unittest: ## Unit tests — workspace libraries and binaries, plus web client lo
 	@echo "==> web client tests"
 	cd web && $(CARGO) test
 
-# Two halves, both hermetic. The Rust suite boots one server per test file
+# Three parts, all hermetic. The Rust suite boots one server per test file
 # and probes edges (TLS, HTTP/3, compression, tampered JWTs). The Python
 # supervisor boots one shared backend on its own port with its own data
 # directory, walks every user-facing flow end to end — auth, rooms, DMs,
@@ -313,8 +313,11 @@ unittest: ## Unit tests — workspace libraries and binaries, plus web client lo
 # then stops the backend and deletes the directory, pass or fail. A second
 # backend boots with --tls --http3 to prove the self-signed-certificate
 # deployment: a CA minted on the fly that verifies, HTTP/3 advertised, the
-# QUIC listener answering, and the HTTP→HTTPS redirect in place.
-integrationtest: test-integration-rust test-integration-python ## Integration tests — Rust suite + Python supervisor
+# QUIC listener answering, and the HTTP→HTTPS redirect in place. The
+# Playwright check boots a third, real-browser backend to confirm the WASM
+# client actually chunks uploads the way the other two can only see it
+# *advertised* — see tests/browser/README.md.
+integrationtest: test-integration-rust test-integration-python test-chunksize ## Integration tests — Rust suite + Python supervisor + browser chunk-size check
 
 test-integration-rust: ## Rust end-to-end tests against servers they start themselves
 	@echo "==> integration tests (rust)"
@@ -324,6 +327,28 @@ test-integration-python: ## Full-flow suite via the Python supervisor (tests/int
 	@echo "==> integration tests (python supervisor)"
 	$(CARGO) build -p pocketskynet-server
 	python3 tests/integration/run.py
+
+# Hermetic like the two above — boots its own server (tests/browser/harness.js)
+# and tears it down — but through a real browser, because that is the only
+# way to see whether the client obeys the chunk size the server advertises,
+# not just whether the server advertises the right one. Deliberately a small
+# file: the property under test is chunk size, which is not truer at 120 MB,
+# so this stays cheap enough for plain `make test` while the large-file
+# checks below stay opt-in.
+test-chunksize: build ## Hermetic Playwright check that uploads chunk at 0.5 MB
+	@echo "==> chunk-size regression test (playwright)"
+	@command -v node >/dev/null \
+		|| { echo "ERROR: node not found. Install Node.js"; exit 1; }
+	cd tests/browser && npm install --no-audit --no-fund
+	# The browser is a separate download from the npm package — `npm install`
+	# alone leaves the test failing with "Executable doesn't exist", which is
+	# a fresh clone and a fresh CI runner both. Idempotent and near-instant
+	# once it is cached. `--with-deps` installs the system libraries Chromium
+	# links against, which a runner needs and a developer's machine already
+	# has; it shells out to apt-get, so it is gated on the passwordless sudo
+	# only CI has.
+	cd tests/browser && npx playwright install $(if $(CI),--with-deps,) chromium
+	cd tests/browser && node chunksize.js
 
 test-browser: ## Large-file transfer checks against a *running* server (see tests/browser/README.md)
 	@echo "==> browser transfer tests (run 'make restart' first)"

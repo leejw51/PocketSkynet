@@ -206,9 +206,23 @@ pub fn publish(p: &PublishProps) -> Html {
                             hash
                         }
                     };
+                    // Chunked, like every other upload — a zipped site can be
+                    // tens of megabytes, and whether its bytes started as a
+                    // picked file or pasted text is not a reason to send them
+                    // any differently.
+                    let file = crate::api::uploads::file_from_bytes(
+                        &bytes,
+                        "application/octet-stream",
+                        &page_title,
+                    )
+                    .ok_or_else(|| "could not prepare the page for upload".to_owned())?;
+                    let target = crate::api::uploads::Target::Site {
+                        title: page_title.clone(),
+                        tx_hash,
+                    };
                     store
                         .client
-                        .publish_site(&page_title, &tx_hash, bytes)
+                        .upload_in_chunks(&file, target, |_| {})
                         .await
                         .map_err(|e| e.user_message())
                 }

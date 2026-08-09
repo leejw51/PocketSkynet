@@ -3011,6 +3011,11 @@ pointer advanced past an `edit` costs nothing.
 is still capped at **25 MB**, because it still buffers. Anything larger is a
 *session*: begin, append, finish. The ceiling is **4 GB** for every kind.
 
+`begin` advertises a default `chunkSize` of **500 KiB (0.5 MB)** — small
+enough that a dropped connection on a lossy link (cellular, a flaky VPN hop)
+costs one chunk, not megabytes. It is advisory, not enforced: a client may
+send less, and the only hard limit is the 16 MB per-chunk ceiling above.
+
 ```text
 POST   /api/uploads               → 201 { id, offset, size, chunkSize }
 PATCH  /api/uploads/{id}?offset=N → 200 { offset, size }   (raw bytes, ≤ 16 MB)
