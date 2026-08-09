@@ -250,6 +250,10 @@ UNAME_S := $(shell uname -s)
 APP_BUNDLE := target/release/bundle/macos/PocketSkynet.app
 DMG_OUT    := target/release/bundle/dmg/PocketSkynet_$(VERSION)_$(shell uname -m).dmg
 GUI_BIN    := pocketskynet-gui
+# Where installable artifacts land after `make package` — the repository root,
+# so they sit next to where `make` is usually invoked instead of deep in
+# target/. `abspath` so the path printed at the end pastes cleanly.
+DIST_DIR   ?= $(abspath $(CURDIR)/../dist)
 
 # The app bundle and the installer are separate `tauri` invocations because
 # Tauri's own DMG step drives Finder over AppleScript and dies without a desktop
@@ -265,12 +269,24 @@ package: web ## Bundle the desktop app
 	@# the one build that cannot fall back to reading them at runtime.
 	@$(BAKE_ENV) cd gui && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" $(CARGO) tauri build --bundles app
 	@$(MAKE) --no-print-directory package-installer
+	@mkdir -p "$(DIST_DIR)"
+	@# `ditto` rather than `cp -R` for the .app: it preserves the code
+	@# signature and extended attributes the bundle was signed with.
+	@test -d "$(APP_BUNDLE)" \
+		&& ditto "$(APP_BUNDLE)" "$(DIST_DIR)/PocketSkynet.app" || true
+	@find target/release/bundle -maxdepth 3 \
+		\( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.exe' \) \
+		-not -name 'rw.*' \
+		-exec cp -f {} "$(DIST_DIR)/" \; 2>/dev/null || true
 	@echo ""
 	@echo "  built:"
 	@find target/release/bundle -maxdepth 3 \
 		\( -name '*.dmg' -o -name '*.app' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.exe' \) \
 		-not -name 'rw.*' \
 		-print 2>/dev/null | sed 's/^/    /' || true
+	@echo ""
+	@echo "  copied to $(DIST_DIR):"
+	@ls -1 "$(DIST_DIR)" 2>/dev/null | sed 's/^/    /' || true
 	@echo ""
 	@echo "  compiled binary:"
 	@test -f "$(CURDIR)/target/release/$(GUI_BIN)" \

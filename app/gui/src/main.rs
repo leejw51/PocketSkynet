@@ -105,18 +105,22 @@ fn main() {
                 // name, so it advertises like the CLI server does.
                 advertise: true,
                 trust_proxy: 0,
-                // Plain HTTP, deliberately. The window loads the server over
-                // loopback, and a webview meets a self-signed certificate with
-                // a hard failure and no way to accept it — the app would open
-                // on an error page. `make start --tls` is the answer when the
-                // server is meant to be reached from a phone or a tablet.
-                tls: pocketskynet_server::config::Tls::Off,
+                // HTTPS for the network: phones and tablets that open the
+                // shared URL get an encrypted connection and the secure
+                // context the client's crypto needs.
+                tls: pocketskynet_server::config::Tls::SelfSigned,
                 http_redirect_port: None,
-                // No HTTP/3 either, for the same reason and one more: the
-                // window talks to the server over loopback, where QUIC's
-                // advantages (loss recovery, connection migration) do not
-                // exist and its userspace packet handling is pure overhead.
+                // No HTTP/3: the window talks to the server over loopback,
+                // where QUIC's advantages (loss recovery, connection
+                // migration) do not exist and its userspace packet handling
+                // is pure overhead.
                 http3_port: None,
+                // The window itself cannot use the HTTPS listener — a webview
+                // meets a self-signed certificate with a hard failure and no
+                // way to accept it — so the same app is also served over
+                // plain HTTP on a loopback-only ephemeral port, and that is
+                // what the window loads.
+                loopback_http_port: Some(0),
             };
 
             // Persisted next to the database: regenerating it on every launch
@@ -159,10 +163,12 @@ fn main() {
             println!("{storage}");
             tracing::info!(?data_dir, "embedded server ready");
 
-            // The window is always loaded over loopback even when the server is
-            // reachable from the network — no reason to route our own traffic
-            // through an external interface.
-            let own_url = format!("http://127.0.0.1:{}", addr.port());
+            // The window is always loaded over the plain-HTTP loopback
+            // listener, never the HTTPS one — the webview would refuse the
+            // self-signed certificate. Loopback plain HTTP is still a secure
+            // context, so the client's crypto works in the window too.
+            let own_port = bound.loopback_port.unwrap_or_else(|| addr.port());
+            let own_url = format!("http://127.0.0.1:{own_port}");
 
             // The shareable address lives in the title bar, because a desktop
             // app has nowhere else to put it and "what URL do I give them?" is
