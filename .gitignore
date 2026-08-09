@@ -14,3 +14,4 @@ app/tests/e2e/test-results/
 app/test-results/
 app/tests/e2e/playwright-report/
 app/tests/browser/*.png
+dist/
