@@ -93,8 +93,8 @@ pub const MAX_UPLOAD_BYTES: f64 = 4.0 * 1024.0 * 1024.0 * 1024.0 - 1.0;
 
 /// Fallback when the server does not name one. The server always does; this
 /// exists so a malformed response degrades to a working upload rather than a
-/// division by zero.
-const FALLBACK_CHUNK: f64 = 8.0 * 1024.0 * 1024.0;
+/// division by zero. Matches the server's default (`SUGGESTED_CHUNK_BYTES`).
+const FALLBACK_CHUNK: f64 = 500.0 * 1024.0;
 
 /// How many times one chunk is retried before the upload gives up.
 ///
@@ -139,7 +139,21 @@ const FLOOR_BYTES_PER_MS: f64 = 131.0;
 
 /// Where the halving stops. Small enough that a link this side of unusable can
 /// finish one inside its budget; large enough that progress is still real.
-const MIN_CHUNK: f64 = 512.0 * 1024.0;
+///
+/// Must stay **below** the chunk size the server advertises, or halving stops
+/// being halving: this is a `.max()` floor, so a floor above the current chunk
+/// silently *raises* it, and a timeout — the one event that means "ask for
+/// less" — would ask for more. That is not hypothetical. This was 512 KiB
+/// while the server suggested 8 MB, and when the suggestion became 500 KB the
+/// floor landed 12,288 bytes above it: every timed-out chunk grew to 524,288
+/// and, worse, past the ceiling the server had named.
+const MIN_CHUNK: f64 = 128.0 * 1024.0;
+
+/// The invariant above, enforced at compile time rather than left to a test,
+/// because breaking it does not look like a bug at the call site — it is one
+/// `.max()` doing the opposite of what its line reads as. Whoever next edits
+/// either constant fails the build instead of the field.
+const _: () = assert!(MIN_CHUNK < FALLBACK_CHUNK);
 
 /// Where a transfer starts, before the link has proven anything: TCP's slow
 /// start, applied a layer up.
@@ -151,6 +165,14 @@ const MIN_CHUNK: f64 = 512.0 * 1024.0;
 /// third request and pays the small start almost nothing; a struggling one
 /// stays where its budget is short and its retries are cheap. The shrink half
 /// of the same idea lives at the timeout branch in [`upload_in_chunks`].
+///
+/// Inert at the current default: the server suggests 500 KB, which is below
+/// this, so `ceiling.min(INITIAL_CHUNK)` opens at the ceiling and the ramp has
+/// nowhere to climb — every chunk is 500 KB, which is the point (the reference
+/// implementation reaches the same place by setting its min, max and start to
+/// one value). The machinery is kept rather than deleted because it is the
+/// server's number that decides this, and a deployment that raises the
+/// suggestion gets the slow start back without a client change.
 const INITIAL_CHUNK: f64 = 2.0 * 1024.0 * 1024.0;
 
 /// The message every timed-out request carries, and the marker
@@ -350,7 +372,13 @@ impl Client {
                     // without this a link slower than the budget's floor rate
                     // would retry the same too-big chunk forever.
                     if matches!(&e, ApiError::Network(m) if m == TIMED_OUT) {
-                        chunk = (chunk / 2.0).max(MIN_CHUNK);
+                        // Clamped to the ceiling as well as the floor: the
+                        // floor is the smaller of the two only while the
+                        // server's suggestion is larger than it, and a branch
+                        // reached by *failure* must never be the one that
+                        // hands the next attempt more than the server asked
+                        // for.
+                        chunk = (chunk / 2.0).max(MIN_CHUNK).min(ceiling);
                     }
                     // Ask the server where it really is and carry on from
                     // there. This covers the common case — the chunk landed
@@ -693,6 +721,29 @@ fn stored_session(_key: &str) -> Option<String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn forget_session(_key: &str) {}
 
+/// Wrap bytes that started as bytes — an AI generation, never a picked file —
+/// in a `File`, so they can go through [`Client::upload_in_chunks`] like
+/// everything else instead of the old whole-body `POST /api/images`.
+///
+/// `upload_in_chunks` takes a `File` rather than a `Blob` only because that is
+/// what a `<input type=file>` hands the composer; nothing in the chunking
+/// logic actually needs the extra `File` fields, so building one around bytes
+/// already in memory is a fair way to reuse it rather than a workaround.
+#[cfg(target_arch = "wasm32")]
+pub fn file_from_bytes(bytes: &[u8], mime: &str, filename: &str) -> Option<web_sys::File> {
+    let array = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::new();
+    parts.push(&array);
+    let opts = web_sys::FilePropertyBag::new();
+    opts.set_type(mime);
+    web_sys::File::new_with_u8_array_sequence_and_options(&parts, filename, &opts).ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn file_from_bytes(_bytes: &[u8], _mime: &str, _filename: &str) -> Option<web_sys::File> {
+    None
+}
+
 /// SHA-256 of a blob, read in slices.
 pub async fn checksum<F>(blob: &web_sys::Blob, size: f64, on_progress: &mut F) -> ApiResult<String>
 where
@@ -847,21 +898,41 @@ mod tests {
 
     #[test]
     fn a_transfer_ramps_up_to_the_ceiling_and_not_past_it() {
-        // Slow start: the opening chunk is the small probe, not the ceiling…
-        let ceiling = FALLBACK_CHUNK;
+        // A ceiling above the opening probe is the case the ramp exists for:
+        // start small, double per landed chunk, stop at what the server said.
+        let ceiling: f64 = 8.0 * 1024.0 * 1024.0;
         let mut chunk = ceiling.min(INITIAL_CHUNK);
         assert_eq!(chunk, INITIAL_CHUNK);
-        // …two landed chunks later a healthy link is at full size…
         chunk = (chunk * 2.0).min(ceiling);
         chunk = (chunk * 2.0).min(ceiling);
         assert_eq!(chunk, ceiling);
-        // …and success past that point never grows beyond what the server
-        // suggested.
+        // Success past that point never grows beyond what the server suggested.
         chunk = (chunk * 2.0).min(ceiling);
         assert_eq!(chunk, ceiling);
-        // A server suggesting less than the opening probe wins outright.
-        let small_ceiling = INITIAL_CHUNK / 4.0;
-        assert_eq!(small_ceiling.min(INITIAL_CHUNK), small_ceiling);
+    }
+
+    #[test]
+    fn the_current_default_is_a_flat_500_kb_and_the_ramp_stays_out_of_its_way() {
+        // The server suggests less than the opening probe, so the ceiling wins
+        // outright: the transfer opens at 500 KB and every later chunk is the
+        // same 500 KB. No ramp, no adaptation — which is the whole point of
+        // the small default, and matches the reference implementation, whose
+        // min, max and start are one number for the same reason.
+        let ceiling = FALLBACK_CHUNK;
+        let mut chunk = ceiling.min(INITIAL_CHUNK);
+        assert_eq!(chunk, FALLBACK_CHUNK);
+        for _ in 0..4 {
+            chunk = (chunk * 2.0).min(ceiling);
+            assert_eq!(chunk, FALLBACK_CHUNK, "a landed chunk must not grow");
+        }
+        // And a timeout shrinks it — clamped to the ceiling, so the branch
+        // reached by failure can never hand back more than the server asked
+        // for. This is what the old 512 KiB floor got wrong against a 500 KB
+        // ceiling: it returned 524,288, both larger than the chunk that had
+        // just failed and larger than the ceiling itself.
+        let after_timeout = (chunk / 2.0).max(MIN_CHUNK).min(ceiling);
+        assert!(after_timeout < chunk, "a timeout must ask for less");
+        assert!(after_timeout <= ceiling, "and never more than the ceiling");
     }
 
     #[test]

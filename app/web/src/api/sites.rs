@@ -1,14 +1,17 @@
 //! Web publishing (docs/API.md §16.2).
 //!
 //! Pay the publish price to the server's FruitNation wallet and it hosts your
-//! page at `/sites/{id}/`. The upload is raw bytes — an HTML document or a
-//! zip — with the metadata in the query string, the same shape as attachment
-//! uploads. Deletion is open to any signed-in user by design.
+//! page at `/sites/{id}/`. The upload itself — an HTML document or a zip, the
+//! server sniffs the magic — goes through the chunked session protocol
+//! (`api::uploads::upload_in_chunks` with `Target::Site`, driven from
+//! `components/publish.rs`), not a function in this module; publishing is
+//! large enough (up to 25 MB) to deserve the same treatment as any other
+//! upload. Deletion is open to any signed-in user by design.
 
 use gloo_net::http::Method;
 use serde::Deserialize;
 
-use super::{encode_query, encode_segment, ApiError, ApiResult, Client};
+use super::{encode_segment, ApiResult, Client};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Site {
@@ -45,32 +48,6 @@ pub struct SitesListing {
 }
 
 impl Client {
-    /// `POST /api/sites` — publish. `bytes` is either an HTML document or a
-    /// zip (the server sniffs the magic); `tx_hash` must pay the publish
-    /// price and is burned on success.
-    pub async fn publish_site(
-        &self,
-        title: &str,
-        tx_hash: &str,
-        bytes: Vec<u8>,
-    ) -> ApiResult<Site> {
-        let path = format!(
-            "/api/sites?title={}&txHash={}",
-            encode_query(title),
-            encode_query(tx_hash),
-        );
-        let req = self
-            .build(Method::POST, &path)
-            .header("Content-Type", "application/octet-stream")
-            .body(js_sys::Uint8Array::from(bytes.as_slice()))
-            .map_err(|e| ApiError::Network(e.to_string()))?;
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ApiError::Network(e.to_string()))?;
-        super::decode(resp).await
-    }
-
     /// `GET /api/sites` — every hosted site, newest first, plus the base URL
     /// worth sharing.
     pub async fn sites(&self) -> ApiResult<SitesListing> {

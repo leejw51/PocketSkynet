@@ -595,6 +595,10 @@ pub(crate) const INLINE_MEDIA: &[(&str, &str)] = &[
     ("m4v", "video/mp4"),
     ("webm", "video/webm"),
     ("ogv", "video/ogg"),
+    // iPhone screen recordings and Camera-app clips default to this — without
+    // it, the single most common video a phone actually produces downloads
+    // instead of playing.
+    ("mov", "video/quicktime"),
 ];
 
 fn inline_media_mime(ext: &str) -> Option<&'static str> {

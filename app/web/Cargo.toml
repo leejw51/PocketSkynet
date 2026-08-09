@@ -106,11 +106,15 @@ features = [
     "WebGlVertexArrayObject",
     "WebGlUniformLocation",
     "PointerEvent",
-    # File/FileList: the composer's attach button reads a picked file's bytes
-    # locally before POSTing them. `Blob::array_buffer` covers the read, so
-    # FileReader is deliberately absent — one fewer API, and no event plumbing.
+    # File/FileList: the composer's attach button hands a picked file's handle
+    # to the chunked-upload client, which slices it with `Blob::slice` rather
+    # than reading it whole — FileReader is deliberately absent, one fewer API
+    # and no event plumbing. FilePropertyBag is for the opposite direction:
+    # wrapping bytes that started as bytes (an AI generation) in a `File` so
+    # they can go through the same chunked path (`ai.rs::host_generation`).
     "File",
     "FileList",
+    "FilePropertyBag",
     # Video thumbnails are captured in the browser (capture.rs): an offscreen
     # <video> seeks a frame and a 2D canvas re-draws it. HtmlMediaElement is
     # HtmlVideoElement's parent class, where currentTime/duration/readyState

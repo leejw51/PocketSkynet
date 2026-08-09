@@ -97,11 +97,15 @@ pub const MAX_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 
 /// What `begin` tells the client to use.
 ///
-/// 8 MB is a compromise between per-request overhead (a 4 GB file is 512
-/// requests at this size, 4096 at 1 MB) and how much work a dropped connection
-/// throws away. It is advisory: the client may send less, and the protocol
-/// does not care whether chunks are uniform.
-pub const SUGGESTED_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+/// 500 KiB, not a fraction of [`MAX_CHUNK_BYTES`]: on a lossy link — a phone
+/// on cellular or a flaky VPN hop — a dropped connection costs one chunk, and
+/// the point of chunking is to keep that cost small rather than to minimize
+/// request count. It is advisory: the client may send less, and the protocol
+/// does not care whether chunks are uniform. [`MAX_CHUNK_BYTES`] is a
+/// separate, much larger abuse ceiling and is not meant to track this number
+/// — it bounds what a client that ignores the suggestion can still get away
+/// with.
+pub const SUGGESTED_CHUNK_BYTES: usize = 500 * 1024;
 
 /// How long a session may go untouched before the sweep reclaims its disk.
 ///

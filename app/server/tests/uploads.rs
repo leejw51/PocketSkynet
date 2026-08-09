@@ -21,6 +21,7 @@
 mod common;
 
 use common::*;
+use pocketskynet_server::routes::uploads::SUGGESTED_CHUNK_BYTES;
 
 /// Deliberately not a round number and not a multiple of the chunk size below,
 /// so the final short chunk is always exercised.
@@ -251,8 +252,12 @@ async fn a_session_reports_where_to_resume_from() {
     let id = started.json()["id"].as_str().unwrap().to_owned();
     assert_eq!(started.json()["offset"], 0);
     // The server tells the client what chunk size to use rather than leaving
-    // it to guess.
-    assert!(started.json()["chunkSize"].as_u64().unwrap() > 0);
+    // it to guess — and the default is small on purpose, so a dropped
+    // connection on a lossy link costs one chunk, not megabytes.
+    assert_eq!(
+        started.json()["chunkSize"].as_u64().unwrap(),
+        SUGGESTED_CHUNK_BYTES as u64
+    );
 
     append(&server, &alice, &id, 0, &data[..20_000]).await;
 

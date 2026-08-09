@@ -4,7 +4,8 @@
   "description": "Large-file transfer checks that only a real browser can make",
   "scripts": {
     "upload": "node upload.js",
-    "resume": "node resume.js"
+    "resume": "node resume.js",
+    "chunksize": "node chunksize.js"
   },
   "devDependencies": {
     "playwright": "^1.62.0"

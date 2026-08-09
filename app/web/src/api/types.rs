@@ -745,7 +745,10 @@ impl FileMeta {
     }
 
     pub fn is_previewable_video(&self) -> bool {
-        matches!(self.extension().as_str(), "mp4" | "webm" | "m4v" | "ogv")
+        matches!(
+            self.extension().as_str(),
+            "mp4" | "webm" | "m4v" | "ogv" | "mov"
+        )
     }
 
     /// The mime to label a preview blob with.
@@ -764,6 +767,7 @@ impl FileMeta {
             "mp4" | "m4v" => "video/mp4",
             "webm" => "video/webm",
             "ogv" => "video/ogg",
+            "mov" => "video/quicktime",
             _ => "application/octet-stream",
         }
     }
@@ -892,7 +896,7 @@ mod tests {
 
     #[test]
     fn videos_are_previewable_and_carry_a_playable_mime() {
-        for name in ["a.mp4", "a.MP4", "a.webm", "a.m4v", "a.ogv"] {
+        for name in ["a.mp4", "a.MP4", "a.webm", "a.m4v", "a.ogv", "a.mov"] {
             assert!(file(name, 1).is_previewable_video(), "{name}");
             assert!(file(name, 1).preview_mime().starts_with("video/"), "{name}");
         }
@@ -900,8 +904,12 @@ mod tests {
         // preview_mime exists at all.
         assert_eq!(file("a.mp4", 1).preview_mime(), "video/mp4");
         assert_eq!(file("a.webm", 1).preview_mime(), "video/webm");
+        // .mov specifically: an iPhone screen recording or Camera-app clip is
+        // the single most common video this server ever receives, and it
+        // must not silently fall back to a download-only card.
+        assert_eq!(file("a.mov", 1).preview_mime(), "video/quicktime");
         // Not video, and must not be mistaken for it.
-        for name in ["a.pdf", "a.png", "a.mkv", "a.mov", "Makefile"] {
+        for name in ["a.pdf", "a.png", "a.mkv", "Makefile"] {
             assert!(!file(name, 1).is_previewable_video(), "{name}");
         }
         // The two predicates never both claim the same file.
