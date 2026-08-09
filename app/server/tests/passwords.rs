@@ -535,6 +535,13 @@ async fn the_list_is_ordered_by_last_change() {
         .await
         .expect_status(200);
 
+    // Distinct milliseconds, so "last change" is a total order rather than a
+    // tie. `updated_at` is milliseconds and these three writes otherwise land
+    // inside one, leaving `ORDER BY updated_at DESC, id ASC` to break the tie
+    // on a random id — which is the answer roughly half the time, and which
+    // has nothing to do with the behaviour under test.
+    tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+
     // Touching the older one moves it to the front.
     alice
         .api
