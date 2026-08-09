@@ -531,8 +531,12 @@ pub struct Bound {
     pub redirect_port: Option<u16>,
     /// The UDP port serving HTTP/3, if one came up.
     pub http3_port: Option<u16>,
+    /// The loopback plain-HTTP port serving the full app, if one was asked
+    /// for. This is the port the desktop webview loads.
+    pub loopback_port: Option<u16>,
     transport: Transport,
     redirect: Option<(std::net::TcpListener, axum::Router)>,
+    loopback: Option<(std::net::TcpListener, axum::Router)>,
     http3: Option<(http3::Http3Listener, axum::Router)>,
     router: axum::Router,
     log: Arc<JsonlLog>,
@@ -653,6 +657,27 @@ impl Bound {
                     .await
                 {
                     tracing::warn!(error = %e, "the HTTP redirect listener stopped");
+                }
+            });
+        }
+
+        // Real traffic, unlike the redirect listener — so it gets the same
+        // connect-info service the main listener uses.
+        if let Some((listener, router)) = self.loopback {
+            let stop = signalled(rx.clone());
+            tokio::spawn(async move {
+                let handle = axum_server::Handle::new();
+                let closing = handle.clone();
+                tokio::spawn(async move {
+                    stop.await;
+                    closing.graceful_shutdown(Some(GRACE));
+                });
+                if let Err(e) = axum_server::from_tcp(listener)
+                    .handle(handle)
+                    .serve(router.into_make_service_with_connect_info::<std::net::SocketAddr>())
+                    .await
+                {
+                    tracing::warn!(error = %e, "the loopback HTTP listener stopped");
                 }
             });
         }
@@ -897,6 +922,7 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
 
     let redirect_port = cfg.http_redirect_port;
     let http3_port = cfg.http3_port;
+    let loopback_http_port = cfg.loopback_http_port;
     let host = cfg.host;
 
     let state = AppState::build(cfg, secret)?;
@@ -957,6 +983,26 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
                 }
             }
         });
+
+    // The loopback listener serves the full router over plain HTTP, bound to
+    // 127.0.0.1 alone so it is never what the network sees. Unlike the
+    // redirect listener this is a hard failure: the desktop webview cannot
+    // load anything else when the main listener is HTTPS, so an app that
+    // "started" without it would open on an error page.
+    let loopback = match loopback_http_port {
+        Some(port) => {
+            let loopback_addr =
+                std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), port);
+            let listener = std::net::TcpListener::bind(loopback_addr).map_err(|source| {
+                BindError::Bind {
+                    addr: loopback_addr,
+                    source,
+                }
+            })?;
+            Some((listener, base_router.clone()))
+        }
+        None => None,
+    };
 
     // HTTP/3, on its own UDP socket. Unlike the redirect listener this is a
     // hard failure: it was explicitly asked for, and silently serving only TCP
@@ -1028,8 +1074,13 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
             .and_then(|(l, _)| l.local_addr().ok())
             .map(|a| a.port()),
         http3_port,
+        loopback_port: loopback
+            .as_ref()
+            .and_then(|(l, _)| l.local_addr().ok())
+            .map(|a| a.port()),
         transport,
         redirect,
+        loopback,
         // HTTP/3 serves the router *without* the Alt-Svc layer: advertising
         // an alternative service to a client already using it is noise.
         http3: http3.map(|listener| (listener, base_router)),
@@ -1123,6 +1174,7 @@ mod banner_tests {
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
             http3_port: None,
+            loopback_http_port: None,
         };
 
         assert_eq!(
@@ -1184,6 +1236,7 @@ mod banner_tests {
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
             http3_port: None,
+            loopback_http_port: None,
         };
         let banner = storage_banner(&cfg);
 
@@ -1235,6 +1288,57 @@ mod banner_tests {
         let banner = connect_banner(addr("192.168.1.24:9099"), Scheme::Http, None);
         assert!(banner.contains("http://192.168.1.24:9099"));
         assert!(!banner.contains("certificate"));
+    }
+}
+
+#[cfg(test)]
+mod loopback_tests {
+    use super::*;
+
+    /// The desktop configuration: HTTPS for the network, the same app over
+    /// plain HTTP on a loopback-only port for the webview. What matters is
+    /// that the loopback listener answers with the real router — a redirect
+    /// would leave the window on a certificate error page.
+    #[tokio::test]
+    async fn a_loopback_listener_serves_the_app_beside_https() {
+        let dir = test_support::tempdir("loopback");
+        let cfg = crate::config::Config {
+            host: "127.0.0.1".parse().unwrap(),
+            port: 0,
+            data_dir: dir.clone(),
+            static_dir: dir.join("static"),
+            jwt_ttl_hours: 24,
+            cors_origin: vec![],
+            sse_token_query: false,
+            rate_limit: false,
+            verify_payments: false,
+            advertise: false,
+            trust_proxy: 0,
+            tls: crate::config::Tls::SelfSigned,
+            http_redirect_port: None,
+            http3_port: None,
+            loopback_http_port: Some(0),
+        };
+        let secret = crate::config::Secret(vec![7u8; 32]);
+
+        let bound = bind(cfg, secret).await.expect("bind must succeed");
+        assert_eq!(bound.scheme, Scheme::Https, "the network listener is HTTPS");
+        let port = bound
+            .loopback_port
+            .expect("a loopback listener was asked for");
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(bound.serve(async move {
+            let _ = rx.await;
+        }));
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/api/health"))
+            .send()
+            .await
+            .expect("the loopback listener must answer plain HTTP");
+        assert_eq!(resp.status(), 200);
+        let _ = tx.send(());
     }
 }
 
@@ -1300,6 +1404,7 @@ mod test_support {
             tls: crate::config::Tls::Off,
             http_redirect_port: None,
             http3_port: None,
+            loopback_http_port: None,
         };
         let db = Db::open_temp().unwrap();
         let log = Arc::new(JsonlLog::open(dir.join("events")).unwrap());

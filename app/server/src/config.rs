@@ -203,6 +203,12 @@ pub struct Config {
     pub http_redirect_port: Option<u16>,
     /// UDP port for the HTTP/3 listener, when one was asked for.
     pub http3_port: Option<u16>,
+    /// Extra plain-HTTP listener on loopback serving the full app, when one
+    /// was asked for; `0` means an ephemeral port. The desktop app is the
+    /// customer: its webview meets a self-signed certificate with a hard
+    /// failure, so the window talks plain HTTP over loopback while the
+    /// network-facing listener serves HTTPS.
+    pub loopback_http_port: Option<u16>,
 }
 
 impl Config {
@@ -428,6 +434,9 @@ impl Cli {
             tls,
             http_redirect_port,
             http3_port,
+            // Only the embedded desktop server asks for this; the CLI has no
+            // flag for it.
+            loopback_http_port: None,
         };
         Ok((cfg, secret))
     }
