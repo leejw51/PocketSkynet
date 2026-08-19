@@ -282,16 +282,31 @@ fn is_renderable(row: &Value) -> bool {
     !is_event_row(row) && !row["isDeleted"].as_bool().unwrap_or(false)
 }
 
-/// `GET /rooms/{id}/messages` semantics over a room's rows (ascending in,
-/// ascending out): renderable, top-level only, newest `limit` before
-/// `before`, with `replyCount`/`lastReplyAt` summarising the hidden replies.
+fn row_ts(row: &Value) -> i64 {
+    row["messageTimestamp"].as_i64().unwrap_or(0)
+}
+
+fn row_serial(row: &Value) -> i64 {
+    row["msgSerial"].as_i64().unwrap_or(0)
+}
+
+/// `GET /rooms/{id}/messages` semantics over a room's rows: renderable,
+/// top-level only, newest `limit` before `before`, with
+/// `replyCount`/`lastReplyAt` summarising the hidden replies.
+///
+/// Rows arrive in serial-key order, but an **edit** moves its row to a fresh
+/// serial while keeping its original `messageTimestamp` — so serial order is
+/// not chronological order. Sort exactly as the server does (`ORDER BY
+/// message_timestamp, msg_serial`) before paging; without it, editing an old
+/// message would push it past genuinely newer rows and strand those off the
+/// first page, unreachable by the timestamp-based `before` cursor.
 pub fn history_page(rows: &[Value], before: Option<i64>, limit: usize) -> Vec<Value> {
     // Reply summaries are computed over the whole room, not the page — a root
     // inside the page can have replies outside it.
     let mut replies: BTreeMap<String, (i64, i64)> = BTreeMap::new();
     for row in rows.iter().filter(|r| is_renderable(r)) {
         if let Some(parent) = row["parentMessageId"].as_str() {
-            let ts = row["messageTimestamp"].as_i64().unwrap_or(0);
+            let ts = row_ts(row);
             let entry = replies.entry(parent.to_owned()).or_insert((0, 0));
             entry.0 += 1;
             entry.1 = entry.1.max(ts);
@@ -302,11 +317,12 @@ pub fn history_page(rows: &[Value], before: Option<i64>, limit: usize) -> Vec<Va
         .iter()
         .filter(|r| is_renderable(r) && r["parentMessageId"].as_str().is_none())
         .filter(|r| match before {
-            Some(b) => r["messageTimestamp"].as_i64().unwrap_or(0) < b,
+            Some(b) => row_ts(r) < b,
             None => true,
         })
         .cloned()
         .collect();
+    page.sort_by_key(|r| (row_ts(r), row_serial(r)));
     if page.len() > limit {
         page.drain(..page.len() - limit);
     }
@@ -334,14 +350,18 @@ pub fn thread_of(rows: &[Value], id: &str) -> Vec<Value> {
     let Some(root_id) = root_id else {
         return Vec::new();
     };
-    rows.iter()
+    let mut thread: Vec<Value> = rows
+        .iter()
         .filter(|r| is_renderable(r))
         .filter(|r| {
             r["id"].as_str() == Some(root_id.as_str())
                 || r["parentMessageId"].as_str() == Some(root_id.as_str())
         })
         .cloned()
-        .collect()
+        .collect();
+    // Chronological, not serial order — an edited reply keeps its place.
+    thread.sort_by_key(|r| (row_ts(r), row_serial(r)));
+    thread
 }
 
 /// `GET /messages/{id}/emoticons` semantics: fold the reaction event rows for
@@ -767,6 +787,38 @@ mod tests {
         assert_eq!(older[0]["id"], json!("m1"));
         let capped = history_page(&rows, None, 1);
         assert_eq!(capped[0]["id"], json!("m5"), "the newest survives a cap");
+    }
+
+    #[test]
+    fn editing_an_old_message_does_not_strand_newer_ones() {
+        let room = room_id();
+        let mut rows: Vec<Value> = (1..=3)
+            .map(|s| {
+                message_row(
+                    &body(&format!("m{s}")),
+                    &format!("m{s}"),
+                    &room,
+                    OWNER,
+                    s,
+                    s * 100,
+                )
+            })
+            .collect();
+        // Edit the *oldest*: it gets a fresh serial (4) but keeps ts 100, so
+        // in serial-key order it now sits after the genuinely newer rows.
+        apply_edit(&mut rows[0], &body("m1-edited"), 4, 999);
+        rows.rotate_left(1); // the store's key order after the edit: m2, m3, m1
+
+        // A capped first page must keep the chronologically newest rows, not
+        // the highest serials — or m3 would silently vanish from the room.
+        let page = history_page(&rows, None, 2);
+        let ids: Vec<&str> = page.iter().filter_map(|r| r["id"].as_str()).collect();
+        assert_eq!(ids, vec!["m2", "m3"]);
+
+        // And the timestamp cursor still reaches the edited old message.
+        let older = history_page(&rows, Some(200), 2);
+        let ids: Vec<&str> = older.iter().filter_map(|r| r["id"].as_str()).collect();
+        assert_eq!(ids, vec!["m1"]);
     }
 
     #[test]

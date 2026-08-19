@@ -178,10 +178,12 @@ async fn open_db() -> ApiResult<std::rc::Rc<db::Db>> {
     db::open(owner.as_str()).await.map_err(storage)
 }
 
-fn rand4() -> [u8; 4] {
+/// Four bytes of id entropy. A CSPRNG refusal is an error, not a shrug —
+/// zeroed entropy plus a same-millisecond timestamp would mint colliding ids.
+fn rand4() -> ApiResult<[u8; 4]> {
     let mut bytes = [0u8; 4];
-    let _ = getrandom::getrandom(&mut bytes);
-    bytes
+    getrandom::getrandom(&mut bytes).map_err(|e| storage(format!("CSPRNG refused: {e}")))?;
+    Ok(bytes)
 }
 
 /// The two rooms local mode has, or a 403 for anything else — matching the
@@ -359,7 +361,7 @@ async fn send_message(room: &str, body: &Value, as_agent: bool) -> ApiResult<Val
         owner
     };
     let now = format::now_ms();
-    let id = logic::mint_message_id(now, rand4());
+    let id = logic::mint_message_id(now, rand4()?);
     let d = open_db().await?;
     let room_owned = room.to_owned();
     let body = body.clone();
@@ -487,7 +489,7 @@ async fn purge_room(room: &str) -> ApiResult<Value> {
         .await
         .map_err(storage)?;
     let now = format::now_ms();
-    let id = logic::mint_message_id(now, rand4());
+    let id = logic::mint_message_id(now, rand4()?);
     let room = room.to_owned();
     d.commit_with_serial(move |serial| {
         let row = logic::purge_marker(&id, &room, owner.as_str(), serial, now);
@@ -510,7 +512,7 @@ async fn react(id: &str, code: &str, add: bool) -> ApiResult<Value> {
     let (room, _, _) = find_message(&d, id).await?;
     let (owner, _) = check_room(&room)?;
     let now = format::now_ms();
-    let event_id = logic::mint_message_id(now, rand4());
+    let event_id = logic::mint_message_id(now, rand4()?);
     let target = id.to_owned();
     let code = code.to_owned();
     d.commit_with_serial(move |serial| {
@@ -639,7 +641,7 @@ async fn teach(body: &Value) -> ApiResult<Value> {
     }
     let d = open_db().await?;
     let now = format::now_ms();
-    let id = logic::mint_note_id(now, rand4());
+    let id = logic::mint_note_id(now, rand4()?);
     let tags = logic::extract_tags(&content);
     let sealed = super::seal(&format!("local:knowledge:{id}"), &content)?;
     let stored = json!({
@@ -693,6 +695,11 @@ async fn knowledge_list(limit: usize) -> ApiResult<Value> {
     Ok(json!({ "notes": notes }))
 }
 
+/// Knowledge notes only, deliberately — parity, not a gap. The server's
+/// hybrid `/api/search` indexes *plaintext* messages; every local room is
+/// E2EE, and a real server cannot search those either. Message search over
+/// encrypted rooms happens where the keys are — Jarvis's `search_rooms`
+/// scans decrypted rows on the device, in both modes.
 async fn search(q: &str, limit: usize) -> ApiResult<Value> {
     let notes = open_notes().await?;
     let (tags, terms) = logic::parse_query(q);

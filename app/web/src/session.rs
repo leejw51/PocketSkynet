@@ -678,8 +678,14 @@ pub fn save_server_base(url: &str) {
 }
 
 /// Canonical form of a user-typed server address: trimmed, without a trailing
-/// slash, and with a scheme — a bare `host:port` is prefixed with `http://`
-/// rather than rejected, because that is what people type for a LAN server.
+/// slash, and with a scheme — a bare `host:port` is prefixed rather than
+/// rejected, because that is what people type for a LAN server.
+///
+/// The default scheme is `https://`: it is what `make start` serves, and a
+/// bundle on an HTTPS static host cannot call an `http://` API anyway (mixed
+/// content), so defaulting to `http://` would doom exactly the deployment
+/// the field exists for. A plain-HTTP server is still reachable by typing
+/// the scheme out.
 pub fn normalize_server_base(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
@@ -688,8 +694,25 @@ pub fn normalize_server_base(url: &str) -> String {
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         trimmed.to_owned()
     } else {
-        format!("http://{trimmed}")
+        format!("https://{trimmed}")
     }
+}
+
+/// Resolve a server-relative `/api/…` URL against the chosen server base,
+/// for render sites (avatars, portraits) that have no `Client` at hand.
+///
+/// Only `/api/` paths move: they are the server's, while `/static/…` presets
+/// and page assets belong to the origin that served the bundle and must stay
+/// relative. Same-origin deployments and local mode leave everything
+/// untouched.
+pub fn absolute_api_url(url: String) -> String {
+    if url.starts_with("/api/") && !ConnectionMode::load().is_local() {
+        let base = server_base();
+        if !base.is_empty() {
+            return format!("{base}{url}");
+        }
+    }
+    url
 }
 
 /// Load a room's persisted sync high-water mark. A position, never content.
@@ -815,10 +838,12 @@ mod tests {
 
     #[test]
     fn a_typed_server_address_is_normalised_not_rejected() {
-        // What people type for a LAN server gets a scheme, not an error.
+        // What people type for a LAN server gets a scheme, not an error —
+        // https, because that is what `make start` serves and the only thing
+        // an HTTPS page may call; plain HTTP must be typed out.
         assert_eq!(
             normalize_server_base("192.168.0.7:9099"),
-            "http://192.168.0.7:9099"
+            "https://192.168.0.7:9099"
         );
         // Explicit schemes survive, trailing slashes never do — `Client::url`
         // concatenates paths that start with `/`.

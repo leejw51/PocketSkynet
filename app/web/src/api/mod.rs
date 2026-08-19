@@ -172,6 +172,14 @@ impl Client {
     }
 
     fn build(&self, method: Method, path: &str) -> RequestBuilder {
+        // A local client must never construct a network request: any call
+        // here in local mode is a funnel bypass missing its local branch
+        // (the list in the type docs). Debug-only — in release the request
+        // fails like any network error rather than crashing the tab.
+        debug_assert!(
+            !self.local,
+            "local-mode network request to {path} — add a local branch"
+        );
         let mut req = RequestBuilder::new(&self.url(path)).method(method);
         if let Some(t) = &self.token {
             // Standard `Bearer <token>`. The reference server also accepts a
@@ -246,17 +254,17 @@ impl Client {
     /// polling it cannot lock the caller out, and it probes the database rather
     /// than only proving the HTTP stack is up.
     ///
-    /// Any completed *API* response counts, including a 5xx. This asks "is
-    /// there a server on the other end", not "is it healthy" — a server
-    /// returning 500 is one whose errors the user should see, not one to hide
-    /// behind a dead button.
+    /// Reachable means an **API-shaped** answer — a JSON body — whatever the
+    /// status. The real health endpoint answers JSON both when healthy (200)
+    /// and when its database is down (503), so a sick server still counts:
+    /// this asks "is there a server on the other end", not "is it well".
     ///
-    /// The one 2xx that does **not** count is an HTML body. A static host
-    /// serving this bundle (Cloudflare Pages, `trunk serve`) answers every
-    /// path — `/api/health` included — with the SPA fallback page, status
-    /// 200. That is a file server, not a PocketSkynet server, and counting it
-    /// would leave a Pages visitor with an app that looks online and fails on
-    /// every call. The real health endpoint answers JSON.
+    /// What does *not* count is anything else a completed request can be. A
+    /// static host serving this bundle answers `/api/health` with the SPA
+    /// fallback page (200, HTML) or a plain 404 — a file server, not a
+    /// PocketSkynet server, and counting either would leave a static-host
+    /// visitor with an app that looks online and fails on every call, and a
+    /// login-screen "Test" button that says any address at all is answering.
     pub async fn reachable(&self) -> bool {
         // The local backend is always "there" — it is this tab. Answering true
         // keeps `AppState.online` up, so the composer never disables and the
@@ -268,15 +276,10 @@ impl Client {
             return false;
         };
         match req.send().await {
-            Ok(resp) => {
-                let status = resp.status();
-                if !(200..300).contains(&status) {
-                    return true;
-                }
-                resp.headers()
-                    .get("content-type")
-                    .is_some_and(|ct| ct.to_ascii_lowercase().contains("json"))
-            }
+            Ok(resp) => resp
+                .headers()
+                .get("content-type")
+                .is_some_and(|ct| ct.to_ascii_lowercase().contains("json")),
             Err(_) => false,
         }
     }

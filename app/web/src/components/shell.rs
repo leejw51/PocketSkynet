@@ -74,6 +74,9 @@ pub fn shell(p: &ShellProps) -> Html {
                         .auth
                         .profile_image()
                         .and_then(|i| crate::identity::avatar_src(skin, i))
+                        // Server-relative avatar paths need the API base when
+                        // the bundle is served from elsewhere.
+                        .map(crate::session::absolute_api_url)
                         .unwrap_or_else(|| {
                             crate::asset::img(skin, crate::identity::art_for(&seed))
                         }),

@@ -992,15 +992,23 @@ pub(crate) fn use_media_src(url: Option<AttrValue>) -> Option<AttrValue> {
     let resolved = use_state(|| Option::<AttrValue>::None);
     {
         let resolved = resolved.clone();
-        let client = store.client.clone();
-        use_effect_with(url, move |url| {
+        // The client is part of the key: switching backends mid-session must
+        // re-resolve, not serve the previous mode's answer.
+        use_effect_with((url, store.client.clone()), move |(url, client)| {
             match url {
                 None => resolved.set(None),
-                Some(url) if client.is_local() => {
+                // Only hosted-media paths live in the local store. External
+                // links (a pasted https:// image) pass straight through — and
+                // a store *miss* falls back to the original URL, so the
+                // element mounts, errors, and shows the failed row with the
+                // link, instead of spinning forever.
+                Some(url) if client.is_local() && url.starts_with("/api/images/") => {
                     let url = url.to_string();
                     resolved.set(None);
+                    let resolved = resolved.clone();
                     wasm_bindgen_futures::spawn_local(async move {
-                        resolved.set(crate::local::media_url(&url).await.map(AttrValue::from));
+                        let out = crate::local::media_url(&url).await.unwrap_or(url);
+                        resolved.set(Some(AttrValue::from(out)));
                     });
                 }
                 Some(url) => resolved.set(Some(AttrValue::from(client.absolute(url)))),

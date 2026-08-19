@@ -159,13 +159,25 @@ pub fn request_persistence() {}
 /// data" clear `localStorage` wholesale, and losing the salt would orphan
 /// every sealed row forever. In server mode the salt is the server's secret;
 /// here the device is the trust boundary, so the device holds it.
+///
+/// A stored salt that fails validation is **refused, never replaced**. A
+/// fresh salt derives different keys, so overwriting would permanently
+/// orphan every sealed row — and destroy the one value that might still
+/// recover them. An error is recoverable (inspect the database, restore a
+/// backup, or erase deliberately); a silent overwrite is not.
 pub async fn get_or_create_salt() -> Result<String, String> {
     let owner = owner().map_err(|e| e.user_message())?;
     let d = db::open(owner.as_str()).await?;
     if let Some(salt) = d.get(db::META, "salt").await? {
-        if salt.len() == 64 {
+        if salt.len() == 64 && salt.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Ok(salt);
         }
+        return Err(
+            "This account's local encryption salt is unreadable. Refusing to replace it — \
+             a new salt would make every stored note and password permanently undecryptable. \
+             Use Settings → Erase local data to start over deliberately."
+                .into(),
+        );
     }
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes).map_err(|e| format!("CSPRNG refused: {e}"))?;

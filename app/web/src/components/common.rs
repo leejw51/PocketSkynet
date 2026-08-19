@@ -195,10 +195,14 @@ pub fn ident_tile(p: &IdentProps) -> Html {
     let hue = identity::hue_for(&p.seed);
     // A chosen avatar wins over the hash-derived face; the coloured tile and
     // monogram stay underneath either way, as the loading/failure fallback.
+    // `absolute_api_url` because an uploaded avatar is a server-relative
+    // `/api/images/…` path: correct same-origin, wrong the moment the bundle
+    // is served from a static host talking to a custom server.
     let src = p
         .image
         .as_deref()
         .and_then(|i| identity::avatar_src(skin, i))
+        .map(crate::session::absolute_api_url)
         .or_else(|| p.art.map(|stem| crate::asset::img(skin, stem)))
         .unwrap_or_else(|| crate::asset::img(skin, identity::art_for(&p.seed)));
     let mut class = classes!("fn-ident", "fn-ident--art", p.class.clone());

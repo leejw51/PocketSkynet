@@ -107,6 +107,10 @@ pub fn show_identity(
     show(Spot {
         image: image
             .and_then(|i| crate::identity::avatar_src(skin, i))
+            // Uploaded avatars are server-relative `/api/images/…` paths;
+            // rebase them onto the chosen server when the bundle came from
+            // a static host. Presets stay page-relative.
+            .map(crate::session::absolute_api_url)
             .unwrap_or_else(|| crate::asset::img(skin, crate::identity::art_for(seed))),
         title,
         subtitle,

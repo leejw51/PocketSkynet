@@ -785,7 +785,12 @@ fn root() -> Html {
                         let store = store.clone();
                         Callback::from(move |id: RoomId| {
                             let store = store.clone();
-                            store.dispatch(Action::SetConn(ConnStatus::Syncing));
+                            // Not in local mode: nothing ever sets the pill
+                            // back (the realtime effect that would is gated
+                            // off), so "Syncing…" would stick until reload.
+                            if !store.client.is_local() {
+                                store.dispatch(Action::SetConn(ConnStatus::Syncing));
+                            }
                             // The explicit gesture is the one place a full refetch
                             // happens: drops the cached copy and asks the server
                             // for everything again (actions.rs `resync_room`).

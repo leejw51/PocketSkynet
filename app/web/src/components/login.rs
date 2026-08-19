@@ -196,6 +196,24 @@ fn apply_choice(store: &crate::state::Store, choice: ConnChoice, url: &str) -> C
     client
 }
 
+/// [`apply_choice`], preceded by the one destructive step a backend switch
+/// requires: dropping the old session. A JWT from server A is meaningless on
+/// server B, and no server issued the local one — but this runs only when a
+/// sign-in is actually **submitted**, never on a mere picker tap, so looking
+/// at the other options costs nothing to undo.
+fn commit_choice(store: &crate::state::Store, choice: ConnChoice, url: &str) -> Client {
+    let backend_changed = choice != ConnChoice::restore()
+        || (choice == ConnChoice::Custom
+            && session::normalize_server_base(url) != session::server_base());
+    if backend_changed && store.auth.is_authenticated() {
+        session::PersistedSession::clear();
+        crate::cache::clear_all();
+        crate::local::clear_session();
+        store.dispatch(Action::SetAuth(Auth::SignedOut));
+    }
+    apply_choice(store, choice, url)
+}
+
 #[derive(Properties, PartialEq)]
 pub struct LoginProps {
     /// Present when a stored session exists but its keys are gone — the unlock
@@ -242,6 +260,10 @@ pub fn login(p: &LoginProps) -> Html {
     let server_url = use_state(session::server_base);
     // The custom-server probe: None = untested, Some(up) = the last answer.
     let probe = use_state(|| Option::<bool>::None);
+    // Whether the current picker selection was made by the auto-suggest
+    // effect rather than by a person. Only an auto-made choice may be
+    // auto-reverted; a person's click is theirs until they change it.
+    let auto_picked = use_state(|| false);
 
     let is_unlock = p.locked_as.is_some();
     let local_mode = *conn_choice == ConnChoice::Local;
@@ -287,31 +309,25 @@ pub fn login(p: &LoginProps) -> Html {
         })
     };
 
+    // Deliberately weightless: picking a segment changes only this screen's
+    // state. Nothing is persisted, no session is touched, and nothing talks
+    // to the store until a sign-in is actually submitted — so tapping
+    // "Custom server" just to look costs nothing to undo.
     let pick_conn = {
         let conn_choice = conn_choice.clone();
-        let server_url = server_url.clone();
         let probe = probe.clone();
-        let store = store.clone();
+        let auto_picked = auto_picked.clone();
         move |next: ConnChoice| {
             let conn_choice = conn_choice.clone();
-            let server_url = server_url.clone();
             let probe = probe.clone();
-            let store = store.clone();
+            let auto_picked = auto_picked.clone();
             Callback::from(move |_: MouseEvent| {
                 if *conn_choice == next {
                     return;
                 }
                 conn_choice.set(next);
                 probe.set(None);
-                // A session belongs to the backend that issued it — a JWT
-                // from server A is meaningless on server B, and no server
-                // issued the local one. Switching backends signs out.
-                if store.auth.is_authenticated() {
-                    session::PersistedSession::clear();
-                    crate::cache::clear_all();
-                    store.dispatch(Action::SetAuth(Auth::SignedOut));
-                }
-                apply_choice(&store, next, &server_url);
+                auto_picked.set(false);
             })
         }
     };
@@ -324,14 +340,6 @@ pub fn login(p: &LoginProps) -> Html {
                 server_url.set(el.value());
                 probe.set(None);
             }
-        })
-    };
-
-    let on_server_url_commit = {
-        let store = store.clone();
-        let server_url = server_url.clone();
-        Callback::from(move |_: FocusEvent| {
-            apply_choice(&store, ConnChoice::Custom, &server_url);
         })
     };
 
@@ -351,10 +359,14 @@ pub fn login(p: &LoginProps) -> Html {
     // The headline static deployment: this bundle came off a file host
     // (Cloudflare Pages), so the same-origin probe finds no `/api` behind it.
     // Suggest local mode by selecting it — nothing is persisted until a
-    // sign-in actually happens, so a server that is merely down for a moment
-    // costs the visitor one click to change back.
+    // sign-in actually happens. And the suggestion reverts itself: a server
+    // that was merely restarting mid-page-load comes back, the probe flips
+    // `online` true, and an *auto-made* selection returns to "This server" —
+    // otherwise one unlucky probe would quietly walk a server user into a
+    // fresh, empty local account. A person's own click is never reverted.
     {
         let conn_choice = conn_choice.clone();
+        let auto_picked = auto_picked.clone();
         let signed_out = matches!(store.auth, Auth::SignedOut);
         use_effect_with(store.online, move |online| {
             if !*online
@@ -363,6 +375,10 @@ pub fn login(p: &LoginProps) -> Html {
                 && session::server_base().is_empty()
             {
                 conn_choice.set(ConnChoice::Local);
+                auto_picked.set(true);
+            } else if *online && *auto_picked && *conn_choice == ConnChoice::Local {
+                conn_choice.set(ConnChoice::SameOrigin);
+                auto_picked.set(false);
             }
             || ()
         });
@@ -604,7 +620,7 @@ pub fn login(p: &LoginProps) -> Html {
             // The choice on screen is authoritative: commit it now and derive
             // the client from it, rather than trusting a store snapshot that
             // may predate the last picker click.
-            let client = apply_choice(&store, *conn_choice, &server_url);
+            let client = commit_choice(&store, *conn_choice, &server_url);
             let local = *conn_choice == ConnChoice::Local;
 
             wasm_bindgen_futures::spawn_local(async move {
@@ -834,6 +850,8 @@ pub fn login(p: &LoginProps) -> Html {
         let booting = booting.clone();
         let username = (*username).clone();
         let chain = store.chain.chain_id_num();
+        let conn_choice = conn_choice.clone();
+        let server_url = server_url.clone();
         Callback::from(move |_: MouseEvent| {
             let store = store.clone();
             let busy = busy.clone();
@@ -843,7 +861,7 @@ pub fn login(p: &LoginProps) -> Html {
             // derived from the address the wallet reports, so it matches what
             // any other client would pick for the same account.
             let typed = username.trim().to_owned();
-            let client = store.client.clone();
+            let client = commit_choice(&store, *conn_choice, &server_url);
             busy.set(true);
             set_error.emit(None);
 
@@ -882,13 +900,15 @@ pub fn login(p: &LoginProps) -> Html {
         let username = (*username).clone();
         let chain = store.chain.clone();
         let app_id = store.chain.privy_app_id.clone();
+        let conn_choice = conn_choice.clone();
+        let server_url = server_url.clone();
         Callback::from(move |_: MouseEvent| {
             let store = store.clone();
             let busy = busy.clone();
             let set_error = set_error.clone();
             let booting = booting.clone();
             let typed = username.trim().to_owned();
-            let client = store.client.clone();
+            let client = commit_choice(&store, *conn_choice, &server_url);
             let app_id = app_id.clone();
             let want = chain.chain_id_num();
             let chain_cfg = want.map(|id| crate::privy::Chain {
@@ -1089,10 +1109,9 @@ pub fn login(p: &LoginProps) -> Html {
                                 spellcheck="false"
                                 autocapitalize="none"
                                 autocomplete="off"
-                                placeholder="http://192.168.0.7:9099"
+                                placeholder="https://192.168.0.7:9099"
                                 value={(*server_url).clone()}
                                 oninput={on_server_url}
-                                onblur={on_server_url_commit}
                             />
                             <button type="button" class="topcoat-button" onclick={on_test_server}>
                                 { t(lang, Key::test_server) }

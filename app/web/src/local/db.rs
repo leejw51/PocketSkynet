@@ -99,7 +99,12 @@ mod imp {
                 }
             }
         });
-        let database = request.await.map_err(err)?;
+        let mut database = request.await.map_err(err)?;
+        // Another tab deleting this database (Erase local data) fires
+        // `versionchange` on every *other* open connection, and IndexedDB
+        // blocks the delete until they all close. Without this handler a
+        // second open tab would make that delete pend forever.
+        database.on_version_change(|_event| close());
         let db = Rc::new(Db { inner: database });
         OPEN.with(|o| *o.borrow_mut() = Some((owner.to_owned(), db.clone())));
         Ok(db)

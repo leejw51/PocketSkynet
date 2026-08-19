@@ -744,8 +744,10 @@ pub fn chat(p: &ChatProps) -> Html {
 
     let on_react = {
         let store = store.clone();
+        let room_id = p.room_id.clone();
         Callback::from(move |(id, code, mine): (MessageId, String, bool)| {
             let store = store.clone();
+            let room_id = room_id.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let client = store.client.clone();
                 let result = if mine {
@@ -759,12 +761,23 @@ pub fn chat(p: &ChatProps) -> Html {
                     }
                     result
                 };
-                if let Err(e) = result {
-                    toast::error(
-                        &store,
-                        "Couldn't update the reaction",
-                        Some(e.user_message()),
-                    );
+                match result {
+                    // Local mode has no realtime echo to deliver the reaction
+                    // event back, and the safety-net sync is a minute away —
+                    // drain now so the badge appears (and can be un-tapped)
+                    // immediately. Server mode keeps relying on its echo.
+                    Ok(()) if store.client.is_local() => {
+                        let from = store.room_state(&room_id).map(|s| s.cursor).unwrap_or(0);
+                        actions::drain_sync(store.clone(), room_id.clone(), from).await;
+                    }
+                    Ok(()) => {}
+                    Err(e) => {
+                        toast::error(
+                            &store,
+                            "Couldn't update the reaction",
+                            Some(e.user_message()),
+                        );
+                    }
                 }
             });
         })
