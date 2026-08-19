@@ -1,0 +1,4 @@
+# Cloudflare Pages (and Netlify) SPA fallback. The app routes with real
+# paths (History API), so a deep link like /rooms/room_x must serve the
+# shell rather than 404 — the router reads the path once the bundle boots.
+/*    /index.html   200

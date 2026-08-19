@@ -259,6 +259,50 @@ window title shows the address to hand out.
 
 `make package` bundles it as a native application.
 
+## Three ways to connect
+
+The login screen carries a connection picker with three choices:
+
+|  | This server | Custom server | Local (no server) |
+|---|---|---|---|
+| Talks to | the origin that served the bundle — the classic deployment | any PocketSkynet server, by IP/port or URL | nobody: the client answers its own API calls |
+| Data lives | on that server | on that server | in this browser's IndexedDB, encrypted at rest |
+| Works for | everything | everything | My Note, My Jarvis (AI chat), Knowledge, Skynet Password, the wallet, AI images |
+
+**Custom server** exists for the split deployment: the bundle on one host, the
+server on another. The server must allow the page's origin — start it with
+`PS_CORS_ORIGIN=https://your-pages-host` (comma-separated for several). The
+WebSocket, SSE and every REST call then go to the address you typed; a session
+belongs to the server that issued it, so changing the address signs you out.
+
+**Local mode** is what makes a purely static deployment a working app. Build
+once, host `web/dist` anywhere that serves files — no messaging server to run
+or pay for:
+
+```sh
+make web                # build web/dist
+make web-deploy-cf      # deploy it to Cloudflare Pages (wrangler)
+make web-serve          # or just try it locally with trunk serve
+```
+
+Everything runs in the visitor's browser: the wallet is created there, the
+AI keys stay there (as they always do), messages, notes, knowledge and
+passwords persist in IndexedDB — sealed with a key derived from the wallet,
+so the rows at rest are ciphertext, same as the client's localStorage cache.
+Signing out keeps the data (it is at rest, like a server's disk); Settings →
+"Erase local data" deletes the database. The multi-user surfaces — DMs,
+invitations, presence, publishing, shouts — are hidden: there is nobody else.
+One caveat worth repeating to users: the browser profile *is* the server, so
+an evicted profile is a lost database. The app requests persistent storage
+and works installed as a PWA, which is the strongest protection browsers
+offer; the recovery phrase restores the identity but not the messages.
+
+The implementation is one module: `web/src/local/` simulates the API surface
+behind the same `api::Client` every screen already talks through — `router.rs`
+is the route table (one match arm per endpoint), `logic.rs` the pure,
+host-tested request/response shaping, and `db.rs` the IndexedDB wrapper.
+Adding a local endpoint is adding one arm and one test.
+
 ## Layout
 
 ```

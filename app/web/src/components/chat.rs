@@ -1108,35 +1108,44 @@ pub fn chat(p: &ChatProps) -> Html {
                         <Badge variant="admin">{ t(lang, Key::admin) }</Badge>
                     }
                     <div class="fn-chat__submeta">
-                        <button
-                            type="button"
-                            class="topcoat-button--quiet"
-                            onclick={{
-                                let on_navigate = p.on_navigate.clone();
-                                let id = p.room_id.clone();
+                        // Local mode: no roster to open, so the count is not a
+                        // door — and the pill states the mode rather than
+                        // toggling a transport that does not exist.
+                        if !store.client.is_local() {
+                            <button
+                                type="button"
+                                class="topcoat-button--quiet"
+                                onclick={{
+                                    let on_navigate = p.on_navigate.clone();
+                                    let id = p.room_id.clone();
+                                    Callback::from(move |_: MouseEvent| {
+                                        on_navigate.emit(Route::Members(id.clone()))
+                                    })
+                                }}
+                            >
+                                { t(lang, if room.member_count == 1 {
+                                        Key::member_count_one
+                                    } else {
+                                        Key::member_count_many
+                                    }).replace("{n}", &room.member_count.to_string()) }
+                            </button>
+                            <ConnPill status={store.conn} onclick={{
+                                let store = store.clone();
                                 Callback::from(move |_: MouseEvent| {
-                                    on_navigate.emit(Route::Members(id.clone()))
+                                    let next = match store.mode {
+                                        crate::session::ConnectionMode::Polling => {
+                                            crate::session::ConnectionMode::WebSocket
+                                        }
+                                        _ => crate::session::ConnectionMode::Polling,
+                                    };
+                                    store.dispatch(Action::SetMode(next));
                                 })
-                            }}
-                        >
-                            { t(lang, if room.member_count == 1 {
-                                    Key::member_count_one
-                                } else {
-                                    Key::member_count_many
-                                }).replace("{n}", &room.member_count.to_string()) }
-                        </button>
-                        <ConnPill status={store.conn} onclick={{
-                            let store = store.clone();
-                            Callback::from(move |_: MouseEvent| {
-                                let next = match store.mode {
-                                    crate::session::ConnectionMode::Polling => {
-                                        crate::session::ConnectionMode::WebSocket
-                                    }
-                                    _ => crate::session::ConnectionMode::Polling,
-                                };
-                                store.dispatch(Action::SetMode(next));
-                            })
-                        }} />
+                            }} />
+                        } else {
+                            <span class={classes!("fn-conn", store.conn.pill_class())}>
+                                { store.conn.label(lang) }
+                            </span>
+                        }
                     </div>
                 </div>
                 <div class="fn-chat__actions">
@@ -1747,36 +1756,41 @@ fn room_menu(
             if !direct && !built_in && is_admin && !room.has_encryption {
                 { item(t(lang, Key::webhooks_menu), Modal::Webhooks(id.clone()), open.clone()) }
             }
-            <button
-                type="button"
-                role="menuitem"
-                class="topcoat-button--quiet"
-                onclick={{
-                    let on_navigate = on_navigate.clone();
-                    let id = id.clone();
-                    let open = open.clone();
-                    Callback::from(move |_: MouseEvent| {
-                        on_navigate.emit(Route::Members(id.clone()));
-                        open.set(false);
-                    })
-                }}
-            >{ t(lang, Key::view_members) }</button>
-            // The gallery is a place, not an action, so it navigates exactly
-            // as the roster does rather than opening a modal.
-            <button
-                type="button"
-                role="menuitem"
-                class="topcoat-button--quiet"
-                onclick={{
-                    let on_navigate = on_navigate.clone();
-                    let id = id.clone();
-                    let open = open.clone();
-                    Callback::from(move |_: MouseEvent| {
-                        on_navigate.emit(Route::Gallery(id.clone()));
-                        open.set(false);
-                    })
-                }}
-            >{ t(lang, Key::gallery_open) }</button>
+            // The roster and the gallery are server-backed places; local
+            // mode has neither (its two rooms are yours alone, and media
+            // renders inline from the local store).
+            if !store.client.is_local() {
+                <button
+                    type="button"
+                    role="menuitem"
+                    class="topcoat-button--quiet"
+                    onclick={{
+                        let on_navigate = on_navigate.clone();
+                        let id = id.clone();
+                        let open = open.clone();
+                        Callback::from(move |_: MouseEvent| {
+                            on_navigate.emit(Route::Members(id.clone()));
+                            open.set(false);
+                        })
+                    }}
+                >{ t(lang, Key::view_members) }</button>
+                // The gallery is a place, not an action, so it navigates exactly
+                // as the roster does rather than opening a modal.
+                <button
+                    type="button"
+                    role="menuitem"
+                    class="topcoat-button--quiet"
+                    onclick={{
+                        let on_navigate = on_navigate.clone();
+                        let id = id.clone();
+                        let open = open.clone();
+                        Callback::from(move |_: MouseEvent| {
+                            on_navigate.emit(Route::Gallery(id.clone()));
+                            open.set(false);
+                        })
+                    }}
+                >{ t(lang, Key::gallery_open) }</button>
+            }
 
             // Leaving is a channel verb too — a departed member would leave a
             // DM still keyed to their name, which they could then never

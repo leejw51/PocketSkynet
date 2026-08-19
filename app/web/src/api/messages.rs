@@ -310,6 +310,12 @@ impl Client {
     ///
     /// `hasMore` lives in the `X-Has-More` header, not the body.
     pub async fn sync(&self, room: &RoomId, since: i64) -> ApiResult<SyncPage> {
+        // Funnel bypass (see the list in `api/mod.rs`): this request reads the
+        // X-Has-More header, so it cannot go through `send` — the local branch
+        // therefore lives here too.
+        if self.is_local() {
+            return crate::local::sync_page(room, since).await;
+        }
         let path = format!(
             "/api/rooms/{}/sync?since={}",
             encode_segment(room.as_str()),

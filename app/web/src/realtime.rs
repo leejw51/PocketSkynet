@@ -57,6 +57,9 @@ pub enum ConnStatus {
     Syncing,
     /// No transport at all.
     Offline,
+    /// Local mode: no server, no transport, nothing to degrade through. The
+    /// backend is this tab, so the pill reads as a state, not a health.
+    Local,
 }
 
 impl ConnStatus {
@@ -65,6 +68,7 @@ impl ConnStatus {
             ConnStatus::Live(t) => t.pill_class(),
             ConnStatus::Syncing => "fn-conn--syncing",
             ConnStatus::Offline => "fn-conn--offline",
+            ConnStatus::Local => "fn-conn--local",
         }
     }
 
@@ -74,6 +78,7 @@ impl ConnStatus {
             ConnStatus::Live(tr) => tr.label(lang),
             ConnStatus::Syncing => t(lang, Key::syncing),
             ConnStatus::Offline => t(lang, Key::offline),
+            ConnStatus::Local => t(lang, Key::conn_local),
         }
     }
 
@@ -87,6 +92,7 @@ impl ConnStatus {
             ConnStatus::Live(Transport::Polling) => t(lang, Key::conn_polling_aria).into(),
             ConnStatus::Syncing => t(lang, Key::conn_syncing_aria).into(),
             ConnStatus::Offline => t(lang, Key::conn_offline_aria).into(),
+            ConnStatus::Local => t(lang, Key::conn_local_aria).into(),
         }
     }
 }
@@ -119,6 +125,11 @@ pub fn backoff_delay_ms(attempt: u32, jitter01: f64) -> u32 {
 /// "improvement" past an explicit preference is a bug, not a feature.
 pub fn select_transport(preference: ConnectionMode, consecutive_failures: u32) -> Transport {
     match preference {
+        // Local mode never reaches this ladder — `app.rs` gates the whole
+        // realtime effect on it. Polling is the harmless answer if it is
+        // ever asked anyway: the sync timer against the local backend is a
+        // cheap no-op, where a WebSocket attempt would error every backoff.
+        ConnectionMode::Local => Transport::Polling,
         ConnectionMode::Polling => Transport::Polling,
         ConnectionMode::Sse => {
             if consecutive_failures >= 2 {
@@ -525,13 +536,18 @@ mod imp {
 #[cfg(not(target_arch = "wasm32"))]
 pub use imp::{connect_sse, connect_ws, OnEvent, UnboundedTypingSink};
 
-/// Build the `ws(s)://` URL for `/ws` from the page's own origin.
+/// Build the `ws(s)://` URL for `/ws`.
 ///
-/// Deriving it from `location` rather than from a compile-time constant is what
+/// An empty `base` means same-origin: derived from `location`, which is what
 /// lets the same bundle work on `localhost`, on a LAN IP, and behind TLS
-/// without a rebuild.
+/// without a rebuild. A non-empty base is the server the user chose on the
+/// login screen, and the socket goes to the same host the REST calls do —
+/// with the scheme swapped `http(s)` → `ws(s)`.
 #[cfg(target_arch = "wasm32")]
-pub fn websocket_url() -> Option<String> {
+pub fn websocket_url(base: &str) -> Option<String> {
+    if !base.is_empty() {
+        return ws_url_from_base(base);
+    }
     let loc = web_sys::window()?.location();
     let proto = if loc.protocol().ok()? == "https:" {
         "wss:"
@@ -542,8 +558,24 @@ pub fn websocket_url() -> Option<String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn websocket_url() -> Option<String> {
-    None
+pub fn websocket_url(base: &str) -> Option<String> {
+    if base.is_empty() {
+        return None;
+    }
+    ws_url_from_base(base)
+}
+
+/// The pure half of [`websocket_url`]: derive `ws(s)://…/ws` from an
+/// `http(s)://` API base. Split out so the scheme swap is host-testable.
+fn ws_url_from_base(base: &str) -> Option<String> {
+    let rest = base
+        .strip_prefix("https://")
+        .map(|host| format!("wss://{host}"))
+        .or_else(|| {
+            base.strip_prefix("http://")
+                .map(|host| format!("ws://{host}"))
+        })?;
+    Some(format!("{}/ws", rest.trim_end_matches('/')))
 }
 
 #[cfg(test)]
@@ -684,6 +716,38 @@ mod tests {
     }
 
     #[test]
+    fn a_websocket_url_follows_the_chosen_server_base() {
+        // The scheme swaps with the base's, and a trailing slash never doubles.
+        assert_eq!(
+            ws_url_from_base("http://192.168.0.7:9099"),
+            Some("ws://192.168.0.7:9099/ws".into())
+        );
+        assert_eq!(
+            ws_url_from_base("https://chat.example.com"),
+            Some("wss://chat.example.com/ws".into())
+        );
+        assert_eq!(
+            ws_url_from_base("https://chat.example.com/"),
+            Some("wss://chat.example.com/ws".into())
+        );
+        // A base without a scheme never reaches here (`normalize_server_base`
+        // adds one), but if it does, no URL is better than a wrong one.
+        assert_eq!(ws_url_from_base("chat.example.com"), None);
+    }
+
+    #[test]
+    fn local_mode_never_selects_a_network_transport() {
+        // The realtime effect is gated off in local mode; this is the
+        // belt-and-braces answer if the ladder is ever consulted anyway.
+        for failures in [0, 1, 5] {
+            assert_eq!(
+                select_transport(ConnectionMode::Local, failures),
+                Transport::Polling
+            );
+        }
+    }
+
+    #[test]
     fn an_explicit_polling_preference_is_never_upgraded() {
         // Silently "improving" past a user's explicit choice is a bug: they may
         // have chosen polling because their proxy mangles WebSockets.
@@ -761,6 +825,7 @@ mod tests {
             ConnStatus::Live(Transport::Polling),
             ConnStatus::Syncing,
             ConnStatus::Offline,
+            ConnStatus::Local,
         ];
         for s in states {
             assert!(s.pill_class().starts_with("fn-conn--"));

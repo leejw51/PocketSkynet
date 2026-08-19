@@ -61,12 +61,18 @@ pub fn more_sheet(p: &MoreProps) -> Html {
             <div class="fn-more">
                 <section class="fn-more__group" aria-label={t(lang, Key::nav_sections)}>
                     <h3 class="topcoat-list__header">{ t(lang, Key::nav_sections) }</h3>
-                    { row(icons::envelope(20), t(lang, Key::invitations), current == "invites",
-                          Some(invites), go(Route::Invitations, &p.on_navigate)) }
+                    // Multi-user and server-side rows have no local meaning;
+                    // the sheet offers only doors that open.
+                    if !store.client.is_local() {
+                        { row(icons::envelope(20), t(lang, Key::invitations), current == "invites",
+                              Some(invites), go(Route::Invitations, &p.on_navigate)) }
+                    }
                     { row(icons::book(20), t(lang, Key::nav_knowledge), current == "knowledge",
                           None, go(Route::Knowledge, &p.on_navigate)) }
-                    { row(icons::globe(20), t(lang, Key::nav_publish), current == "publish",
-                          None, go(Route::Publish, &p.on_navigate)) }
+                    if !store.client.is_local() {
+                        { row(icons::globe(20), t(lang, Key::nav_publish), current == "publish",
+                              None, go(Route::Publish, &p.on_navigate)) }
+                    }
                     { row(icons::bank(20), t(lang, Key::menu_bank), current == "bank",
                           None, go(Route::Bank, &p.on_navigate)) }
                     // `pw_title`, not a generic "Passwords": below 800px this
@@ -91,10 +97,12 @@ pub fn more_sheet(p: &MoreProps) -> Html {
                     <h3 class="topcoat-list__header">{ t(lang, Key::more_tools) }</h3>
                     { row(icons::wallet(20), t(lang, Key::wallet), false, None,
                           open(Modal::Wallet, &store)) }
-                    { row(icons::megaphone(20), t(lang, Key::shout_title), false, None,
-                          open(Modal::Shout, &store)) }
-                    { row(icons::server(20), t(lang, Key::server_info), false, None,
-                          open(Modal::ServerInfo, &store)) }
+                    if !store.client.is_local() {
+                        { row(icons::megaphone(20), t(lang, Key::shout_title), false, None,
+                              open(Modal::Shout, &store)) }
+                        { row(icons::server(20), t(lang, Key::server_info), false, None,
+                              open(Modal::ServerInfo, &store)) }
+                    }
                 </section>
             </div>
         </Dialog>

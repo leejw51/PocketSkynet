@@ -1021,6 +1021,39 @@ pub async fn sign_in(client: Client, wallet: Wallet, username: &str) -> Result<S
     })
 }
 
+/// The local twin of [`sign_in`] — web local mode's whole authentication.
+///
+/// No challenge, no JWT, no key publish: there is no server to convince. The
+/// wallet *is* the identity, the per-account salt lives in this device's
+/// IndexedDB (minted on first sign-in), and `SessionKeys::derive` runs the
+/// exact same derivation server mode runs — so the crypto downstream of here
+/// is byte-identical in both modes.
+///
+/// The `"local"` token is a marker, not a credential. It keeps
+/// `Auth::restore` landing in `Locked` after a reload (the unlock flow every
+/// session already has) and is never sent anywhere — the local client has no
+/// network path to send it on.
+pub async fn sign_in_local(wallet: Wallet, username: &str) -> Result<Session, String> {
+    crate::local::install_owner(wallet.address().clone());
+    // Best-effort eviction protection: this database is the only copy of the
+    // user's data, and browsers honour the request more often for installed
+    // or revisited apps. A refusal is not an error.
+    crate::local::request_persistence();
+
+    let salt = crate::local::get_or_create_salt().await?;
+    let keys = SessionKeys::derive(wallet, &salt)
+        .map_err(|e| format!("Couldn't derive your encryption key: {e}"))?;
+    crate::local::install_store_key(keys.local_store_key());
+    let user = crate::local::get_or_create_user(username).await?;
+
+    Ok(Session {
+        token: "local".into(),
+        user,
+        keys: Rc::new(RefCell::new(keys)),
+        fruitnation_wallet: String::new(),
+    })
+}
+
 /// The same round trip as [`sign_in`], but every signature is a wallet prompt.
 ///
 /// Takes a [`Provider`](crate::eip1193::Provider) rather than reaching for
@@ -1165,6 +1198,16 @@ pub async fn unlock_from_vault(store: Store) {
         return;
     };
 
+    // Local mode has no challenge to run — deriving the keys from the stored
+    // credential and the device-held salt is the whole unlock.
+    if store.client.is_local() {
+        if let Ok(session) = sign_in_local(wallet, &stored.username).await {
+            session.persist();
+            store.dispatch(Action::StageBoot(session));
+        }
+        return;
+    }
+
     // A fresh challenge, not the stored JWT: the point is to recover the *keys*,
     // and those only come from a login response's salt. The new token replaces
     // the old one, which is fine — it is the same account and the old one was
@@ -1199,6 +1242,11 @@ pub fn sign_out(store: &Store) {
     // and membership — none of which the next person at this browser should
     // find. Same reasoning as the vault line above.
     crate::cache::clear_all();
+    // Local mode: drop the in-memory sealing key and owner. The IndexedDB
+    // database itself survives — it is the account's data at rest, all
+    // ciphertext, exactly as a server's disk survives a sign-out. "Erase
+    // local data" is the destructive path.
+    crate::local::clear_session();
     store.dispatch(Action::SetAuth(crate::session::Auth::SignedOut));
     store.dispatch(Action::SetConn(ConnStatus::Offline));
 }

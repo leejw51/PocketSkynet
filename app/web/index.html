@@ -33,6 +33,9 @@
          scope would be useless. -->
     <link data-trunk rel="copy-file" href="pwa/manifest.webmanifest" />
     <link data-trunk rel="copy-file" href="pwa/sw.js" />
+    <!-- SPA fallback for static hosts (Cloudflare Pages): dist/ is a complete
+         deployment on its own, serving web local mode with no server at all. -->
+    <link data-trunk rel="copy-file" href="pwa/_redirects" />
     <link rel="manifest" href="/manifest.webmanifest" />
 
     <!-- Declared explicitly so `wasm-opt -Oz` runs on release builds. The

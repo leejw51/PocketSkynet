@@ -32,9 +32,10 @@ use web_sys::{HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
 
 use crate::actions;
+use crate::api::Client;
 use crate::i18n::{t, Key, Lang};
 use crate::route::Route;
-use crate::session::{Auth, LoginLayout, Session, Skin, Theme};
+use crate::session::{self, Auth, ConnectionMode, LoginLayout, Session, Skin, Theme};
 use crate::state::{use_store, Action};
 use crate::vault::{self, Credential, StoredWallet};
 
@@ -42,6 +43,41 @@ use super::boot::BootSequence;
 use super::common::{Addr, BusyButton, Ident, IdentSize, Spinner};
 use super::icons;
 use super::toast;
+
+/// Where this sign-in talks to — the connection picker's three choices.
+///
+/// `SameOrigin` is the classic deployment (the server served this bundle) and
+/// stays the default. `Custom` points the same client at any other server's
+/// IP/port/URL. `Local` needs no server at all: the client answers its own
+/// API calls from IndexedDB (`crate::local`), which is what makes a purely
+/// static deployment — Cloudflare Pages, any file host — a working app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnChoice {
+    SameOrigin,
+    Custom,
+    Local,
+}
+
+impl ConnChoice {
+    /// What was chosen last time, reconstructed from what was persisted.
+    fn restore() -> Self {
+        if ConnectionMode::load().is_local() {
+            ConnChoice::Local
+        } else if session::server_base().is_empty() {
+            ConnChoice::SameOrigin
+        } else {
+            ConnChoice::Custom
+        }
+    }
+
+    fn label(self, lang: Lang) -> &'static str {
+        match self {
+            ConnChoice::SameOrigin => t(lang, Key::conn_this_server),
+            ConnChoice::Custom => t(lang, Key::conn_custom_server),
+            ConnChoice::Local => t(lang, Key::conn_local_choice),
+        }
+    }
+}
 
 /// The two accepted credentials.
 ///
@@ -131,6 +167,35 @@ fn derive_wallet(
     }
 }
 
+/// Persist and apply a connection choice: the mode, the stored server URL
+/// and the store's client all follow it. Returns the client the choice
+/// resolves to, so a submit can use it without waiting for a re-render.
+fn apply_choice(store: &crate::state::Store, choice: ConnChoice, url: &str) -> Client {
+    let client = match choice {
+        ConnChoice::SameOrigin => {
+            session::save_server_base("");
+            if ConnectionMode::load().is_local() {
+                store.dispatch(Action::SetMode(ConnectionMode::WebSocket));
+            }
+            Client::new("")
+        }
+        ConnChoice::Custom => {
+            let base = session::normalize_server_base(url);
+            session::save_server_base(&base);
+            if ConnectionMode::load().is_local() {
+                store.dispatch(Action::SetMode(ConnectionMode::WebSocket));
+            }
+            Client::new(&base)
+        }
+        ConnChoice::Local => {
+            store.dispatch(Action::SetMode(ConnectionMode::Local));
+            Client::local()
+        }
+    };
+    store.dispatch(Action::SetClient(client.clone()));
+    client
+}
+
 #[derive(Properties, PartialEq)]
 pub struct LoginProps {
     /// Present when a stored session exists but its keys are gone — the unlock
@@ -170,9 +235,19 @@ pub fn login(p: &LoginProps) -> Html {
     // is behind the login screen, so without these the one screen every user
     // sees first is the one screen they cannot adjust.
     let layout = use_state(LoginLayout::load);
+    // Where this sign-in talks to. Restored from what was persisted, and only
+    // persisted again when a choice is actually made — submit re-derives from
+    // it, so the choice on screen is always the one that will be used.
+    let conn_choice = use_state(ConnChoice::restore);
+    let server_url = use_state(session::server_base);
+    // The custom-server probe: None = untested, Some(up) = the last answer.
+    let probe = use_state(|| Option::<bool>::None);
 
     let is_unlock = p.locked_as.is_some();
-    let offline = !store.online;
+    let local_mode = *conn_choice == ConnChoice::Local;
+    // "Offline" only means anything for the same-origin choice: a custom
+    // server has its own Test button, and local mode has no server to reach.
+    let offline = !store.online && *conn_choice == ConnChoice::SameOrigin;
 
     // --- helpers ---------------------------------------------------------
 
@@ -211,6 +286,87 @@ pub fn login(p: &LoginProps) -> Html {
             }
         })
     };
+
+    let pick_conn = {
+        let conn_choice = conn_choice.clone();
+        let server_url = server_url.clone();
+        let probe = probe.clone();
+        let store = store.clone();
+        move |next: ConnChoice| {
+            let conn_choice = conn_choice.clone();
+            let server_url = server_url.clone();
+            let probe = probe.clone();
+            let store = store.clone();
+            Callback::from(move |_: MouseEvent| {
+                if *conn_choice == next {
+                    return;
+                }
+                conn_choice.set(next);
+                probe.set(None);
+                // A session belongs to the backend that issued it — a JWT
+                // from server A is meaningless on server B, and no server
+                // issued the local one. Switching backends signs out.
+                if store.auth.is_authenticated() {
+                    session::PersistedSession::clear();
+                    crate::cache::clear_all();
+                    store.dispatch(Action::SetAuth(Auth::SignedOut));
+                }
+                apply_choice(&store, next, &server_url);
+            })
+        }
+    };
+
+    let on_server_url = {
+        let server_url = server_url.clone();
+        let probe = probe.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(el) = e.target_dyn_into::<HtmlInputElement>() {
+                server_url.set(el.value());
+                probe.set(None);
+            }
+        })
+    };
+
+    let on_server_url_commit = {
+        let store = store.clone();
+        let server_url = server_url.clone();
+        Callback::from(move |_: FocusEvent| {
+            apply_choice(&store, ConnChoice::Custom, &server_url);
+        })
+    };
+
+    let on_test_server = {
+        let server_url = server_url.clone();
+        let probe = probe.clone();
+        Callback::from(move |_: MouseEvent| {
+            let base = session::normalize_server_base(&server_url);
+            let probe = probe.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let up = Client::new(&base).reachable().await;
+                probe.set(Some(up));
+            });
+        })
+    };
+
+    // The headline static deployment: this bundle came off a file host
+    // (Cloudflare Pages), so the same-origin probe finds no `/api` behind it.
+    // Suggest local mode by selecting it — nothing is persisted until a
+    // sign-in actually happens, so a server that is merely down for a moment
+    // costs the visitor one click to change back.
+    {
+        let conn_choice = conn_choice.clone();
+        let signed_out = matches!(store.auth, Auth::SignedOut);
+        use_effect_with(store.online, move |online| {
+            if !*online
+                && signed_out
+                && *conn_choice == ConnChoice::SameOrigin
+                && session::server_base().is_empty()
+            {
+                conn_choice.set(ConnChoice::Local);
+            }
+            || ()
+        });
+    }
 
     let pick_method = {
         let method = method.clone();
@@ -397,6 +553,8 @@ pub fn login(p: &LoginProps) -> Html {
         let booting = booting.clone();
         let remember = remember.clone();
         let locked_as = p.locked_as.clone();
+        let conn_choice = conn_choice.clone();
+        let server_url = server_url.clone();
 
         Callback::from(move |_: ()| {
             if *busy {
@@ -443,10 +601,19 @@ pub fn login(p: &LoginProps) -> Html {
             let credential = credential_of(*method, &mnemonic, &private_key, *wallet_index);
             let address = wallet.address().clone();
             let remember = *remember;
-            let client = store.client.clone();
+            // The choice on screen is authoritative: commit it now and derive
+            // the client from it, rather than trusting a store snapshot that
+            // may predate the last picker click.
+            let client = apply_choice(&store, *conn_choice, &server_url);
+            let local = *conn_choice == ConnChoice::Local;
 
             wasm_bindgen_futures::spawn_local(async move {
-                match actions::sign_in(client, wallet, &username).await {
+                let outcome = if local {
+                    actions::sign_in_local(wallet, &username).await
+                } else {
+                    actions::sign_in(client, wallet, &username).await
+                };
+                match outcome {
                     Ok(session) => {
                         // Persist immediately: the session is real from here,
                         // and a reload mid-cutscene should land signed in
@@ -539,8 +706,14 @@ pub fn login(p: &LoginProps) -> Html {
             auto_unlocking.set(true);
             busy.set(true);
             let client = store.client.clone();
+            let local = client.is_local();
             wasm_bindgen_futures::spawn_local(async move {
-                match actions::sign_in(client, wallet, &stored.username).await {
+                let outcome = if local {
+                    actions::sign_in_local(wallet, &stored.username).await
+                } else {
+                    actions::sign_in(client, wallet, &stored.username).await
+                };
+                match outcome {
                     Ok(session) => {
                         session.persist();
                         booting.set(Some(session));
@@ -889,6 +1062,56 @@ pub fn login(p: &LoginProps) -> Html {
                     </p>
                 </div>
 
+                // Where this sign-in talks to: this server (the classic
+                // deployment), any server by address, or no server at all —
+                // web local mode, everything in this browser's IndexedDB.
+                <div class="fn-field">
+                    <div class="fn-seg" role="group" aria-label={t(lang, Key::connection)}>
+                        { for [ConnChoice::SameOrigin, ConnChoice::Custom, ConnChoice::Local]
+                            .into_iter().map(|c| html! {
+                                <button
+                                    type="button"
+                                    class="fn-seg__btn"
+                                    aria-pressed={(*conn_choice == c).to_string()}
+                                    onclick={pick_conn(c)}
+                                ><span>{ c.label(lang) }</span></button>
+                            }) }
+                    </div>
+                    if *conn_choice == ConnChoice::Custom {
+                        <label class="fn-field__label" for="login-server">
+                            { t(lang, Key::server_address) }
+                        </label>
+                        <div class="fn-row">
+                            <input
+                                id="login-server"
+                                class="topcoat-text-input fn-grow"
+                                type="url"
+                                spellcheck="false"
+                                autocapitalize="none"
+                                autocomplete="off"
+                                placeholder="http://192.168.0.7:9099"
+                                value={(*server_url).clone()}
+                                oninput={on_server_url}
+                                onblur={on_server_url_commit}
+                            />
+                            <button type="button" class="topcoat-button" onclick={on_test_server}>
+                                { t(lang, Key::test_server) }
+                            </button>
+                        </div>
+                        if let Some(up) = *probe {
+                            <p class="fn-field__help" role="status">
+                                { if up { t(lang, Key::server_answering) }
+                                  else { t(lang, Key::server_not_answering) } }
+                            </p>
+                        }
+                        <p class="fn-field__help">{ t(lang, Key::server_address_hint) }</p>
+                    }
+                    if local_mode {
+                        <p class="fn-field__help">{ t(lang, Key::local_mode_hint) }</p>
+                        <p class="fn-field__help">{ t(lang, Key::local_mode_keep_hint) }</p>
+                    }
+                </div>
+
                 if offline {
                     <div class="fn-banner fn-banner--offline" role="status">
                         { t(lang, Key::offline_can_still_create) }
@@ -928,8 +1151,10 @@ pub fn login(p: &LoginProps) -> Html {
                         </button>
                         // Only when a provider is actually injected: a button
                         // that can only ever say "install MetaMask" is worse
-                        // than no button.
-                        if crate::eip1193::available() {
+                        // than no button. And never in local mode — an
+                        // external wallet cannot run the local key derivation
+                        // (it needs the wallet key in-process).
+                        if crate::eip1193::available() && !local_mode {
                             <button
                                 type="button"
                                 class="fn-hero-btn fn-hero-btn--wallet topcoat-button--large"
@@ -953,7 +1178,7 @@ pub fn login(p: &LoginProps) -> Html {
                         // only when there is no provider *and* this looks like a
                         // phone, so MetaMask's in-app browser (which has one)
                         // gets the real sign-in button above instead.
-                        if !crate::eip1193::available() && crate::eip1193::is_mobile() {
+                        if !crate::eip1193::available() && crate::eip1193::is_mobile() && !local_mode {
                             if let Some(link) = crate::eip1193::metamask_deeplink() {
                                 <a
                                     class="fn-hero-btn fn-hero-btn--wallet topcoat-button--large"
@@ -1001,8 +1226,9 @@ pub fn login(p: &LoginProps) -> Html {
                         }
 
                         // Offered only when the server supplied an app id, which
-                        // is exactly how the reference client gates it.
-                        if !store.chain.privy_app_id.trim().is_empty() {
+                        // is exactly how the reference client gates it — and
+                        // never in local mode, same reason as MetaMask above.
+                        if !store.chain.privy_app_id.trim().is_empty() && !local_mode {
                             <button
                                 type="button"
                                 class="fn-hero-btn fn-hero-btn--wallet topcoat-button--large"

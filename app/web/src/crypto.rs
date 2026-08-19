@@ -160,6 +160,20 @@ impl SessionKeys {
         VaultKey::derive(&scalar)
     }
 
+    /// The key sealing local-mode data at rest (`crate::local`) — knowledge
+    /// notes and hosted media bytes in IndexedDB, which have no room key to
+    /// wear and are not password fields.
+    ///
+    /// A label-KDF subkey of the encryption scalar, following the same rule as
+    /// [`Self::vault_key`]: the scalar itself never leaves this type, and what
+    /// comes back is one-way — useless for anything but opening this
+    /// account's local store. Deterministic, so a reload re-derives the same
+    /// key and yesterday's sealed rows still open.
+    pub fn local_store_key(&self) -> [u8; 32] {
+        let scalar: [u8; 32] = self.encryption.secret_key().to_bytes().into();
+        pocketskynet_core::crypto::derive_subkey(&scalar, "pocketskynet-local-store-v1")
+    }
+
     /// Sign an EVM transaction with the wallet key.
     ///
     /// This is deliberately the only door between the wallet's secret and the

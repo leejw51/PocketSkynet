@@ -96,6 +96,10 @@ pub enum Gate {
     Chain,
     /// Needs a provider configured that can draw.
     Image,
+    /// Needs a real server on the other end — other people to search for.
+    /// Shut in web local mode, where the model must not be offered a tool
+    /// that can only 404.
+    Server,
 }
 
 /// Which heading a tool is listed under in the prompt.
@@ -208,7 +212,7 @@ pub const TOOLS: &[ToolDef] = &[
         args: "{\"query\"}",
         help: "people on this server, by name or wallet address",
         group: Group::Searching,
-        gate: Gate::Always,
+        gate: Gate::Server,
     },
     // -- notes ------------------------------------------------------------
     ToolDef {
@@ -311,6 +315,8 @@ pub struct Caps {
     pub chain: bool,
     /// A provider that can draw is configured.
     pub image: bool,
+    /// A real server is on the other end (i.e. not web local mode).
+    pub server: bool,
 }
 
 impl Caps {
@@ -320,6 +326,7 @@ impl Caps {
             Gate::Vault => self.vault,
             Gate::Chain => self.chain,
             Gate::Image => self.image,
+            Gate::Server => self.server,
         }
     }
 }
@@ -607,6 +614,7 @@ mod tests {
             vault: true,
             chain: true,
             image: true,
+            server: true,
         }
     }
 
@@ -689,6 +697,16 @@ mod tests {
         // An ungated tool is there whatever else is shut off.
         assert!(is_available(&Caps::default(), "search_all"));
         assert!(is_available(&Caps::default(), "append_note"));
+
+        // People-search needs a server on the other end (web local mode
+        // shuts it), and the server cap opens nothing else.
+        assert!(!is_available(&Caps::default(), "search_people"));
+        let server_only = Caps {
+            server: true,
+            ..Caps::default()
+        };
+        assert!(is_available(&server_only, "search_people"));
+        assert!(!is_available(&server_only, "vault_copy"));
     }
 
     #[test]

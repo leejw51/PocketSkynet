@@ -744,6 +744,10 @@ pub enum Action {
     /// exactly when that happened.
     PresenceSnapshot(Vec<(WalletAddress, PresenceStatus)>),
     SetMode(ConnectionMode),
+    /// Swap the backend the client talks to — the login screen's connection
+    /// picker choosing a custom server URL or local mode before sign-in.
+    /// The current token (if any) is carried over.
+    SetClient(Client),
     SetTheme(Theme),
     SetSkin(Skin),
     SetShellLayout(ShellLayout),
@@ -1073,8 +1077,12 @@ impl Reducible for AppState {
                 s.mode = m;
                 s.conn = match m {
                     ConnectionMode::Polling => ConnStatus::Live(Transport::Polling),
+                    ConnectionMode::Local => ConnStatus::Local,
                     _ => ConnStatus::Syncing,
                 };
+            }
+            Action::SetClient(c) => {
+                s.client = c.with_token(s.auth.token());
             }
             Action::SetTheme(t) => {
                 t.apply();
