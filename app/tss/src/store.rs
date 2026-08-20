@@ -157,7 +157,7 @@ pub fn list_wallets(dir: &Path) -> Vec<WalletInfo> {
             (file.version == FORMAT_VERSION).then_some(file.info)
         })
         .collect();
-    wallets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    wallets.sort_by_key(|w| std::cmp::Reverse(w.created_at));
     wallets
 }
 

@@ -3255,6 +3255,13 @@ open past the hour re-fetches the listing when its tiles start failing.
 | 65 | POST | `/api/passwords` | ✓ | own entries only; client-minted id, 409 if taken |
 | 66 | PUT | `/api/passwords/:id` | ✓ | own entries only; 404 for anybody else's |
 | 67 | DELETE | `/api/passwords/:id` | ✓ | own entries only; 404 for anybody else's |
+| 68 | GET | `/api/tss/wallets` | — | cleartext headers only (PocketSkynet extension, §19) |
+| 69 | POST | `/api/tss/keygen` | — | passphrase sets the seal; 409 while one runs (§19.2) |
+| 70 | GET | `/api/tss/keygen/status` | — | — (§19.2) |
+| 71 | POST | `/api/tss/sign` | — | wallet passphrase (§19.3) |
+| 72 | POST | `/api/tss/sign-hash` | — | wallet passphrase (§19.4) |
+| 73 | POST | `/api/tss/session-keys` | — | wallet passphrase (§19.5) |
+| 74 | POST | `/api/tss/delete` | — | wallet passphrase (§19.6) |
 | — | WS | `/ws` | ✓ (subprotocol or `?token=`) | subscribed to own rooms |
 
 ### 14.1 Route-precedence requirements
@@ -3592,3 +3599,72 @@ the resource is one they could reasonably know exists. An entry id is a 128-bit
 secret nobody but its owner holds, so a 403 would confirm a guess. `PUT` and
 `DELETE` therefore answer 404 with an identical message whether the entry
 belongs to somebody else or never existed at all.
+
+---
+
+## 19. TSS wallets (PocketSkynet extension)
+
+The m-of-n threshold wallet (`docs/CRYPTO.md` §15; `PROTOCOL.md` §20).
+Every ceremony runs inside the server; the browser drives it over these
+endpoints. **All of them are unauthenticated by design** — a TSS wallet must
+sign its login challenge before it has a JWT — and everything that touches
+key material is gated by the wallet passphrase instead: the seal is
+PBKDF2 (600k) + AES-256-CBC + HMAC, re-derived per request, under the
+general per-IP rate limit. A wrong passphrase is `401`; a missing wallet is
+`404`.
+
+### 19.1 `GET /api/tss/wallets`
+
+Cleartext headers only, no passphrase involved.
+
+```json
+{ "wallets": [ { "address": "0x…", "threshold": 2, "parties": 3, "createdAt": 1755000000 } ] }
+```
+
+### 19.2 `POST /api/tss/keygen` / `GET /api/tss/keygen/status`
+
+Body: `{ "threshold": t, "parties": n, "passphrase": "…" }` with
+`2 ≤ t ≤ n ≤ 5` and a passphrase of at least 8 characters (`400`
+otherwise). Starts the DKG as a background task and answers
+`{ "started": true }` immediately; a second keygen while one runs is `409`.
+Each run mints a fresh wallet at a fresh address — nothing is overwritten.
+
+Poll status; the states are, in order:
+`{"state":"idle"}` → `"generating_primes"` (the slow step) →
+`"running_protocol"` → `"binding"` (minting + binding the E2EE identity) →
+`{"state":"done","address":"0x…"}`, or `{"state":"error","error":"…"}`.
+
+### 19.3 `POST /api/tss/sign`
+
+Body: `{ "address", "passphrase", "message" }`. EIP-191 `personal_sign` by
+ceremony; the response's `signature` is the standard `0x` + 130-hex wire
+form, self-verified against the wallet address before it leaves the server.
+Feed it to `POST /api/auth/login` unchanged.
+
+```json
+{ "address": "0x…", "signature": "0x…" }
+```
+
+### 19.4 `POST /api/tss/sign-hash`
+
+Body: `{ "address", "passphrase", "hash" }` where `hash` is 32 bytes of hex
+(`0x` optional) — for transactions, `LegacyTransaction::sighash()`. Returns
+`{ "address", "r": "0x…32B", "s": "0x…32B", "v": 0|1 }`; assemble with
+`sign_with_signature(r‖s, v)` (PROTOCOL.md §20).
+
+### 19.5 `POST /api/tss/session-keys`
+
+Body: `{ "address", "passphrase" }`. Releases the stored E2EE identity
+(CRYPTO.md §15.2) — this replaces the §6.2 salted-derivation signature for
+TSS wallets:
+
+```json
+{ "address": "0x…", "threshold": 2, "parties": 3,
+  "encryptionKey": "0x…32B private key", "publicKey": "04…130 hex",
+  "bindingSig": "0x…65B" }
+```
+
+### 19.6 `POST /api/tss/delete`
+
+Body: `{ "address", "passphrase" }`. Verifies the passphrase by opening the
+seal, then deletes the wallet file permanently. `{ "message": "TSS wallet deleted" }`.

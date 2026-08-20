@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use pocketskynet_core::progression::Award;
-use pocketskynet_core::{RoomId, Wallet, WalletAddress};
+use pocketskynet_core::{LegacyTransaction, RoomId, SignedTransaction, Wallet, WalletAddress};
 
 use crate::api::{Client, RoomKeyWrap};
 use crate::components::toast;
@@ -1160,6 +1160,116 @@ pub async fn sign_in_with_wallet(
     let keys = SessionKeys::from_external(address, &derivation_sig, binding_sig)
         .map_err(|e| format!("Couldn't derive your encryption key: {e}"))?;
 
+    if let Err(e) = authed
+        .put_encryption_key(keys.public_key_hex(), keys.binding_sig())
+        .await
+    {
+        web_sys::console::warn_1(&format!("key publish failed: {}", e.user_message()).into());
+    }
+
+    Ok(Session {
+        token: login.token,
+        user: login.user,
+        keys: Rc::new(RefCell::new(keys)),
+        fruitnation_wallet: login.fruitnation_wallet,
+    })
+}
+
+/// Sign a transaction with whatever signer this session holds: the local key
+/// synchronously, or — for a TSS session — a threshold ceremony on the
+/// server over the transaction's `sighash`, assembled locally with
+/// `LegacyTransaction::sign_with_signature`. The raw bytes that come out are
+/// indistinguishable either way, which is the point (docs/CRYPTO.md §15.1).
+///
+/// Callers gate on `can_sign_locally() || tss_signing().is_some()` first so
+/// an external-wallet session still gets its explanatory refusal.
+pub async fn sign_transaction(
+    keys: &Rc<RefCell<SessionKeys>>,
+    tx: &LegacyTransaction,
+) -> Result<SignedTransaction, String> {
+    // Cloned out before the await: a `RefCell` borrow must not live across a
+    // suspension point another component could re-enter through.
+    let tss = keys.borrow().tss_signing();
+    match tss {
+        None => keys
+            .borrow()
+            .sign_transaction(tx)
+            .map_err(|e| e.to_string()),
+        Some((address, passphrase)) => {
+            let client = Client::new(&crate::session::server_base());
+            let sig = client
+                .tss_sign_hash(&address, &passphrase, &tx.sighash())
+                .await
+                .map_err(|e| e.user_message())?;
+            if sig.v > 1 {
+                return Err(format!("invalid recovery id {}", sig.v));
+            }
+            let rs = sig.rs_bytes()?;
+            Ok(tx.sign_with_signature(&rs, sig.v))
+        }
+    }
+}
+
+/// The [`sign_in`] round trip for a TSS (m-of-n threshold) wallet.
+///
+/// The wallet lives on the server (docs/CRYPTO.md §15): its shares never
+/// leave it, and the passphrase entered on the login screen is what
+/// authorizes each ceremony. The order differs from [`sign_in`] in one
+/// deliberate way — the session keys are fetched **first**, so a wrong
+/// passphrase fails immediately and cheaply, before a challenge is consumed
+/// or a multi-second signing ceremony is spent discovering it.
+///
+/// There is no derivation step and no salt: a TSS wallet's E2EE keypair is
+/// stored, not derived, because a ceremony signature is different on every
+/// run and `keccak256(signature)` would mint a new identity per login
+/// (§15.2 — the issue #85 blocker).
+pub async fn sign_in_with_tss(
+    client: Client,
+    address: WalletAddress,
+    passphrase: String,
+    username: &str,
+) -> Result<Session, String> {
+    // Passphrase check + E2EE identity, one call.
+    let session_keys = client
+        .tss_session_keys(&address, &passphrase)
+        .await
+        .map_err(|e| e.user_message())?;
+
+    let challenge = client
+        .auth_challenge(&address)
+        .await
+        .map_err(|e| e.user_message())?;
+
+    // The server's bytes, verbatim, signed by ceremony.
+    let signature = client
+        .tss_sign(&address, &passphrase, &challenge.message)
+        .await
+        .map_err(|e| e.user_message())?;
+
+    let login = client
+        .auth_login(
+            &address,
+            username,
+            &challenge.challenge_id,
+            &signature,
+            Some(&session_keys.public_key),
+            Some(&session_keys.binding_sig),
+        )
+        .await
+        .map_err(|e| e.user_message())?;
+
+    let authed = client.with_token(Some(&login.token));
+
+    let keys = SessionKeys::from_tss(
+        address,
+        passphrase,
+        &session_keys.encryption_key,
+        session_keys.binding_sig,
+    )
+    .map_err(|e| format!("Couldn't load your encryption key: {e}"))?;
+
+    // Same re-publish rule as `sign_in`: a login that omitted the key would
+    // have un-bound it server-side.
     if let Err(e) = authed
         .put_encryption_key(keys.public_key_hex(), keys.binding_sig())
         .await

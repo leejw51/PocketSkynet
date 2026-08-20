@@ -1292,6 +1292,31 @@ strings! {
     (pw_fast, "Fast password", "빠른 비밀번호", "クイックパスワード", "快速密碼", "Rychlé heslo", "Contraseña rápida", "快速密码", "Schnelles Passwort"),
     (pw_fast_done, "A new password is on your clipboard. Nothing was saved here.", "새 비밀번호가 클립보드에 복사되었습니다. 여기에는 저장되지 않았습니다.", "新しいパスワードをクリップボードにコピーしました。ここには保存していません。", "新密碼已經喺剪貼簿。呢度冇儲存過。", "Nové heslo je ve schránce. Sem se nic neuložilo.", "Hay una contraseña nueva en el portapapeles. Aquí no se guardó nada.", "新密码已复制到剪贴板。这里没有保存。", "Ein neues Passwort ist in der Zwischenablage. Hier wurde nichts gespeichert."),
     (pw_fast_copy_failed, "Copy is unavailable here, so the new password is in the field below — take it from there.", "여기서는 복사를 사용할 수 없어 새 비밀번호를 아래 입력란에 넣어 두었습니다 — 거기서 가져가세요.", "ここではコピーを使えないので、新しいパスワードを下の入力欄に入れました — そこから取ってください。", "呢度用唔到複製，所以新密碼放咗喺下面個格仔 — 喺嗰度攞。", "Kopírování zde není dostupné, takže nové heslo je v poli níže — vezměte si ho odtud.", "Copiar no está disponible aquí, así que la contraseña nueva está en el campo de abajo: cógela de ahí.", "此处无法复制，新密码已填入下方输入框 — 请从那里取用。", "Kopieren ist hier nicht verfügbar, daher steht das neue Passwort im Feld unten — nimm es von dort."),
+
+    // --- TSS (m-of-n threshold) wallet — docs/CRYPTO.md §15 ----------------
+    (tss_wallet_tab, "TSS wallet", "TSS 지갑", "TSSウォレット", "TSS 錢包", "TSS peněženka", "Cartera TSS", "TSS 钱包", "TSS-Wallet"),
+    (tss_intro, "An m-of-n wallet: the private key never exists in one piece. Your server holds the shares sealed under a passphrase and signs by threshold ceremony.", "m-of-n 지갑입니다. 개인 키는 결코 한 조각으로 존재하지 않습니다. 서버가 암호 문구로 봉인된 조각을 보관하고, 임계값 서명 의식으로 서명합니다.", "m-of-nウォレットです。秘密鍵は決して一つにまとまって存在しません。サーバーがパスフレーズで封印されたシェアを保管し、しきい値署名セレモニーで署名します。", "m-of-n 錢包：私鑰唔會完整咁存在。你嘅伺服器保管用密語封存嘅份額，簽名時執行門檻簽名儀式。", "Peněženka m-z-n: soukromý klíč nikdy neexistuje vcelku. Server drží podíly zapečetěné přístupovou frází a podepisuje prahovým ceremoniálem.", "Una cartera m-de-n: la clave privada nunca existe entera. Tu servidor guarda las partes selladas con una frase de contraseña y firma mediante una ceremonia de umbral.", "m-of-n 钱包：私钥从不完整存在。你的服务器保管用口令封存的份额，通过门限签名仪式进行签名。", "Eine m-von-n-Wallet: Der private Schlüssel existiert nie am Stück. Dein Server hält die Anteile unter einer Passphrase versiegelt und signiert per Schwellwert-Zeremonie."),
+    (tss_select_wallet, "Wallet", "지갑", "ウォレット", "錢包", "Peněženka", "Cartera", "钱包", "Wallet"),
+    (tss_no_wallets, "No TSS wallets on this server yet — create one below.", "이 서버에는 아직 TSS 지갑이 없습니다. 아래에서 만드세요.", "このサーバーにはまだTSSウォレットがありません。下で作成してください。", "呢個伺服器仲未有 TSS 錢包，喺下面建立一個。", "Na tomto serveru zatím nejsou žádné TSS peněženky — vytvořte si jednu níže.", "Aún no hay carteras TSS en este servidor: crea una abajo.", "此服务器上还没有 TSS 钱包——请在下方创建一个。", "Auf diesem Server gibt es noch keine TSS-Wallets — erstelle unten eine."),
+    (tss_passphrase, "Passphrase", "암호 문구", "パスフレーズ", "密語", "Přístupová fráze", "Frase de contraseña", "口令", "Passphrase"),
+    (tss_passphrase_hint, "Chosen at creation; needed for every signature. It is sent only to your own server.", "생성할 때 정한 문구로, 서명할 때마다 필요합니다. 오직 본인 서버로만 전송됩니다.", "作成時に決めたもので、署名のたびに必要です。自分のサーバーにのみ送信されます。", "建立錢包嗰陣設定，每次簽名都要用。只會傳去你自己嘅伺服器。", "Zvolena při vytvoření; je potřeba pro každý podpis. Odesílá se jen na váš vlastní server.", "Se elige al crearla y hace falta para cada firma. Solo se envía a tu propio servidor.", "创建时设定，每次签名都需要。只会发送到你自己的服务器。", "Bei der Erstellung gewählt; für jede Signatur nötig. Sie wird nur an deinen eigenen Server gesendet."),
+    (tss_create_title, "Create a TSS wallet", "TSS 지갑 만들기", "TSSウォレットを作成", "建立 TSS 錢包", "Vytvořit TSS peněženku", "Crear una cartera TSS", "创建 TSS 钱包", "TSS-Wallet erstellen"),
+    (tss_threshold, "Signatures needed (m)", "필요 서명 수 (m)", "必要署名数 (m)", "所需簽名數 (m)", "Potřebné podpisy (m)", "Firmas necesarias (m)", "所需签名数 (m)", "Benötigte Signaturen (m)"),
+    (tss_parties, "Total shares (n)", "전체 조각 수 (n)", "シェア総数 (n)", "份額總數 (n)", "Celkem podílů (n)", "Partes totales (n)", "份额总数 (n)", "Anteile gesamt (n)"),
+    (tss_confirm_passphrase, "Confirm passphrase", "암호 문구 확인", "パスフレーズを確認", "確認密語", "Potvrďte přístupovou frázi", "Confirmar frase de contraseña", "确认口令", "Passphrase bestätigen"),
+    (tss_create_button, "Run key generation", "키 생성 실행", "鍵生成を実行", "執行密鑰生成", "Spustit generování klíče", "Ejecutar la generación de claves", "运行密钥生成", "Schlüsselerzeugung starten"),
+    (tss_phase_primes, "Generating safe primes… (the slow step)", "안전 소수 생성 중… (가장 오래 걸리는 단계)", "安全素数を生成中…（時間のかかる工程）", "生成安全質數中…（最慢嘅一步）", "Generují se bezpečná prvočísla… (pomalý krok)", "Generando primos seguros… (el paso lento)", "正在生成安全素数……（最慢的一步）", "Sichere Primzahlen werden erzeugt … (der langsame Schritt)"),
+    (tss_phase_protocol, "Running the key-generation ceremony…", "키 생성 의식 진행 중…", "鍵生成セレモニーを実行中…", "執行密鑰生成儀式中…", "Probíhá ceremoniál generování klíče…", "Ejecutando la ceremonia de generación de claves…", "正在运行密钥生成仪式……", "Schlüsselerzeugungs-Zeremonie läuft …"),
+    (tss_phase_binding, "Sealing the encryption identity…", "암호화 신원 봉인 중…", "暗号化アイデンティティを封印中…", "封存加密身份中…", "Pečetí se šifrovací identita…", "Sellando la identidad de cifrado…", "正在封存加密身份……", "Verschlüsselungsidentität wird versiegelt …"),
+    (tss_created, "TSS wallet created.", "TSS 지갑이 생성되었습니다.", "TSSウォレットを作成しました。", "TSS 錢包建立咗喇。", "TSS peněženka vytvořena.", "Cartera TSS creada.", "TSS 钱包已创建。", "TSS-Wallet erstellt."),
+    (tss_keygen_failed, "Key generation failed: {error}", "키 생성 실패: {error}", "鍵生成に失敗しました: {error}", "密鑰生成失敗：{error}", "Generování klíče selhalo: {error}", "La generación de claves falló: {error}", "密钥生成失败：{error}", "Schlüsselerzeugung fehlgeschlagen: {error}"),
+    (tss_enter_passphrase, "Enter the wallet's passphrase.", "지갑의 암호 문구를 입력하세요.", "ウォレットのパスフレーズを入力してください。", "輸入錢包嘅密語。", "Zadejte přístupovou frázi peněženky.", "Introduce la frase de contraseña de la cartera.", "请输入钱包口令。", "Gib die Passphrase der Wallet ein."),
+    (tss_passphrase_short, "Use at least 8 characters.", "8자 이상 입력하세요.", "8文字以上にしてください。", "至少用 8 個字元。", "Použijte alespoň 8 znaků.", "Usa al menos 8 caracteres.", "至少使用 8 个字符。", "Verwende mindestens 8 Zeichen."),
+    (tss_passphrase_mismatch, "The passphrases don't match.", "암호 문구가 일치하지 않습니다.", "パスフレーズが一致しません。", "兩次輸入嘅密語唔一致。", "Přístupové fráze se neshodují.", "Las frases de contraseña no coinciden.", "两次输入的口令不一致。", "Die Passphrasen stimmen nicht überein."),
+    (tss_select_first, "Pick a TSS wallet, or create one.", "TSS 지갑을 선택하거나 새로 만드세요.", "TSSウォレットを選ぶか、作成してください。", "揀一個 TSS 錢包，或者建立一個。", "Vyberte TSS peněženku, nebo ji vytvořte.", "Elige una cartera TSS o crea una.", "选择一个 TSS 钱包，或创建一个。", "Wähle eine TSS-Wallet oder erstelle eine."),
+    (tss_local_unavailable, "TSS wallets need a server — they aren't available in local mode.", "TSS 지갑은 서버가 필요하므로 로컬 모드에서는 사용할 수 없습니다.", "TSSウォレットにはサーバーが必要なため、ローカルモードでは使えません。", "TSS 錢包需要伺服器，本機模式用唔到。", "TSS peněženky potřebují server — v lokálním režimu nejsou dostupné.", "Las carteras TSS necesitan un servidor: no están disponibles en modo local.", "TSS 钱包需要服务器——本地模式下不可用。", "TSS-Wallets brauchen einen Server — im lokalen Modus nicht verfügbar."),
+    (tss_delete_confirm, "Delete this TSS wallet? Its key shares are destroyed permanently.", "이 TSS 지갑을 삭제할까요? 키 조각이 영구히 파기됩니다.", "このTSSウォレットを削除しますか？鍵のシェアは完全に破棄されます。", "刪除呢個 TSS 錢包？密鑰份額會永久銷毀。", "Smazat tuto TSS peněženku? Podíly klíče budou nenávratně zničeny.", "¿Eliminar esta cartera TSS? Sus partes de la clave se destruirán para siempre.", "删除此 TSS 钱包？其密钥份额将被永久销毁。", "Diese TSS-Wallet löschen? Ihre Schlüsselanteile werden endgültig zerstört."),
+    (tss_deleted, "TSS wallet deleted.", "TSS 지갑이 삭제되었습니다.", "TSSウォレットを削除しました。", "TSS 錢包刪除咗喇。", "TSS peněženka smazána.", "Cartera TSS eliminada.", "TSS 钱包已删除。", "TSS-Wallet gelöscht."),
 }
 
 /// The fast-room descriptions, by index. A set whose *size* is part of the
@@ -1510,6 +1535,10 @@ mod tests {
             (Lang::Yue, Key::agent_badge),
             (Lang::Cs, Key::agent_badge),
             (Lang::Zh, Key::agent_badge),
+            // "Wallet" and "Passphrase" are the ordinary German nouns too,
+            // same rule as Key::wallet above.
+            (Lang::De, Key::tss_select_wallet),
+            (Lang::De, Key::tss_passphrase),
         ];
         for key in Key::ALL {
             for lang in Lang::ALL {

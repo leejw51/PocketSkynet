@@ -685,14 +685,15 @@ async fn run_send(
 
     // Checked before signing rather than after failing: an external wallet has
     // no key on this device, and "signing failed: no signing key on this
-    // device" is a dead end where a sentence about how to fix it belongs.
-    if !keys.borrow().can_sign_locally() {
+    // device" is a dead end where a sentence about how to fix it belongs. A
+    // TSS session passes — it signs by server ceremony.
+    if !keys.borrow().can_sign_locally() && keys.borrow().tss_signing().is_none() {
         return fail(t(lang, Key::wallet_no_local_key).to_owned());
     }
     tx_phase(hud, TxPhase::Sign);
-    let signed = match keys.borrow().sign_transaction(&tx) {
+    let signed = match crate::actions::sign_transaction(&keys, &tx).await {
         Ok(s) => s,
-        Err(e) => return fail(t(lang, Key::signing_failed).replace("{error}", &e.to_string())),
+        Err(e) => return fail(t(lang, Key::signing_failed).replace("{error}", &e)),
     };
 
     tx_phase(hud, TxPhase::Broadcast);

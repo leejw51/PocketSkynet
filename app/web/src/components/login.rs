@@ -1,7 +1,11 @@
 //! Screen 1 — Login, plus the **unlock** state this client adds.
 //!
-//! Exactly two credentials are accepted, and both are handled entirely in the
-//! browser: a **BIP-39 recovery phrase** or a **raw private key in hex**.
+//! Three credentials are accepted. Two are handled entirely in the browser —
+//! a **BIP-39 recovery phrase** or a **raw private key in hex** — and the
+//! third is a **TSS (m-of-n threshold) wallet**, whose key exists nowhere:
+//! the user's own server holds passphrase-sealed shares and signs by
+//! ceremony (docs/CRYPTO.md §15), so that tab collects a wallet choice and a
+//! passphrase instead of key material.
 //! DESIGN.md §5 also specifies MetaMask and Privy tabs; they are deliberately
 //! absent, because both need a JavaScript provider bridge (`window.ethereum`,
 //! the Privy SDK) that this bundle does not ship, and a tab that renders but
@@ -28,10 +32,11 @@
 
 use pocketskynet_core::{deterministic_username, wallet, MnemonicLength, Wallet, WalletAddress};
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlInputElement, HtmlTextAreaElement};
+use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
 
 use crate::actions;
+use crate::api::tss::TssWalletInfo;
 use crate::api::Client;
 use crate::i18n::{t, Key, Lang};
 use crate::route::Route;
@@ -79,17 +84,21 @@ impl ConnChoice {
     }
 }
 
-/// The two accepted credentials.
+/// The accepted credentials.
 ///
-/// Both end at the same place — a [`Wallet`] — so everything downstream of
-/// [`derive_wallet`] is identical. Only the input widget and the validation
-/// message differ.
+/// The first two end at the same place — a [`Wallet`] — so everything
+/// downstream of [`derive_wallet`] is identical; only the input widget and
+/// the validation message differ. `Tss` is different in kind: no key ever
+/// reaches this process, so its submit path goes through
+/// [`actions::sign_in_with_tss`] instead of deriving anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     /// A BIP-39 phrase, derived at `m/44'/60'/0'/0/{index}`.
     Mnemonic,
     /// A raw 32-byte secp256k1 scalar, hex, `0x` prefix optional.
     PrivateKey,
+    /// An m-of-n threshold wallet held by the server (docs/CRYPTO.md §15).
+    Tss,
 }
 
 impl Method {
@@ -97,6 +106,7 @@ impl Method {
         match self {
             Self::Mnemonic => "tab-mnemonic",
             Self::PrivateKey => "tab-privatekey",
+            Self::Tss => "tab-tss",
         }
     }
 
@@ -104,6 +114,7 @@ impl Method {
         match self {
             Self::Mnemonic => t(lang, Key::recovery_phrase),
             Self::PrivateKey => t(lang, Key::private_key),
+            Self::Tss => t(lang, Key::tss_wallet_tab),
         }
     }
 }
@@ -164,6 +175,9 @@ fn derive_wallet(
                 t(lang, Key::private_key_not_scalar).into()
             })
         }
+        // A TSS wallet has no local key to derive; its submit path never
+        // calls this. The arm exists so the match stays exhaustive.
+        Method::Tss => Err(t(lang, Key::tss_select_first).into()),
     }
 }
 
@@ -264,6 +278,21 @@ pub fn login(p: &LoginProps) -> Html {
     // effect rather than by a person. Only an auto-made choice may be
     // auto-reverted; a person's click is theirs until they change it.
     let auto_picked = use_state(|| false);
+    // --- the TSS tab's state (docs/CRYPTO.md §15) ---
+    // The server's wallet listing, the chosen address, and the passphrase
+    // that authorizes ceremonies. The passphrase lives in this component's
+    // memory only — it is sent to the user's own server per request, never
+    // persisted anywhere.
+    let tss_wallets = use_state(Vec::<TssWalletInfo>::new);
+    let tss_selected = use_state(|| Option::<String>::None);
+    let tss_passphrase = use_state(String::new);
+    // The create form: shape, a passphrase typed twice, and keygen progress.
+    let tss_parties = use_state(|| 3u16);
+    let tss_threshold = use_state(|| 2u16);
+    let tss_new_pass = use_state(String::new);
+    let tss_new_pass2 = use_state(String::new);
+    let tss_keygen_busy = use_state(|| false);
+    let tss_phase = use_state(|| Option::<Key>::None);
 
     let is_unlock = p.locked_as.is_some();
     let local_mode = *conn_choice == ConnChoice::Local;
@@ -397,6 +426,233 @@ pub fn login(p: &LoginProps) -> Html {
                 error.set(None);
             })
         }
+    };
+
+    // --- the TSS tab (docs/CRYPTO.md §15) ----------------------------------
+
+    // The client the TSS calls go through. Listing and keygen must work
+    // *before* a sign-in is submitted, so this follows the picker without
+    // committing it — nothing is persisted by merely looking at the tab.
+    // `None` in local mode: there is no server to hold a share.
+    let tss_client = {
+        let conn_choice = conn_choice.clone();
+        let server_url = server_url.clone();
+        move || -> Option<Client> {
+            match *conn_choice {
+                ConnChoice::SameOrigin => Some(Client::new("")),
+                ConnChoice::Custom => {
+                    Some(Client::new(&session::normalize_server_base(&server_url)))
+                }
+                ConnChoice::Local => None,
+            }
+        }
+    };
+
+    // Fetch the wallet list when the tab is opened (and when the server
+    // choice changes underneath it). Auto-selects the locked account when
+    // unlocking, else the newest wallet — the dropdown must never sit on a
+    // blank row while a wallet exists.
+    {
+        let tss_wallets = tss_wallets.clone();
+        let tss_selected = tss_selected.clone();
+        let tss_client = tss_client.clone();
+        let locked_address = p.locked_as.as_ref().map(|(a, _)| a.as_str().to_owned());
+        use_effect_with(
+            (*method, *conn_choice, (*server_url).clone()),
+            move |(method, _, _)| {
+                if *method == Method::Tss {
+                    if let Some(client) = tss_client() {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let Ok(list) = client.tss_wallets().await else {
+                                return;
+                            };
+                            let already = tss_selected
+                                .as_ref()
+                                .is_some_and(|a| list.iter().any(|w| &w.address == a));
+                            if !already {
+                                let pick = locked_address
+                                    .filter(|a| list.iter().any(|w| &w.address == a))
+                                    .or_else(|| list.first().map(|w| w.address.clone()));
+                                tss_selected.set(pick);
+                            }
+                            tss_wallets.set(list);
+                        });
+                    }
+                }
+                || ()
+            },
+        );
+    }
+
+    let on_tss_select = {
+        let tss_selected = tss_selected.clone();
+        let error = error.clone();
+        Callback::from(move |e: Event| {
+            if let Some(el) = e.target_dyn_into::<HtmlSelectElement>() {
+                let value = el.value();
+                tss_selected.set((!value.is_empty()).then_some(value));
+                error.set(None);
+            }
+        })
+    };
+
+    let on_tss_passphrase = {
+        let tss_passphrase = tss_passphrase.clone();
+        let error = error.clone();
+        Callback::from(move |e: InputEvent| {
+            if let Some(el) = e.target_dyn_into::<HtmlInputElement>() {
+                tss_passphrase.set(el.value());
+                error.set(None);
+            }
+        })
+    };
+
+    // Create: run the DKG on the server and poll its status until the new
+    // address appears. The ceremony keeps running server-side even if this
+    // page is closed — polling is observation, not participation.
+    let on_tss_create = {
+        let tss_client = tss_client.clone();
+        let tss_wallets = tss_wallets.clone();
+        let tss_selected = tss_selected.clone();
+        let tss_passphrase = tss_passphrase.clone();
+        let tss_parties = tss_parties.clone();
+        let tss_threshold = tss_threshold.clone();
+        let tss_new_pass = tss_new_pass.clone();
+        let tss_new_pass2 = tss_new_pass2.clone();
+        let tss_keygen_busy = tss_keygen_busy.clone();
+        let tss_phase = tss_phase.clone();
+        let set_error = set_error.clone();
+        let store = store.clone();
+        Callback::from(move |_: MouseEvent| {
+            if *tss_keygen_busy {
+                return;
+            }
+            let pass = (*tss_new_pass).clone();
+            if pass.chars().count() < 8 {
+                set_error.emit(Some(t(lang, Key::tss_passphrase_short).into()));
+                return;
+            }
+            if pass != *tss_new_pass2 {
+                set_error.emit(Some(t(lang, Key::tss_passphrase_mismatch).into()));
+                return;
+            }
+            let Some(client) = tss_client() else {
+                set_error.emit(Some(t(lang, Key::tss_local_unavailable).into()));
+                return;
+            };
+            let (t_needed, n_total) = (*tss_threshold, *tss_parties);
+
+            tss_keygen_busy.set(true);
+            tss_phase.set(Some(Key::tss_phase_primes));
+            set_error.emit(None);
+
+            let tss_wallets = tss_wallets.clone();
+            let tss_selected = tss_selected.clone();
+            let tss_passphrase = tss_passphrase.clone();
+            let tss_new_pass = tss_new_pass.clone();
+            let tss_new_pass2 = tss_new_pass2.clone();
+            let tss_keygen_busy = tss_keygen_busy.clone();
+            let tss_phase = tss_phase.clone();
+            let set_error = set_error.clone();
+            let store = store.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let fail = |e: String| {
+                    set_error.emit(Some(t(lang, Key::tss_keygen_failed).replace("{error}", &e)));
+                    tss_phase.set(None);
+                    tss_keygen_busy.set(false);
+                };
+                if let Err(e) = client.tss_keygen(t_needed, n_total, &pass).await {
+                    return fail(e.user_message());
+                }
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(1_500).await;
+                    let status = match client.tss_keygen_status().await {
+                        Ok(s) => s,
+                        // One dropped poll is not a failed ceremony — the
+                        // server is still working; keep watching.
+                        Err(_) => continue,
+                    };
+                    match status.state.as_str() {
+                        "generating_primes" => tss_phase.set(Some(Key::tss_phase_primes)),
+                        "running_protocol" => tss_phase.set(Some(Key::tss_phase_protocol)),
+                        "binding" => tss_phase.set(Some(Key::tss_phase_binding)),
+                        "done" => {
+                            let address = status.address.unwrap_or_default();
+                            if let Ok(list) = client.tss_wallets().await {
+                                tss_wallets.set(list);
+                            }
+                            tss_selected.set(Some(address));
+                            // The passphrase just proven right becomes the
+                            // sign-in passphrase, so creating flows straight
+                            // into signing in without retyping it.
+                            tss_passphrase.set(pass.clone());
+                            tss_new_pass.set(String::new());
+                            tss_new_pass2.set(String::new());
+                            tss_phase.set(None);
+                            tss_keygen_busy.set(false);
+                            toast::success(&store, t(lang, Key::tss_created));
+                            return;
+                        }
+                        "error" => {
+                            return fail(status.error.unwrap_or_else(|| "unknown".into()));
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        })
+    };
+
+    // Delete the selected wallet. Passphrase-gated server-side; confirmed
+    // here because the shares are gone for good.
+    let on_tss_delete = {
+        let tss_client = tss_client.clone();
+        let tss_wallets = tss_wallets.clone();
+        let tss_selected = tss_selected.clone();
+        let tss_passphrase = tss_passphrase.clone();
+        let set_error = set_error.clone();
+        let store = store.clone();
+        Callback::from(move |_: MouseEvent| {
+            let Some(address) = (*tss_selected).clone() else {
+                set_error.emit(Some(t(lang, Key::tss_select_first).into()));
+                return;
+            };
+            if tss_passphrase.trim().is_empty() {
+                set_error.emit(Some(t(lang, Key::tss_enter_passphrase).into()));
+                return;
+            }
+            let confirmed = web_sys::window()
+                .and_then(|w| {
+                    w.confirm_with_message(t(lang, Key::tss_delete_confirm))
+                        .ok()
+                })
+                .unwrap_or(false);
+            if !confirmed {
+                return;
+            }
+            let Some(client) = tss_client() else {
+                return;
+            };
+            let Ok(wallet_address) = WalletAddress::new(&address) else {
+                return;
+            };
+            let pass = (*tss_passphrase).clone();
+            let tss_wallets = tss_wallets.clone();
+            let tss_selected = tss_selected.clone();
+            let set_error = set_error.clone();
+            let store = store.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match client.tss_delete(&wallet_address, &pass).await {
+                    Ok(()) => {
+                        let list = client.tss_wallets().await.unwrap_or_default();
+                        tss_selected.set(list.first().map(|w| w.address.clone()));
+                        tss_wallets.set(list);
+                        toast::success(&store, t(lang, Key::tss_deleted));
+                    }
+                    Err(e) => set_error.emit(Some(e.user_message())),
+                }
+            });
+        })
     };
 
     let on_index = {
@@ -571,11 +827,77 @@ pub fn login(p: &LoginProps) -> Html {
         let locked_as = p.locked_as.clone();
         let conn_choice = conn_choice.clone();
         let server_url = server_url.clone();
+        let tss_selected = tss_selected.clone();
+        let tss_passphrase = tss_passphrase.clone();
 
         Callback::from(move |_: ()| {
             if *busy {
                 return;
             }
+
+            // The TSS path: no wallet is derived here — the server signs by
+            // ceremony, and this screen only collected which wallet and the
+            // passphrase that authorizes it (`actions::sign_in_with_tss`).
+            if *method == Method::Tss {
+                if *conn_choice == ConnChoice::Local {
+                    set_error.emit(Some(t(lang, Key::tss_local_unavailable).into()));
+                    return;
+                }
+                let Some(address) = (*tss_selected)
+                    .clone()
+                    .and_then(|a| WalletAddress::new(&a).ok())
+                else {
+                    set_error.emit(Some(t(lang, Key::tss_select_first).into()));
+                    return;
+                };
+                if tss_passphrase.trim().is_empty() {
+                    set_error.emit(Some(t(lang, Key::tss_enter_passphrase).into()));
+                    return;
+                }
+                // Unlock path: same rule as the key tabs — the chosen wallet
+                // must be the account this device is locked as.
+                if let Some((expected, _)) = &locked_as {
+                    if &address != expected {
+                        set_error.emit(Some(
+                            "That belongs to a different wallet. Use \"Sign in as someone else\" \
+                             if you meant to switch accounts."
+                                .into(),
+                        ));
+                        return;
+                    }
+                }
+
+                busy.set(true);
+                set_error.emit(None);
+                let username = match username.trim() {
+                    "" => deterministic_username(&address),
+                    chosen => chosen.to_owned(),
+                };
+                let passphrase = (*tss_passphrase).clone();
+                let client = commit_choice(&store, *conn_choice, &server_url);
+                let store = store.clone();
+                let busy = busy.clone();
+                let set_error = set_error.clone();
+                let booting = booting.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match actions::sign_in_with_tss(client, address, passphrase, &username).await {
+                        Ok(session) => {
+                            session.persist();
+                            // Nothing goes into the device vault: there is no
+                            // credential this browser could keep — the
+                            // passphrase is deliberately not remembered.
+                            booting.set(Some(session));
+                        }
+                        Err(e) => {
+                            set_error.emit(Some(e.clone()));
+                            toast::error(&store, t(lang, Key::couldnt_sign_in), Some(e));
+                            busy.set(false);
+                        }
+                    }
+                });
+                return;
+            }
+
             let wallet = match derive_wallet(lang, *method, &mnemonic, &private_key, *wallet_index)
             {
                 Ok(w) => w,
@@ -835,6 +1157,7 @@ pub fn login(p: &LoginProps) -> Html {
     let credential_empty = match *method {
         Method::Mnemonic => mnemonic.trim().is_empty(),
         Method::PrivateKey => private_key.trim().is_empty(),
+        Method::Tss => tss_selected.is_none() || tss_passphrase.trim().is_empty(),
     };
     let submit_disabled = *busy || credential_empty || must_back_up || offline;
 
@@ -1276,7 +1599,7 @@ pub fn login(p: &LoginProps) -> Html {
                     <div class="fn-rule">{ t(lang, Key::or_sign_in_with) }</div>
                 }
                 <div class="fn-tabs" role="tablist" aria-label={t(lang, Key::sign_in_method)}>
-                    { for [Method::Mnemonic, Method::PrivateKey].into_iter().map(|m| {
+                    { for [Method::Mnemonic, Method::PrivateKey, Method::Tss].into_iter().map(|m| {
                         let selected = *method == m;
                         html! {
                             <button
@@ -1441,6 +1764,183 @@ pub fn login(p: &LoginProps) -> Html {
                             </button>
                         }
                     </div>
+                    }
+
+                    if *method == Method::Tss {
+                        if local_mode {
+                            // Not an error — a statement of fact about the
+                            // mode: local mode has no server to hold shares.
+                            <p class="fn-field__help">{ t(lang, Key::tss_local_unavailable) }</p>
+                        } else {
+                            <p class="fn-field__help">{ t(lang, Key::tss_intro) }</p>
+
+                            if tss_wallets.is_empty() {
+                                if !is_unlock {
+                                    <p class="fn-field__help">{ t(lang, Key::tss_no_wallets) }</p>
+                                }
+                            } else {
+                                <div class="fn-field">
+                                    <div class="fn-row">
+                                        <label class="fn-field__label fn-grow" for="login-tss-wallet">
+                                            { t(lang, Key::tss_select_wallet) }
+                                        </label>
+                                        <button
+                                            type="button"
+                                            class="topcoat-icon-button--quiet"
+                                            aria-label={t(lang, Key::delete)}
+                                            onclick={on_tss_delete}
+                                        >
+                                            { icons::trash(16) }
+                                        </button>
+                                    </div>
+                                    <select
+                                        id="login-tss-wallet"
+                                        class="topcoat-text-input"
+                                        onchange={on_tss_select}
+                                    >
+                                        { for tss_wallets.iter().map(|w| {
+                                            let selected = (*tss_selected).as_deref() == Some(w.address.as_str());
+                                            html! {
+                                                <option value={w.address.clone()} selected={selected}>
+                                                    { format!("{} · {}", w.shape(), abbreviate_hex(&w.address)) }
+                                                </option>
+                                            }
+                                        }) }
+                                    </select>
+                                </div>
+                            }
+
+                            if !tss_wallets.is_empty() {
+                                <div class="fn-field">
+                                    <label class="fn-field__label" for="login-tss-passphrase">
+                                        { t(lang, Key::tss_passphrase) }
+                                    </label>
+                                    <input
+                                        id="login-tss-passphrase"
+                                        class="topcoat-text-input"
+                                        type="password"
+                                        autocomplete="off"
+                                        spellcheck="false"
+                                        aria-invalid={error.is_some().then_some("true")}
+                                        aria-describedby={error.is_some().then_some("login-error")}
+                                        value={(*tss_passphrase).clone()}
+                                        oninput={on_tss_passphrase}
+                                    />
+                                    <p class="fn-field__help">{ t(lang, Key::tss_passphrase_hint) }</p>
+                                </div>
+                            }
+
+                            if !is_unlock {
+                                <div class="fn-rule">{ t(lang, Key::tss_create_title) }</div>
+                                <div class="fn-row">
+                                    <div class="fn-field fn-grow">
+                                        <label class="fn-field__label" for="login-tss-parties">
+                                            { t(lang, Key::tss_parties) }
+                                        </label>
+                                        <select
+                                            id="login-tss-parties"
+                                            class="topcoat-text-input"
+                                            disabled={*tss_keygen_busy}
+                                            onchange={{
+                                                let tss_parties = tss_parties.clone();
+                                                let tss_threshold = tss_threshold.clone();
+                                                Callback::from(move |e: Event| {
+                                                    if let Some(el) = e.target_dyn_into::<HtmlSelectElement>() {
+                                                        let n = el.value().parse().unwrap_or(3);
+                                                        tss_parties.set(n);
+                                                        // t must stay ≤ n when n shrinks.
+                                                        if *tss_threshold > n {
+                                                            tss_threshold.set(n);
+                                                        }
+                                                    }
+                                                })
+                                            }}
+                                        >
+                                            { for (2u16..=5).map(|n| html! {
+                                                <option value={n.to_string()} selected={*tss_parties == n}>{ n }</option>
+                                            }) }
+                                        </select>
+                                    </div>
+                                    <div class="fn-field fn-grow">
+                                        <label class="fn-field__label" for="login-tss-threshold">
+                                            { t(lang, Key::tss_threshold) }
+                                        </label>
+                                        <select
+                                            id="login-tss-threshold"
+                                            class="topcoat-text-input"
+                                            disabled={*tss_keygen_busy}
+                                            onchange={{
+                                                let tss_threshold = tss_threshold.clone();
+                                                Callback::from(move |e: Event| {
+                                                    if let Some(el) = e.target_dyn_into::<HtmlSelectElement>() {
+                                                        tss_threshold.set(el.value().parse().unwrap_or(2));
+                                                    }
+                                                })
+                                            }}
+                                        >
+                                            { for (2u16..=*tss_parties).map(|m| html! {
+                                                <option value={m.to_string()} selected={*tss_threshold == m}>{ m }</option>
+                                            }) }
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="fn-field">
+                                    <label class="fn-field__label" for="login-tss-newpass">
+                                        { t(lang, Key::tss_passphrase) }
+                                    </label>
+                                    <input
+                                        id="login-tss-newpass"
+                                        class="topcoat-text-input"
+                                        type="password"
+                                        autocomplete="new-password"
+                                        spellcheck="false"
+                                        disabled={*tss_keygen_busy}
+                                        value={(*tss_new_pass).clone()}
+                                        oninput={{
+                                            let tss_new_pass = tss_new_pass.clone();
+                                            Callback::from(move |e: InputEvent| {
+                                                if let Some(el) = e.target_dyn_into::<HtmlInputElement>() {
+                                                    tss_new_pass.set(el.value());
+                                                }
+                                            })
+                                        }}
+                                    />
+                                </div>
+                                <div class="fn-field">
+                                    <label class="fn-field__label" for="login-tss-newpass2">
+                                        { t(lang, Key::tss_confirm_passphrase) }
+                                    </label>
+                                    <input
+                                        id="login-tss-newpass2"
+                                        class="topcoat-text-input"
+                                        type="password"
+                                        autocomplete="new-password"
+                                        spellcheck="false"
+                                        disabled={*tss_keygen_busy}
+                                        value={(*tss_new_pass2).clone()}
+                                        oninput={{
+                                            let tss_new_pass2 = tss_new_pass2.clone();
+                                            Callback::from(move |e: InputEvent| {
+                                                if let Some(el) = e.target_dyn_into::<HtmlInputElement>() {
+                                                    tss_new_pass2.set(el.value());
+                                                }
+                                            })
+                                        }}
+                                    />
+                                </div>
+                                if *tss_keygen_busy {
+                                    <p class="fn-muted">
+                                        <Spinner />
+                                        { " " }
+                                        { (*tss_phase).map(|k| t(lang, k)).unwrap_or_default() }
+                                    </p>
+                                } else {
+                                    <button type="button" class="topcoat-button" onclick={on_tss_create}>
+                                        { t(lang, Key::tss_create_button) }
+                                    </button>
+                                }
+                            }
+                        }
                     }
 
                     if let (Some(_), Some(address)) = ((*generated).clone(), new_address.clone()) {
@@ -1634,6 +2134,16 @@ fn download_json(_filename: &str, _contents: &str) {}
 /// along with the phrase — the same words at index 1 are a different account,
 /// so a phrase stored without its index would silently sign the user in as
 /// somebody else.
+/// `0x1234…abcd` for the TSS wallet dropdown — the shape is the interesting
+/// half of the row, so the address only has to be recognisable.
+fn abbreviate_hex(address: &str) -> String {
+    if address.len() > 12 {
+        format!("{}…{}", &address[..8], &address[address.len() - 4..])
+    } else {
+        address.to_owned()
+    }
+}
+
 fn credential_of(method: Method, mnemonic: &str, private_key: &str, index: u32) -> Credential {
     match method {
         Method::Mnemonic => Credential::Mnemonic {
@@ -1643,6 +2153,10 @@ fn credential_of(method: Method, mnemonic: &str, private_key: &str, index: u32) 
         Method::PrivateKey => Credential::PrivateKey {
             hex: private_key.trim().to_owned(),
         },
+        // The TSS submit path returns before reaching `credential_of`: there
+        // is no credential this browser could keep — the passphrase is
+        // deliberately never stored.
+        Method::Tss => unreachable!("the TSS path does not build a vault credential"),
     }
 }
 

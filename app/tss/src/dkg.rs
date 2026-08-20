@@ -82,7 +82,7 @@ pub async fn run_dkg(
 
             let aux = round_based::sim::async_env::run_with_capacity_and_setup(
                 capacity,
-                primes.into_iter(),
+                primes,
                 |i, party, party_primes| async move {
                     let mut rng = OsRng;
                     cggmp21::aux_info_gen::<SecLevel>(eid, i, n, party_primes)
