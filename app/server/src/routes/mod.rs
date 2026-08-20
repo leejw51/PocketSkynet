@@ -29,6 +29,7 @@ pub mod search;
 pub mod shout;
 pub mod sites;
 pub mod sync;
+pub mod tss;
 pub mod uploads;
 pub mod users;
 pub mod webhooks;
@@ -220,6 +221,7 @@ fn api_router(state: &AppState) -> Router<AppState> {
         .merge(operators::router())
         .merge(shout::router())
         .merge(sites::router())
+        .merge(tss::router())
         .merge(realtime::sse_router())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

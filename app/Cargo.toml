@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "gui", "server"]
+members = ["core", "gui", "server", "tss"]
 resolver = "2"
 
 # `web/` is deliberately NOT a member: it only ever builds for
@@ -15,6 +15,7 @@ license = "MIT"
 
 [workspace.dependencies]
 pocketskynet-core = { path = "core" }
+pocketskynet-tss = { path = "tss" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -45,3 +46,10 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# cggmp21's Paillier math (the `tss` crate) is unusably slow in unoptimized
+# builds; keep dependencies optimized even in the dev profile so the TSS
+# tests run in seconds-to-minutes rather than hours. Workspace crates
+# themselves stay at opt-level 0 for fast incremental builds.
+[profile.dev.package."*"]
+opt-level = 2
