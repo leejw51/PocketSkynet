@@ -1302,3 +1302,146 @@ Verify before decrypting, exactly as §6.2:
   random, so the trade in §9.4 applies unchanged: whoever holds the wallet
   credential can re-derive it and open every entry it ever sealed.
 
+
+---
+
+## 15. Threshold (TSS/MPC) wallets
+
+Design decision record for issue #85. Written before the implementation, as
+that issue requires; the normative statements here bind the code under
+`app/tss/` and `app/server/src/routes/tss.rs`.
+
+### 15.1 What a TSS wallet is here
+
+A wallet whose secp256k1 private key **never exists in one piece**. Key
+generation is a CGGMP21 distributed key generation (DKG) among `n` parties;
+signing is a threshold-ECDSA ceremony among any `t` of them (`2 ≤ t ≤ n`).
+The output of a ceremony is an ordinary low-s, recoverable ECDSA signature
+over the same digests the single-key wallet signs:
+
+- EIP-191 `personal_sign` digest (§2.1) — login challenge, key binding;
+- EIP-155 legacy transaction sighash (PROTOCOL.md §16) — wallet sends.
+
+**The chain, the server's verifier (`eip191::recover_address`) and every
+downstream consumer cannot tell a ceremony signature from a single-key one.**
+That indistinguishability is a hard requirement and is proven by test vectors
+(PROTOCOL.md, "TSS signatures") plus the integration suite in
+`app/tss/tests/`.
+
+Implementation: the audited [`cggmp21`](https://github.com/LFDT-Lockness/cggmp21)
+crate (LFDT/Hyperledger governance), `SecurityLevel128`, curve secp256k1 —
+the same stack as the reviewed reference wallet this port derives from. The
+mnemonic wallet (§1) is unchanged and the two coexist; TSS replaces nothing.
+
+### 15.2 The E2EE derivation decision (the issue's blocker)
+
+§3 derives the E2EE private key as `encPriv = keccak256(sig)` over a fixed
+message, and that construction is only sound because RFC 6979 makes `sig` a
+pure function of `(key, message)`. Threshold ECDSA generates the nonce `k`
+jointly and randomly — two ceremonies over the same message produce two
+different valid signatures, hence two different "identities", and the second
+login would silently orphan everything the first one encrypted.
+
+**Decision: option 1 — decouple E2EE from the wallet signature entirely.**
+
+For a TSS wallet:
+
+1. At wallet creation, an independent encryption keypair is generated from
+   the OS CSPRNG (`core::random`) — *not* derived from any signature.
+2. The key-binding signature (§4) over
+   `build_key_binding_message(address, encPub)` is produced **once**, by a
+   signing ceremony, at creation time. Binding verification only needs *a*
+   valid signature, not a deterministic one, so ceremony randomness is
+   harmless here.
+3. Both are stored inside the encrypted TSS wallet file (§15.4), under the
+   same custody as the key shares, and released to a client only on
+   presentation of the wallet passphrase.
+
+Consequences, stated plainly:
+
+- The salted derivation message (§3.1) is **never signed** by a TSS wallet.
+  A TSS session ignores `encryptionSalt`. This also closes, for TSS wallets,
+  the §3 capability problem ("anyone who can get the user to sign the
+  derivation message owns their E2EE key") — there is no such message.
+- The E2EE keypair's lifetime equals the wallet file's. Losing the file (or
+  its passphrase) loses message history even if the key shares are
+  recoverable elsewhere; back up the wallet file, not just shares.
+- Rejected alternatives: threshold PRF/VRF derivation (no audited
+  implementation to hand) and deterministic threshold ECDSA (research-grade;
+  the issue itself rules it out for v1).
+
+### 15.3 Where ceremonies run, and why (the wasm32 finding)
+
+The issue demanded the wasm32 question be verified before choosing a crate.
+Verified: `cggmp21`'s Paillier arithmetic sits on `rug`/`gmp-mpfr-sys` — a C
+GMP build that does not compile for `wasm32-unknown-unknown` (checked by an
+actual `cargo check --target wasm32-unknown-unknown`; `cggmp21-keygen` alone
+is no_std-friendly, but aux-info generation and signing are not). A browser
+cannot host a share holder with this stack.
+
+Therefore **every ceremony runs natively, inside the PocketSkynet server
+process**, over `round-based`'s in-process simulated network, exactly as the
+reference wallet does. The web client drives ceremonies over
+`/api/tss/*` and receives only public outputs (address, signatures) plus —
+against the passphrase — the E2EE keypair. The `tss` crate is a native-only
+workspace member; the web workspace never links it.
+
+### 15.4 Share custody, stated
+
+v1 custody model: **all `n` shares live on the user's own self-hosted server**
+in a single wallet file `<data_dir>/tss/<address>.wallet.json`, mode 0600,
+encrypted under a user-chosen passphrase:
+
+```
+kdf   = PBKDF2-HMAC-SHA256, 600_000 iterations, random 16-byte salt
+okm   = kdf(passphrase) → 64 bytes; encKey = okm[0..32], macKey = okm[32..64]
+seal  = AES-256-CBC(encKey, random IV) over the secrets JSON,
+        then HMAC-SHA256(macKey, iv ‖ ciphertext)  (encrypt-then-MAC;
+        MAC is verified before any decryption is attempted)
+```
+
+The plaintext under that seal is `{ shares[n], encPriv, bindingSig }`.
+The file's *header* (version, address, `t`, `n`, KDF parameters, creation
+time) is cleartext so the login screen can list wallets without a passphrase.
+
+What this means, without euphemism:
+
+- PocketSkynet is self-hosted, so the operator and the user are the same
+  person; "the operator holds enough shares" is the *user* holding their own
+  wallet. On someone else's server this custody model is **not acceptable**
+  — the file gives its holder `n ≥ t` shares, gated only by the passphrase.
+- The passphrase is the second factor: a stolen file alone costs an attacker
+  a PBKDF2 search. It is required for **every** ceremony (each request
+  re-derives the KEK; nothing decrypted is cached between requests).
+- The per-party structure inside the file (each share is tagged with its
+  keygen party index) is deliberately future-proof: distributing shares
+  across devices with a real authenticated transport changes the *transport*,
+  not the format. That distribution — and share refresh/rotation
+  (`cggmp21`'s key-refresh protocol) — is the stated v2 path, tracked in
+  issue #85; v1 does not pretend to provide it.
+
+### 15.5 Signing UX and failure modes
+
+Because all parties are in-process, "counterparty offline" cannot happen in
+v1; the failure modes that remain are honest ones: wrong passphrase (a typed
+401-equivalent before any ceremony starts), and a ceremony error (surfaced
+verbatim, nothing broadcast). A ceremony is atomic from the client's view —
+it either returns a signature or an error; an abandoned HTTP request leaves
+no partial protocol state because the simulated network lives and dies with
+the request. DKG (~30–60 s of safe-prime generation) is the one long
+operation: it runs as a background task with a polled status endpoint, and
+the UI shows its phases.
+
+### 15.6 Login flow
+
+Identical to §2.5 from the server's perspective — the address is the
+identity and the server's auth stack does not know the wallet is TSS:
+
+1. client → `POST /api/auth/challenge` (address);
+2. client → `POST /api/tss/sign` (address, passphrase, challenge message) —
+   the server-side ceremony returns a standard 65-byte `r‖s‖v` signature;
+3. client → `POST /api/auth/login` with that signature, plus the stored
+   `publicKey`/`publicKeySig` released by `POST /api/tss/session-keys`;
+4. the session's E2EE identity is the stored keypair (§15.2), not a derived
+   one; `SessionKeys` carries a TSS signer variant that signs transactions
+   through `/api/tss/sign-hash`.
