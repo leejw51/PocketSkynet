@@ -122,6 +122,18 @@ web: tools ## Compile the Yew client to WebAssembly into web/dist
 	@echo "==> web client (wasm32, $(PROFILE))"
 	cd web && $(TRUNK) build $(TRUNK_PROFILE_FLAG)
 
+# The bundle without a server behind it — web local mode. `web/dist` is fully
+# static (the `_redirects` file covers History-API deep links on hosts that
+# honour it), so any file host serves the whole app; visitors pick "Local
+# (no server)" on the login screen and everything runs in their browser.
+web-serve: tools ## Serve the client alone (no backend) for local-mode testing
+	@echo "==> trunk serve (no backend: pick Local mode on the login screen)"
+	cd web && $(TRUNK) serve $(TRUNK_PROFILE_FLAG)
+
+web-deploy-cf: web ## Deploy web/dist to Cloudflare Pages (needs wrangler login)
+	@echo "==> wrangler pages deploy web/dist"
+	npx wrangler pages deploy web/dist
+
 # `web` under the name people reach for after changing the UI. It is a separate
 # target because the instinct after a client-side edit is `make restart`, which
 # stops the server, rebuilds the Rust binary too, and starts it again — none of

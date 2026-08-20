@@ -3033,6 +3033,11 @@ input.fn-mono, textarea.fn-mono { color: var(--fn-fg); }
 }
 .fn-conn--syncing { color: var(--fn-info-text); }
 .fn-conn--syncing::before { animation: fn-pulse 1.1s var(--fn-ease-cosine) infinite; }
+/* Local mode: a state, not a health — steady green, no pulse, no shake. */
+.fn-conn--local {
+  color: var(--fn-online-text);
+  animation: fn-pop var(--fn-dur-bouncy) var(--fn-spring-bouncy) both;
+}
 .fn-conn--offline {
   color: var(--fn-danger-text);
   background: var(--fn-danger-soft);

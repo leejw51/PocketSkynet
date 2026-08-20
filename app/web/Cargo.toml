@@ -137,7 +137,15 @@ features = [
     # knows how to recover from.
     "AbortController",
     "AbortSignal",
+    # navigator.storage.persist() — local mode asks the browser not to evict
+    # the IndexedDB that holds the only copy of the user's data.
+    "StorageManager",
 ]
+
+# IndexedDB, for web local mode (src/local/db.rs). wasm-only: the host build
+# compiles a stub so `cargo test` runs without a browser.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+idb = "0.6"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

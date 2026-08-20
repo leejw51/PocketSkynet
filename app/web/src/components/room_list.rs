@@ -341,7 +341,10 @@ pub fn room_list(p: &RoomListProps) -> Html {
                     oninput={on_query}
                     onkeydown={on_search_key}
                 />
-                if store.online {
+                // Local mode has exactly two rooms, by construction — a
+                // create button would be a dialog that only ever errors —
+                // and it is never "offline", so neither branch renders.
+                if store.online && !store.client.is_local() {
                     // ⚡ before +: the one-click path is the common case, the
                     // form is the configurable one. Cyan-tinted so it reads as
                     // the quick action rather than a second identical button.
@@ -376,7 +379,7 @@ pub fn room_list(p: &RoomListProps) -> Html {
                     >
                         { icons::chat(18) }
                     </button>
-                } else {
+                } else if !store.online {
                     // Offline: the create buttons are replaced by the state
                     // that explains why they are gone.
                     <span class="fn-conn fn-conn--offline">{ t(lang, Key::offline) }</span>

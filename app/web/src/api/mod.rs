@@ -66,7 +66,26 @@ use serde::Serialize;
 /// Result alias used throughout the API layer.
 pub type ApiResult<T> = Result<T, ApiError>;
 
-/// An authenticated (or not) handle to the server.
+/// An authenticated (or not) handle to the backend.
+///
+/// This is the **one unified interface** every screen talks through, and it
+/// answers from one of two places:
+///
+/// - **Server mode** (`local == false`): HTTP against `base` — same-origin by
+///   default, or any server the user chose on the login screen.
+/// - **Local mode** (`local == true`): no network at all. The same requests
+///   are dispatched to [`crate::local`], a simulated backend over IndexedDB,
+///   and decoded through the same [`types`] shapes — so nothing above this
+///   layer knows which mode it is in.
+///
+/// The mode branch lives *only* in [`Self::send`], [`Self::send_json`] and
+/// [`Self::reachable`] — plus the funnel bypasses listed below, which any
+/// future raw-request endpoint must remember to join:
+///
+/// - `Client::sync` (`api/messages.rs`) reads the `X-Has-More` header.
+/// - `ai::host_generation` (`ai.rs`) posts raw bytes.
+/// - `api/uploads.rs` / `api/downloads.rs` stream bodies (not supported in
+///   local mode; their UI is hidden there).
 #[derive(Clone, PartialEq)]
 pub struct Client {
     /// Empty means "same origin", which is the normal deployment: the server
@@ -74,6 +93,8 @@ pub struct Client {
     /// preflight and no third-party cookie question.
     base: Rc<str>,
     token: Option<Rc<str>>,
+    /// See the type-level docs. `true` only for [`Self::local`] clients.
+    local: bool,
 }
 
 impl Default for Client {
@@ -87,6 +108,41 @@ impl Client {
         Self {
             base: Rc::from(base.trim_end_matches('/')),
             token: None,
+            local: false,
+        }
+    }
+
+    /// A client that answers from the simulated local backend instead of the
+    /// network. Carries no token — local mode has no JWT issuer, and the
+    /// session's `"local"` token is never sent anywhere.
+    pub fn local() -> Self {
+        Self {
+            base: Rc::from(""),
+            token: None,
+            local: true,
+        }
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.local
+    }
+
+    /// The API base URL: empty for same-origin, otherwise an absolute origin.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
+    /// Resolve a server-relative URL (`/api/images/…`) against the API base.
+    ///
+    /// Media URLs come back from the API server-relative, which the browser
+    /// resolves against the *page* origin — correct in the same-origin
+    /// deployment, wrong the moment the API lives on another host. Absolute
+    /// and non-HTTP URLs pass through untouched.
+    pub fn absolute(&self, url: &str) -> String {
+        if self.base.is_empty() || !url.starts_with('/') {
+            url.to_owned()
+        } else {
+            format!("{}{}", self.base, url)
         }
     }
 
@@ -97,6 +153,7 @@ impl Client {
         Self {
             base: self.base.clone(),
             token: token.map(Rc::from),
+            local: self.local,
         }
     }
 
@@ -115,6 +172,14 @@ impl Client {
     }
 
     fn build(&self, method: Method, path: &str) -> RequestBuilder {
+        // A local client must never construct a network request: any call
+        // here in local mode is a funnel bypass missing its local branch
+        // (the list in the type docs). Debug-only — in release the request
+        // fails like any network error rather than crashing the tab.
+        debug_assert!(
+            !self.local,
+            "local-mode network request to {path} — add a local branch"
+        );
         let mut req = RequestBuilder::new(&self.url(path)).method(method);
         if let Some(t) = &self.token {
             // Standard `Bearer <token>`. The reference server also accepts a
@@ -127,6 +192,9 @@ impl Client {
 
     /// Send a request with no body and decode a JSON response.
     async fn send<T: DeserializeOwned>(&self, method: Method, path: &str) -> ApiResult<T> {
+        if self.local {
+            return decode_value(crate::local::dispatch(method, path, None).await?);
+        }
         let req = self
             .build(method, path)
             .build()
@@ -145,6 +213,10 @@ impl Client {
         path: &str,
         body: &B,
     ) -> ApiResult<T> {
+        if self.local {
+            let body = serde_json::to_value(body).map_err(|e| ApiError::Network(e.to_string()))?;
+            return decode_value(crate::local::dispatch(method, path, Some(body)).await?);
+        }
         let req = self
             .build(method, path)
             .json(body)
@@ -182,16 +254,42 @@ impl Client {
     /// polling it cannot lock the caller out, and it probes the database rather
     /// than only proving the HTTP stack is up.
     ///
-    /// Any completed response counts, including a 5xx. This asks "is there a
-    /// server on the other end", not "is it healthy" — a server returning 500
-    /// is one whose errors the user should see, not one to hide behind a dead
-    /// button.
+    /// Reachable means an **API-shaped** answer — a JSON body — whatever the
+    /// status. The real health endpoint answers JSON both when healthy (200)
+    /// and when its database is down (503), so a sick server still counts:
+    /// this asks "is there a server on the other end", not "is it well".
+    ///
+    /// What does *not* count is anything else a completed request can be. A
+    /// static host serving this bundle answers `/api/health` with the SPA
+    /// fallback page (200, HTML) or a plain 404 — a file server, not a
+    /// PocketSkynet server, and counting either would leave a static-host
+    /// visitor with an app that looks online and fails on every call, and a
+    /// login-screen "Test" button that says any address at all is answering.
     pub async fn reachable(&self) -> bool {
+        // The local backend is always "there" — it is this tab. Answering true
+        // keeps `AppState.online` up, so the composer never disables and the
+        // offline banner never shows in local mode.
+        if self.local {
+            return true;
+        }
         let Ok(req) = self.build(Method::GET, "/api/health").build() else {
             return false;
         };
-        req.send().await.is_ok()
+        match req.send().await {
+            Ok(resp) => resp
+                .headers()
+                .get("content-type")
+                .is_some_and(|ct| ct.to_ascii_lowercase().contains("json")),
+            Err(_) => false,
+        }
     }
+}
+
+/// Decode a local-backend `Value` through the same typed shapes a network
+/// response goes through. This is the anti-drift boundary: a local response
+/// that does not match `api/types.rs` fails here, loudly.
+fn decode_value<T: DeserializeOwned>(value: serde_json::Value) -> ApiResult<T> {
+    serde_json::from_value(value).map_err(|e| ApiError::Decode(e.to_string()))
 }
 
 /// Turn a `gloo` response into `Result<T, ApiError>`.

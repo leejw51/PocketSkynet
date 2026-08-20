@@ -640,6 +640,21 @@ pub async fn poll_video(
 /// to fetch, because those links expire within about a day and their CDNs
 /// send no CORS headers for the browser to read the bytes itself.
 pub async fn host_generation(client: &crate::api::Client, out: ImageOut) -> Result<String, String> {
+    // Funnel bypass (see the list in `api/mod.rs`): this deals in bytes, not
+    // JSON, so the local branch lives here. The stored name is the same
+    // `/api/images/<sha>.<ext>` string a server would answer, so everything
+    // downstream stays mode-blind.
+    if client.is_local() {
+        return match out {
+            ImageOut::Bytes { mime, bytes } => crate::local::store_media(&mime, &bytes).await,
+            // The reason `/api/images/import` exists is that provider CDNs
+            // block direct browser downloads (CORS); without a server there
+            // is nobody to fetch it for us. Named limitation, not a bug.
+            ImageOut::Url(_) => Err(
+                "Importing provider-hosted video needs a server; local mode can't fetch it.".into(),
+            ),
+        };
+    }
     match out {
         // Chunked, like every other upload — a generated video can be tens of
         // megabytes, and there is no reason for this path alone to still send

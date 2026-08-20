@@ -56,10 +56,24 @@ pub fn app() -> Html {
     // not persisted, so a reload always lands in `Locked` or `SignedOut`.
     let store = use_reducer(|| {
         let auth = Auth::restore();
-        let client = Client::default().with_token(auth.token());
+        let mode = ConnectionMode::load();
+        // The client is the mode: local answers from IndexedDB, otherwise
+        // HTTP against the chosen base — same-origin unless the user pointed
+        // this bundle at another server on the login screen.
+        let client = if mode.is_local() {
+            // A reload lands here Locked; the local backend needs to know
+            // whose database to answer from before the first request.
+            if let Some(address) = auth.address() {
+                crate::local::install_owner(address.clone());
+            }
+            Client::local()
+        } else {
+            Client::new(&crate::session::server_base())
+        }
+        .with_token(auth.token());
         let mut s = AppState::new(auth, client);
         s.theme = Theme::load();
-        s.mode = ConnectionMode::load();
+        s.mode = mode;
         s
     });
 
@@ -168,6 +182,14 @@ fn root() -> Html {
         // `store.client`. Captured before sign-in, that client has no JWT, so a
         // network flap after logging in would 401 and sign the user out.
         use_effect_with(store.auth.token().map(str::to_owned), move |_| {
+            // Local mode: the backend is this tab, so there is nothing to
+            // probe and nothing to lose. One dispatch corrects whatever a
+            // pre-sign-in probe against a nonexistent server concluded.
+            if store.client.is_local() {
+                store.dispatch(Action::SetOnline(true));
+                return Box::new(|| ()) as Box<dyn FnOnce()>;
+            }
+
             let window = web_sys::window().expect("a browser window");
 
             // `navigator.onLine` is not the question. It reports whether the
@@ -181,11 +203,12 @@ fn root() -> Html {
             // "something about the network just changed, look again" rather
             // than what the answer is.
 
-            // What the store was last told. Read back from `store` instead and
-            // it would be whatever this render captured — the effect runs once,
-            // so that value never updates and every probe would look like a
-            // change.
-            let last_up = Rc::new(std::cell::Cell::new(true));
+            // What the store was last told — seeded from the store itself, not
+            // a constant. This effect re-runs on sign-in, and a constant
+            // `true` here made a pre-sign-in "offline" verdict permanent: the
+            // fresh probe's `up == true` looked like no transition, so the
+            // store was never told the answer had changed.
+            let last_up = Rc::new(std::cell::Cell::new(store.online));
 
             let probe = {
                 let store = store.clone();
@@ -242,11 +265,11 @@ fn root() -> Html {
                 }
             });
 
-            move || {
+            Box::new(move || {
                 drop(up);
                 drop(down);
                 drop(poll);
-            }
+            }) as Box<dyn FnOnce()>
         });
     }
 
@@ -349,6 +372,13 @@ fn root() -> Html {
             let Some(token) = token.clone() else {
                 return Box::new(|| ()) as Box<dyn FnOnce()>;
             };
+            // Local mode has no remote peer, so there is nothing to connect
+            // to and nothing to degrade through — the pill states the mode
+            // and the whole ladder stays off.
+            if store.client.is_local() {
+                store.dispatch(Action::SetConn(ConnStatus::Local));
+                return Box::new(|| ()) as Box<dyn FnOnce()>;
+            }
 
             let on_signal: realtime::OnEvent = {
                 let store = store.clone();
@@ -394,7 +424,7 @@ fn root() -> Html {
 
             match realtime::select_transport(*mode, failures) {
                 Transport::WebSocket => {
-                    if let Some(url) = realtime::websocket_url() {
+                    if let Some(url) = realtime::websocket_url(store.client.base()) {
                         realtime::connect_ws(
                             url,
                             token,
@@ -729,57 +759,80 @@ fn root() -> Html {
         />
     };
 
-    let detail = match &*route {
-        Route::Room(id) => html! {
-            <chat::Chat
-                room_id={id.clone()}
-                on_navigate={on_navigate.clone()}
-                on_refresh={{
-                    let store = store.clone();
-                    Callback::from(move |id: RoomId| {
+    // Local mode: routes for multi-user or server-side surfaces render the
+    // empty-room state instead of a screen that could only error. Their
+    // entrances are hidden too; this catches typed URLs and stale bookmarks.
+    let local_dead_end = store.client.is_local()
+        && matches!(
+            &*route,
+            Route::Members(_)
+                | Route::Gallery(_)
+                | Route::Invitations
+                | Route::Publish
+                | Route::Operator
+                | Route::Dashboard
+        );
+
+    let detail = if local_dead_end {
+        html! { <chat::NoRoom /> }
+    } else {
+        match &*route {
+            Route::Room(id) => html! {
+                <chat::Chat
+                    room_id={id.clone()}
+                    on_navigate={on_navigate.clone()}
+                    on_refresh={{
                         let store = store.clone();
-                        store.dispatch(Action::SetConn(ConnStatus::Syncing));
-                        // The explicit gesture is the one place a full refetch
-                        // happens: drops the cached copy and asks the server
-                        // for everything again (actions.rs `resync_room`).
-                        wasm_bindgen_futures::spawn_local(actions::resync_room(store, id));
-                    })
-                }}
-                on_typing={{
-                    let sink_slot = sink_slot.clone();
-                    Callback::from(move |id: RoomId| {
-                        if let Some(sink) = sink_slot.borrow().as_ref() {
-                            sink.send_json(&ClientMessage::Typing { room_id: id });
-                        }
-                    })
-                }}
-            />
-        },
-        Route::Members(id) => html! {
-            <members::Members room_id={id.clone()} on_navigate={on_navigate.clone()} />
-        },
-        Route::Gallery(id) => html! {
-            <gallery::Gallery room_id={id.clone()} on_navigate={on_navigate.clone()} />
-        },
-        Route::Invitations => html! {
-            <invitations::Invitations on_navigate={on_navigate.clone()} />
-        },
-        Route::Knowledge => html! {
-            <knowledge::Knowledge on_navigate={on_navigate.clone()} />
-        },
-        Route::Publish => html! {
-            <publish::Publish on_navigate={on_navigate.clone()} />
-        },
-        Route::Passwords => html! {
-            <passwords::Passwords on_navigate={on_navigate.clone()} />
-        },
-        Route::Bank => html! { <bank::Bank /> },
-        Route::Operator => html! { <operator::OperatorPage store={store.clone()} /> },
-        Route::Dashboard => html! { <dashboard::Dashboard /> },
-        Route::Settings => html! {
-            <settings::Settings on_navigate={on_navigate.clone()} />
-        },
-        _ => html! { <chat::NoRoom /> },
+                        Callback::from(move |id: RoomId| {
+                            let store = store.clone();
+                            // Not in local mode: nothing ever sets the pill
+                            // back (the realtime effect that would is gated
+                            // off), so "Syncing…" would stick until reload.
+                            if !store.client.is_local() {
+                                store.dispatch(Action::SetConn(ConnStatus::Syncing));
+                            }
+                            // The explicit gesture is the one place a full refetch
+                            // happens: drops the cached copy and asks the server
+                            // for everything again (actions.rs `resync_room`).
+                            wasm_bindgen_futures::spawn_local(actions::resync_room(store, id));
+                        })
+                    }}
+                    on_typing={{
+                        let sink_slot = sink_slot.clone();
+                        Callback::from(move |id: RoomId| {
+                            if let Some(sink) = sink_slot.borrow().as_ref() {
+                                sink.send_json(&ClientMessage::Typing { room_id: id });
+                            }
+                        })
+                    }}
+                />
+            },
+            Route::Members(id) => html! {
+                <members::Members room_id={id.clone()} on_navigate={on_navigate.clone()} />
+            },
+            Route::Gallery(id) => html! {
+                <gallery::Gallery room_id={id.clone()} on_navigate={on_navigate.clone()} />
+            },
+            Route::Invitations => html! {
+                <invitations::Invitations on_navigate={on_navigate.clone()} />
+            },
+            Route::Knowledge => html! {
+                <knowledge::Knowledge on_navigate={on_navigate.clone()} />
+            },
+            Route::Publish => html! {
+                <publish::Publish on_navigate={on_navigate.clone()} />
+            },
+            Route::Passwords => html! {
+                <passwords::Passwords on_navigate={on_navigate.clone()} />
+            },
+            Route::Bank => html! { <bank::Bank /> },
+            Route::Operator => html! { <operator::OperatorPage store={store.clone()} /> },
+            Route::Dashboard => html! { <dashboard::Dashboard /> },
+            Route::Settings => html! {
+                <settings::Settings on_navigate={on_navigate.clone()} />
+            },
+            _ => html! { <chat::NoRoom /> },
+        }
     };
 
     html! {
@@ -1098,6 +1151,11 @@ fn confirm_host(p: &ConfirmHostProps) -> Html {
                         .await
                         .map_err(|e| e.user_message()),
                     ConfirmAction::EraseLocalData => {
+                        // Local mode's database too: "erase local data" must
+                        // not leave the one store that actually holds content.
+                        if let Some(address) = store.auth.address() {
+                            let _ = crate::local::db::delete_database(address.as_str()).await;
+                        }
                         crate::session::erase_local_data();
                         Ok(())
                     }

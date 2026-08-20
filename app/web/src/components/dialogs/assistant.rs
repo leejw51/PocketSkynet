@@ -682,18 +682,7 @@ fn media_panel(
     };
     html! {
         <>
-            if generated.is_video {
-                <video
-                    class="fn-ai__preview"
-                    src={generated.url.clone()}
-                    controls=true
-                    playsinline=true
-                    preload="metadata"
-                    aria-label={t(lang, Key::video_alt)}
-                />
-            } else {
-                <img class="fn-ai__preview" src={generated.url.clone()} alt={t(lang, Key::image_alt)} />
-            }
+            <GeneratedPreview url={generated.url.clone()} is_video={generated.is_video} />
             <div class="fn-field">
                 <label class="fn-field__label">{ t(lang, Key::media_link) }</label>
                 <div class="fn-row">
@@ -832,5 +821,37 @@ fn keys_tab(
                 { t(lang, Key::anthropic_text_only) }
             </p>
         </div>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct GeneratedPreviewProps {
+    url: AttrValue,
+    is_video: bool,
+}
+
+/// The generated media, previewed through the same URL resolution the
+/// message stream uses — so a local-mode generation (stored in IndexedDB,
+/// not on any server) previews from its blob URL rather than 404ing.
+#[function_component(GeneratedPreview)]
+fn generated_preview(p: &GeneratedPreviewProps) -> Html {
+    let lang = use_store().language;
+    let src = crate::components::message::use_media_src(Some(p.url.clone()));
+    let Some(src) = src else {
+        return html! { <span class="fn-spinner" aria-hidden="true"></span> };
+    };
+    if p.is_video {
+        html! {
+            <video
+                class="fn-ai__preview"
+                {src}
+                controls=true
+                playsinline=true
+                preload="metadata"
+                aria-label={t(lang, Key::video_alt)}
+            />
+        }
+    } else {
+        html! { <img class="fn-ai__preview" {src} alt={t(lang, Key::image_alt)} /> }
     }
 }

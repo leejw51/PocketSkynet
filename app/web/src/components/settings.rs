@@ -322,23 +322,30 @@ pub fn settings(p: &SettingsProps) -> Html {
                         </div>
                     </div>
 
+                    // No transport ladder to prefer in local mode — the
+                    // "connection" is this tab. The row states that instead
+                    // of offering three tiers that all mean nothing.
                     <div class="fn-picklist__row">
                         { icons::bolt(18) }
                         <span class="fn-grow">{ t(lang, Key::connection) }</span>
-                        <div class="fn-row" role="radiogroup" aria-label={t(lang, Key::connection_mode)}>
-                            { for [(ConnectionMode::WebSocket, t(lang, Key::conn_live)),
-                                   (ConnectionMode::Sse, t(lang, Key::conn_events)),
-                                   (ConnectionMode::Polling, t(lang, Key::conn_polling))].into_iter()
-                                .map(|(m, label)| html! {
-                                    <button
-                                        type="button"
-                                        role="radio"
-                                        class="topcoat-button"
-                                        aria-checked={(store.mode == m).to_string()}
-                                        onclick={set_mode(m, store.clone())}
-                                    >{ label }</button>
-                                }) }
-                        </div>
+                        if store.client.is_local() {
+                            <span class="fn-muted">{ t(lang, Key::conn_local) }</span>
+                        } else {
+                            <div class="fn-row" role="radiogroup" aria-label={t(lang, Key::connection_mode)}>
+                                { for [(ConnectionMode::WebSocket, t(lang, Key::conn_live)),
+                                       (ConnectionMode::Sse, t(lang, Key::conn_events)),
+                                       (ConnectionMode::Polling, t(lang, Key::conn_polling))].into_iter()
+                                    .map(|(m, label)| html! {
+                                        <button
+                                            type="button"
+                                            role="radio"
+                                            class="topcoat-button"
+                                            aria-checked={(store.mode == m).to_string()}
+                                            onclick={set_mode(m, store.clone())}
+                                        >{ label }</button>
+                                    }) }
+                            </div>
+                        }
                     </div>
 
                     <div class="fn-picklist__row">

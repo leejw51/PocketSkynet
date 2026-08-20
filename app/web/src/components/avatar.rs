@@ -264,33 +264,38 @@ pub fn avatar_picker() -> Html {
                         })
                     }}
                 >{ t(lang, Key::avatar_pick) }</button>
-                <button
-                    type="button"
-                    class="topcoat-button"
-                    disabled={offline || *busy}
-                    aria-expanded={ai_open.to_string()}
-                    onclick={{
-                        let gallery_open = gallery_open.clone();
-                        let ai_open = ai_open.clone();
-                        Callback::from(move |_: MouseEvent| {
-                            gallery_open.set(false);
-                            ai_open.set(!*ai_open);
-                        })
-                    }}
-                >{ icons::spark(16) }{ " " }{ t(lang, Key::avatar_make_ai) }</button>
-                <button
-                    type="button"
-                    class="topcoat-button"
-                    disabled={offline || *busy}
-                    onclick={{
-                        let file_input = file_input.clone();
-                        Callback::from(move |_: MouseEvent| {
-                            if let Some(el) = file_input.cast::<web_sys::HtmlInputElement>() {
-                                el.click();
-                            }
-                        })
-                    }}
-                >{ t(lang, Key::avatar_upload) }</button>
+                // AI-painted and uploaded avatars both ride the chunked
+                // upload protocol, which is a server feature — local mode
+                // keeps the presets, which need no hosting.
+                if !store.client.is_local() {
+                    <button
+                        type="button"
+                        class="topcoat-button"
+                        disabled={offline || *busy}
+                        aria-expanded={ai_open.to_string()}
+                        onclick={{
+                            let gallery_open = gallery_open.clone();
+                            let ai_open = ai_open.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                gallery_open.set(false);
+                                ai_open.set(!*ai_open);
+                            })
+                        }}
+                    >{ icons::spark(16) }{ " " }{ t(lang, Key::avatar_make_ai) }</button>
+                    <button
+                        type="button"
+                        class="topcoat-button"
+                        disabled={offline || *busy}
+                        onclick={{
+                            let file_input = file_input.clone();
+                            Callback::from(move |_: MouseEvent| {
+                                if let Some(el) = file_input.cast::<web_sys::HtmlInputElement>() {
+                                    el.click();
+                                }
+                            })
+                        }}
+                    >{ t(lang, Key::avatar_upload) }</button>
+                }
                 if current.is_some() {
                     <button
                         type="button"

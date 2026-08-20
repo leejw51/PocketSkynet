@@ -55,6 +55,7 @@ const KEY_FONT: &str = "ps-font";
 const KEY_FONT_SCALE: &str = "ps-font-scale";
 const KEY_CURSOR_PREFIX: &str = "ps-cursor:";
 const KEY_PENDING_INVITE: &str = "ps-pending-invite";
+const KEY_SERVER_URL: &str = "ps-server-url";
 
 /// `localStorage` access, isolated behind four functions.
 ///
@@ -620,6 +621,9 @@ pub enum ConnectionMode {
     WebSocket,
     Sse,
     Polling,
+    /// No server at all: the client answers its own API calls from IndexedDB
+    /// (see `crate::local`). Chosen on the login screen; realtime never runs.
+    Local,
 }
 
 impl ConnectionMode {
@@ -627,6 +631,7 @@ impl ConnectionMode {
         match backend::get::<String>(KEY_CONNECTION).as_deref() {
             Some("polling") => ConnectionMode::Polling,
             Some("sse") => ConnectionMode::Sse,
+            Some("local") => ConnectionMode::Local,
             // Unreadable storage defaults to WebSocket, matching the reference.
             _ => ConnectionMode::WebSocket,
         }
@@ -641,8 +646,73 @@ impl ConnectionMode {
             ConnectionMode::WebSocket => "websocket",
             ConnectionMode::Sse => "sse",
             ConnectionMode::Polling => "polling",
+            ConnectionMode::Local => "local",
         }
     }
+
+    pub fn is_local(self) -> bool {
+        matches!(self, ConnectionMode::Local)
+    }
+}
+
+/// The API base URL the user chose on the login screen. Empty means
+/// "same origin" — the normal deployment, where the server that served the
+/// bundle is the server. Non-empty only when the user pointed this bundle at
+/// another server (a static host such as Cloudflare Pages talking to a
+/// self-hosted server, which must allow the page's origin via
+/// `PS_CORS_ORIGIN`).
+pub fn server_base() -> String {
+    backend::get::<String>(KEY_SERVER_URL).unwrap_or_default()
+}
+
+/// Persist the chosen server base URL. Empty (or whitespace) clears the key,
+/// returning to same-origin. Stored without a trailing slash so
+/// `Client::url` never doubles one.
+pub fn save_server_base(url: &str) {
+    let trimmed = normalize_server_base(url);
+    if trimmed.is_empty() {
+        backend::delete(KEY_SERVER_URL);
+    } else {
+        backend::set(KEY_SERVER_URL, &trimmed);
+    }
+}
+
+/// Canonical form of a user-typed server address: trimmed, without a trailing
+/// slash, and with a scheme — a bare `host:port` is prefixed rather than
+/// rejected, because that is what people type for a LAN server.
+///
+/// The default scheme is `https://`: it is what `make start` serves, and a
+/// bundle on an HTTPS static host cannot call an `http://` API anyway (mixed
+/// content), so defaulting to `http://` would doom exactly the deployment
+/// the field exists for. A plain-HTTP server is still reachable by typing
+/// the scheme out.
+pub fn normalize_server_base(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_owned()
+    } else {
+        format!("https://{trimmed}")
+    }
+}
+
+/// Resolve a server-relative `/api/…` URL against the chosen server base,
+/// for render sites (avatars, portraits) that have no `Client` at hand.
+///
+/// Only `/api/` paths move: they are the server's, while `/static/…` presets
+/// and page assets belong to the origin that served the bundle and must stay
+/// relative. Same-origin deployments and local mode leave everything
+/// untouched.
+pub fn absolute_api_url(url: String) -> String {
+    if url.starts_with("/api/") && !ConnectionMode::load().is_local() {
+        let base = server_base();
+        if !base.is_empty() {
+            return format!("{base}{url}");
+        }
+    }
+    url
 }
 
 /// Load a room's persisted sync high-water mark. A position, never content.
@@ -741,15 +811,53 @@ mod tests {
             ConnectionMode::WebSocket,
             ConnectionMode::Sse,
             ConnectionMode::Polling,
+            ConnectionMode::Local,
         ] {
             let s = m.as_str();
             let parsed = match s {
                 "polling" => ConnectionMode::Polling,
                 "sse" => ConnectionMode::Sse,
+                "local" => ConnectionMode::Local,
                 _ => ConnectionMode::WebSocket,
             };
             assert_eq!(parsed, m);
         }
+    }
+
+    #[test]
+    fn only_local_mode_reads_as_local() {
+        assert!(ConnectionMode::Local.is_local());
+        for m in [
+            ConnectionMode::WebSocket,
+            ConnectionMode::Sse,
+            ConnectionMode::Polling,
+        ] {
+            assert!(!m.is_local());
+        }
+    }
+
+    #[test]
+    fn a_typed_server_address_is_normalised_not_rejected() {
+        // What people type for a LAN server gets a scheme, not an error —
+        // https, because that is what `make start` serves and the only thing
+        // an HTTPS page may call; plain HTTP must be typed out.
+        assert_eq!(
+            normalize_server_base("192.168.0.7:9099"),
+            "https://192.168.0.7:9099"
+        );
+        // Explicit schemes survive, trailing slashes never do — `Client::url`
+        // concatenates paths that start with `/`.
+        assert_eq!(
+            normalize_server_base("https://chat.example.com/"),
+            "https://chat.example.com"
+        );
+        assert_eq!(
+            normalize_server_base("  http://10.0.0.2:9099/  "),
+            "http://10.0.0.2:9099"
+        );
+        // Empty and whitespace mean same-origin.
+        assert_eq!(normalize_server_base(""), "");
+        assert_eq!(normalize_server_base("   "), "");
     }
 
     #[test]

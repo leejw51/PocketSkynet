@@ -978,6 +978,47 @@ pub(super) fn zoom_past_thumbnail(node: &NodeRef, full: Option<String>, caption:
     });
 }
 
+/// Resolve a media URL for the current backend.
+///
+/// Three cases, one seam: same-origin server mode passes the URL through;
+/// custom-server mode joins a server-relative URL onto the API base (the
+/// browser would otherwise resolve it against the *page* origin); local mode
+/// swaps a hosted-media path for a blob object URL fed from IndexedDB.
+/// `None` while a local lookup is still in flight — render the spinner, not
+/// a broken image.
+#[hook]
+pub(crate) fn use_media_src(url: Option<AttrValue>) -> Option<AttrValue> {
+    let store = crate::state::use_store();
+    let resolved = use_state(|| Option::<AttrValue>::None);
+    {
+        let resolved = resolved.clone();
+        // The client is part of the key: switching backends mid-session must
+        // re-resolve, not serve the previous mode's answer.
+        use_effect_with((url, store.client.clone()), move |(url, client)| {
+            match url {
+                None => resolved.set(None),
+                // Only hosted-media paths live in the local store. External
+                // links (a pasted https:// image) pass straight through — and
+                // a store *miss* falls back to the original URL, so the
+                // element mounts, errors, and shows the failed row with the
+                // link, instead of spinning forever.
+                Some(url) if client.is_local() && url.starts_with("/api/images/") => {
+                    let url = url.to_string();
+                    resolved.set(None);
+                    let resolved = resolved.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let out = crate::local::media_url(&url).await.unwrap_or(url);
+                        resolved.set(Some(AttrValue::from(out)));
+                    });
+                }
+                Some(url) => resolved.set(Some(AttrValue::from(client.absolute(url)))),
+            }
+            || ()
+        });
+    }
+    (*resolved).clone()
+}
+
 #[derive(Properties, PartialEq)]
 struct ImageEmbedProps {
     url: AttrValue,
@@ -1003,6 +1044,8 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
     // picture — the pre-thumbnail behaviour — not a broken row.
     let thumb_failed = use_state(|| false);
     let img = use_node_ref();
+    let full = use_media_src(Some(p.url.clone()));
+    let thumb = use_media_src(p.thumb.clone());
 
     if *load == MediaLoad::Failed {
         return html! {
@@ -1014,11 +1057,20 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
         };
     }
 
-    let showing_thumb = p.thumb.is_some() && !*thumb_failed;
+    // Still resolving against the local store: the spinner, not a broken img.
+    let Some(full) = full else {
+        return html! {
+            <span class="fn-media fn-media--loading">
+                <span class="fn-spinner" aria-hidden="true"></span>
+            </span>
+        };
+    };
+
+    let showing_thumb = thumb.is_some() && !*thumb_failed;
     let src: AttrValue = if showing_thumb {
-        p.thumb.clone().unwrap_or_else(|| p.url.clone())
+        thumb.clone().unwrap_or_else(|| full.clone())
     } else {
-        p.url.clone()
+        full.clone()
     };
 
     let onload = {
@@ -1042,7 +1094,7 @@ fn image_embed(p: &ImageEmbedProps) -> Html {
     // hit area, because on a phone that is the only hit area there is.
     let zoom = {
         let img = img.clone();
-        let full = showing_thumb.then(|| p.url.to_string());
+        let full = showing_thumb.then(|| full.to_string());
         Callback::from(move |e: MouseEvent| {
             e.stop_propagation();
             zoom_past_thumbnail(&img, full.clone(), None);
@@ -1099,6 +1151,8 @@ struct VideoEmbedProps {
 fn video_embed(p: &VideoEmbedProps) -> Html {
     let lang = crate::state::use_store().language;
     let load = use_state(|| MediaLoad::Loading);
+    let full = use_media_src(Some(p.url.clone()));
+    let poster = use_media_src(p.poster.clone());
 
     if *load == MediaLoad::Failed {
         return html! {
@@ -1109,6 +1163,15 @@ fn video_embed(p: &VideoEmbedProps) -> Html {
             </span>
         };
     }
+
+    // Still resolving against the local store: the spinner, not a dead player.
+    let Some(full) = full else {
+        return html! {
+            <span class="fn-media fn-media--clip fn-media--loading">
+                <span class="fn-spinner" aria-hidden="true"></span>
+            </span>
+        };
+    };
 
     let onloadeddata = {
         let load = load.clone();
@@ -1128,8 +1191,8 @@ fn video_embed(p: &VideoEmbedProps) -> Html {
                 <span class="fn-spinner" aria-hidden="true"></span>
             }
             <video
-                src={p.url.clone()}
-                poster={p.poster.clone()}
+                src={full}
+                poster={poster}
                 controls=true
                 playsinline=true
                 preload="metadata"

@@ -35,6 +35,7 @@ mod i18n;
 mod identity;
 mod jarvis;
 mod jarvis_run;
+mod local;
 mod media;
 mod mentions;
 mod privy;

@@ -75,7 +75,9 @@ pub struct ComposerProps {
 
 #[function_component(Composer)]
 pub fn composer(p: &ComposerProps) -> Html {
-    let lang = crate::state::use_store().language;
+    let store = crate::state::use_store();
+    let lang = store.language;
+    let local = store.client.is_local();
     let text = use_state(String::new);
     let area = use_node_ref();
     let send_btn = use_node_ref();
@@ -379,38 +381,43 @@ pub fn composer(p: &ComposerProps) -> Html {
             >
                 { icons::spark(18) }
             </button>
-            <button
-                type="button"
-                class="topcoat-icon-button--quiet fn-composer__attach"
-                aria-label={t(lang, Key::attach_file)}
-                title={t(lang, Key::attach_file)}
-                disabled={locked}
-                onclick={{
-                    // The real <input type="file"> is hidden and clicked from
-                    // here: its native button cannot be restyled, and this is
-                    // the only way to keep one control geometry across the row.
-                    let file_input = file_input.clone();
-                    Callback::from(move |_: MouseEvent| {
-                        if let Some(el) = file_input.cast::<web_sys::HtmlInputElement>() {
-                            el.click();
-                        }
-                    })
-                }}
-            >
-                { icons::paperclip(18) }
-            </button>
-            <button
-                type="button"
-                class="topcoat-icon-button--quiet fn-composer__files"
-                aria-label={t(lang, Key::open_files)}
-                title={t(lang, Key::files_title)}
-                onclick={{
-                    let cb = p.on_open_files.clone();
-                    Callback::from(move |_: MouseEvent| cb.emit(()))
-                }}
-            >
-                { icons::files(18) }
-            </button>
+            // File attachments ride the chunked-upload protocol, which is a
+            // server feature; local mode hides both doors (AI-generated
+            // images still work — they store locally).
+            if !local {
+                <button
+                    type="button"
+                    class="topcoat-icon-button--quiet fn-composer__attach"
+                    aria-label={t(lang, Key::attach_file)}
+                    title={t(lang, Key::attach_file)}
+                    disabled={locked}
+                    onclick={{
+                        // The real <input type="file"> is hidden and clicked from
+                        // here: its native button cannot be restyled, and this is
+                        // the only way to keep one control geometry across the row.
+                        let file_input = file_input.clone();
+                        Callback::from(move |_: MouseEvent| {
+                            if let Some(el) = file_input.cast::<web_sys::HtmlInputElement>() {
+                                el.click();
+                            }
+                        })
+                    }}
+                >
+                    { icons::paperclip(18) }
+                </button>
+                <button
+                    type="button"
+                    class="topcoat-icon-button--quiet fn-composer__files"
+                    aria-label={t(lang, Key::open_files)}
+                    title={t(lang, Key::files_title)}
+                    onclick={{
+                        let cb = p.on_open_files.clone();
+                        Callback::from(move |_: MouseEvent| cb.emit(()))
+                    }}
+                >
+                    { icons::files(18) }
+                </button>
+            }
             <input
                 ref={file_input.clone()}
                 type="file"

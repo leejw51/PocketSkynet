@@ -311,6 +311,7 @@ strings! {
     (conn_live, "Live", "실시간", "ライブ", "即時", "Živě", "En vivo", "实时", "Live"),
     (conn_events, "Events", "이벤트", "イベント", "事件", "Události", "Eventos", "事件流", "Events"),
     (conn_polling, "Polling", "폴링", "ポーリング", "輪詢", "Dotazování", "Sondeo", "轮询", "Polling"),
+    (conn_local, "Local", "로컬", "ローカル", "本機", "Místní", "Local", "本地", "Lokal"),
     (presence_online, "Online", "접속 중", "オンライン", "喺線", "Online", "En línea", "在线", "Online"),
     (presence_away, "Away", "자리 비움", "離席中", "唔喺度", "Nepřítomen", "Ausente", "离开", "Abwesend"),
     (presence_offline, "Offline", "오프라인", "オフライン", "離線", "Offline", "Desconectado", "离线", "Offline"),
@@ -321,6 +322,16 @@ strings! {
 
     // --- Login --------------------------------------------------------------
     (sign_in_tagline, "Sign in with your wallet. No password.", "지갑으로 로그인하세요. 비밀번호가 없습니다.", "ウォレットでサインイン。パスワードは不要です。", "用錢包登入，唔使密碼。", "Přihlaste se peněženkou. Žádné heslo.", "Inicia sesión con tu cartera. Sin contraseña.", "用钱包登录，无需密码。", "Melde dich mit deiner Wallet an. Kein Passwort."),
+    (conn_this_server, "This server", "이 서버", "このサーバー", "呢個伺服器", "Tento server", "Este servidor", "此服务器", "Dieser Server"),
+    (conn_custom_server, "Custom server", "다른 서버", "別のサーバー", "自訂伺服器", "Vlastní server", "Servidor personalizado", "自定义服务器", "Eigener Server"),
+    (conn_local_choice, "Local (no server)", "로컬(서버 없음)", "ローカル（サーバーなし）", "本機（冇伺服器）", "Místní (bez serveru)", "Local (sin servidor)", "本地（无服务器）", "Lokal (ohne Server)"),
+    (server_address, "Server address", "서버 주소", "サーバーアドレス", "伺服器地址", "Adresa serveru", "Dirección del servidor", "服务器地址", "Serveradresse"),
+    (server_address_hint, "Any PocketSkynet server, e.g. https://192.168.0.7:9099. It must allow this page's origin (PS_CORS_ORIGIN).", "모든 PocketSkynet 서버, 예: https://192.168.0.7:9099. 해당 서버가 이 페이지의 출처를 허용해야 합니다(PS_CORS_ORIGIN).", "任意の PocketSkynet サーバー。例: https://192.168.0.7:9099。このページのオリジンを許可している必要があります（PS_CORS_ORIGIN）。", "任何 PocketSkynet 伺服器，例如 https://192.168.0.7:9099。個伺服器要允許呢頁嘅來源（PS_CORS_ORIGIN）。", "Libovolný server PocketSkynet, např. https://192.168.0.7:9099. Musí povolovat původ této stránky (PS_CORS_ORIGIN).", "Cualquier servidor PocketSkynet, p. ej. https://192.168.0.7:9099. Debe permitir el origen de esta página (PS_CORS_ORIGIN).", "任意 PocketSkynet 服务器，例如 https://192.168.0.7:9099。该服务器必须允许此页面的来源（PS_CORS_ORIGIN）。", "Ein beliebiger PocketSkynet-Server, z. B. https://192.168.0.7:9099. Er muss den Ursprung dieser Seite erlauben (PS_CORS_ORIGIN)."),
+    (test_server, "Test", "테스트", "テスト", "測試", "Otestovat", "Probar", "测试", "Testen"),
+    (server_answering, "Server is answering.", "서버가 응답하고 있습니다.", "サーバーが応答しています。", "伺服器有回應。", "Server odpovídá.", "El servidor responde.", "服务器有响应。", "Der Server antwortet."),
+    (server_not_answering, "No server answered at that address.", "해당 주소에서 응답하는 서버가 없습니다.", "そのアドレスから応答するサーバーがありません。", "嗰個地址冇伺服器回應。", "Na této adrese žádný server neodpověděl.", "Ningún servidor respondió en esa dirección.", "该地址没有服务器响应。", "Unter dieser Adresse hat kein Server geantwortet."),
+    (local_mode_hint, "Everything runs in this browser: AI chat, notes, knowledge and passwords. No server, no account anywhere else.", "모든 것이 이 브라우저에서 실행됩니다: AI 채팅, 노트, 지식, 비밀번호. 서버도, 다른 곳의 계정도 없습니다.", "すべてこのブラウザ内で動きます: AI チャット、ノート、ナレッジ、パスワード。サーバーも、他の場所のアカウントもありません。", "所有嘢都喺呢個瀏覽器入面運行：AI 傾偈、筆記、知識庫同密碼。冇伺服器，第度都冇帳戶。", "Vše běží v tomto prohlížeči: AI chat, poznámky, znalosti a hesla. Žádný server, žádný účet jinde.", "Todo funciona en este navegador: chat de IA, notas, conocimiento y contraseñas. Sin servidor, sin cuenta en ningún otro sitio.", "一切都在此浏览器中运行:AI 聊天、笔记、知识库和密码。没有服务器,其他地方也没有账户。", "Alles läuft in diesem Browser: KI-Chat, Notizen, Wissen und Passwörter. Kein Server, kein Konto anderswo."),
+    (local_mode_keep_hint, "Your data lives only in this browser profile. Install the app or visit regularly so the browser keeps it — and save your recovery phrase, it is the only way back in.", "데이터는 이 브라우저 프로필에만 저장됩니다. 브라우저가 데이터를 유지하도록 앱을 설치하거나 자주 방문하세요. 그리고 복구 문구를 저장하세요 — 유일한 복구 수단입니다.", "データはこのブラウザプロファイルにのみ保存されます。ブラウザが保持し続けるよう、アプリをインストールするか定期的に訪れてください。そしてリカバリーフレーズを保存してください — 戻る唯一の手段です。", "你嘅資料只會存喺呢個瀏覽器設定檔。安裝個應用程式或者定期返嚟，瀏覽器先會保留佢 — 仲要儲存好復原字詞，嗰個係唯一返得返去嘅方法。", "Vaše data žijí jen v tomto profilu prohlížeče. Nainstalujte si aplikaci nebo ji pravidelně navštěvujte, aby je prohlížeč zachoval — a uložte si obnovovací frázi, je to jediná cesta zpět.", "Tus datos viven solo en este perfil del navegador. Instala la aplicación o visítala con regularidad para que el navegador los conserve — y guarda tu frase de recuperación, es la única vía de vuelta.", "你的数据只保存在此浏览器配置文件中。请安装应用或定期访问,浏览器才会保留数据 — 并保存好恢复助记词,那是唯一的恢复方式。", "Deine Daten leben nur in diesem Browserprofil. Installiere die App oder besuche sie regelmäßig, damit der Browser sie behält — und sichere deine Wiederherstellungsphrase, sie ist der einzige Weg zurück."),
     (sign_in, "Sign in", "로그인", "サインイン", "登入", "Přihlásit se", "Iniciar sesión", "登录", "Anmelden"),
     (create_wallet_and_sign_in, "Create a wallet and sign in", "지갑을 만들고 로그인", "ウォレットを作成してサインイン", "建立錢包並登入", "Vytvořit peněženku a přihlásit se", "Crear una cartera e iniciar sesión", "创建钱包并登录", "Wallet erstellen und anmelden"),
     (or_sign_in_with, "OR SIGN IN WITH", "또는 다음으로 로그인", "または次でサインイン", "或以下列方式登入", "NEBO SE PŘIHLASTE POMOCÍ", "O INICIA SESIÓN CON", "或使用以下方式登录", "ODER ANMELDEN MIT"),
@@ -686,6 +697,7 @@ strings! {
     (conn_polling_aria, "Connection: Polling every 10 seconds. Switch to live.", "연결: 10초마다 폴링. 실시간으로 전환합니다.", "接続: 10秒ごとのポーリング。ライブに切り替えます。", "連線：每 10 秒輪詢。切換去即時。", "Připojení: dotazování každých 10 s. Přepnout na živé.", "Conexión: sondeo cada 10 segundos. Cambiar a en vivo.", "连接：每 10 秒轮询一次。切换到实时。", "Verbindung: Polling alle 10 Sekunden. Zu Live wechseln."),
     (conn_syncing_aria, "Connection: syncing.", "연결: 동기화 중.", "接続: 同期中。", "連線：同步中。", "Připojení: synchronizace.", "Conexión: sincronizando.", "连接：同步中。", "Verbindung: synchronisiert."),
     (conn_offline_aria, "Connection: offline. Retry.", "연결: 오프라인. 다시 시도합니다.", "接続: オフライン。再試行します。", "連線：離線。重試。", "Připojení: offline. Zkusit znovu.", "Conexión: sin conexión. Reintentar.", "连接：离线。重试。", "Verbindung: offline. Erneut versuchen."),
+    (conn_local_aria, "Connection: local mode. Everything stays on this device.", "연결: 로컬 모드. 모든 데이터가 이 기기에 저장됩니다.", "接続: ローカルモード。すべてこの端末に保存されます。", "連線：本機模式。所有資料都留喺呢部裝置。", "Připojení: místní režim. Vše zůstává v tomto zařízení.", "Conexión: modo local. Todo permanece en este dispositivo.", "连接：本地模式。所有数据保留在此设备上。", "Verbindung: lokaler Modus. Alles bleibt auf diesem Gerät."),
     (tab_write, "Write", "작성", "作成", "撰寫", "Napsat", "Escribir", "撰写", "Schreiben"),
     (tab_reply, "Reply", "답장", "返信", "回覆", "Odpovědět", "Responder", "回复", "Antworten"),
     (tab_image, "Image", "이미지", "画像", "圖片", "Obrázek", "Imagen", "图片", "Bild"),
@@ -1487,6 +1499,8 @@ mod tests {
             (Lang::Cs, Key::pw_title),
             (Lang::Es, Key::pw_title),
             (Lang::De, Key::pw_title),
+            // "Local" is the ordinary Spanish adjective too.
+            (Lang::Es, Key::conn_local),
             // "AI" is the initialism as written in every one of these — a
             // loanword, not a gap. Only Spanish ("IA") and German ("KI")
             // reorder it. The chip has to stay two characters wide, so

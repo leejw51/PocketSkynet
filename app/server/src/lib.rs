@@ -991,14 +991,15 @@ pub async fn bind(cfg: Config, secret: Secret) -> Result<Bound, BindError> {
     // "started" without it would open on an error page.
     let loopback = match loopback_http_port {
         Some(port) => {
-            let loopback_addr =
-                std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), port);
-            let listener = std::net::TcpListener::bind(loopback_addr).map_err(|source| {
-                BindError::Bind {
+            let loopback_addr = std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                port,
+            );
+            let listener =
+                std::net::TcpListener::bind(loopback_addr).map_err(|source| BindError::Bind {
                     addr: loopback_addr,
                     source,
-                }
-            })?;
+                })?;
             Some((listener, base_router.clone()))
         }
         None => None,

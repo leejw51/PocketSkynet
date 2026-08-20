@@ -74,6 +74,9 @@ pub fn shell(p: &ShellProps) -> Html {
                         .auth
                         .profile_image()
                         .and_then(|i| crate::identity::avatar_src(skin, i))
+                        // Server-relative avatar paths need the API base when
+                        // the bundle is served from elsewhere.
+                        .map(crate::session::absolute_api_url)
                         .unwrap_or_else(|| {
                             crate::asset::img(skin, crate::identity::art_for(&seed))
                         }),
@@ -302,16 +305,20 @@ pub fn shell(p: &ShellProps) -> Html {
                     >
                         { icons::bank(18) }
                     </button>
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet fn-topbar__wide"
-                        aria-label={t(lang, Key::nav_publish)}
-                        title={t(lang, Key::nav_publish)}
-                        aria-current={(p.route.nav_key() == "publish").then_some("page")}
-                        onclick={go(Route::Publish, p.on_navigate.clone())}
-                    >
-                        { icons::globe(18) }
-                    </button>
+                    // Publishing needs a server to host the pages — absent
+                    // in local mode, like every server-side surface below.
+                    if !store.client.is_local() {
+                        <button
+                            type="button"
+                            class="topcoat-icon-button--quiet fn-topbar__wide"
+                            aria-label={t(lang, Key::nav_publish)}
+                            title={t(lang, Key::nav_publish)}
+                            aria-current={(p.route.nav_key() == "publish").then_some("page")}
+                            onclick={go(Route::Publish, p.on_navigate.clone())}
+                        >
+                            { icons::globe(18) }
+                        </button>
+                    }
                     // Skynet Password. Beside Bank rather than in with the
                     // appearance toggles: it is a destination, and the row is
                     // grouped destinations-then-tools for exactly that reason.
@@ -328,49 +335,55 @@ pub fn shell(p: &ShellProps) -> Html {
                     // The operator's file. Also in the bottom nav, which the
                     // two-pane tier hides — without this button the whole
                     // section is unreachable on anything wider than a phone.
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet fn-topbar__wide"
-                        aria-label={t(lang, Key::nav_operator)}
-                        title={t(lang, Key::nav_operator)}
-                        aria-current={(p.route.nav_key() == "operator").then_some("page")}
-                        onclick={go(Route::Operator, p.on_navigate.clone())}
-                    >
-                        { icons::crown(18) }
-                        <Unread count={orders_left} />
-                    </button>
+                    if !store.client.is_local() {
+                        <button
+                            type="button"
+                            class="topcoat-icon-button--quiet fn-topbar__wide"
+                            aria-label={t(lang, Key::nav_operator)}
+                            title={t(lang, Key::nav_operator)}
+                            aria-current={(p.route.nav_key() == "operator").then_some("page")}
+                            onclick={go(Route::Operator, p.on_navigate.clone())}
+                        >
+                            { icons::crown(18) }
+                            <Unread count={orders_left} />
+                        </button>
+                    }
                     // Where this server is, and which transport is carrying
                     // this session. The second half is the reason it exists:
                     // a browser upgrades itself to HTTP/3 silently, so the
                     // page cannot tell without asking the server.
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet fn-topbar__wide fn-topbar__server"
-                        aria-label={t(lang, Key::server_info)}
-                        title={t(lang, Key::server_info)}
-                        onclick={{
-                            let store = store.clone();
-                            Callback::from(move |_: MouseEvent| {
-                                store.dispatch(Action::OpenModal(crate::state::Modal::ServerInfo));
-                            })
-                        }}
-                    >
-                        { icons::server(18) }
-                    </button>
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet fn-topbar__wide fn-topbar__shout"
-                        aria-label={t(lang, Key::shout_title)}
-                        title={t(lang, Key::shout_title)}
-                        onclick={{
-                            let store = store.clone();
-                            Callback::from(move |_: MouseEvent| {
-                                store.dispatch(Action::OpenModal(crate::state::Modal::Shout));
-                            })
-                        }}
-                    >
-                        { icons::megaphone(18) }
-                    </button>
+                    if !store.client.is_local() {
+                        <button
+                            type="button"
+                            class="topcoat-icon-button--quiet fn-topbar__wide fn-topbar__server"
+                            aria-label={t(lang, Key::server_info)}
+                            title={t(lang, Key::server_info)}
+                            onclick={{
+                                let store = store.clone();
+                                Callback::from(move |_: MouseEvent| {
+                                    store.dispatch(Action::OpenModal(crate::state::Modal::ServerInfo));
+                                })
+                            }}
+                        >
+                            { icons::server(18) }
+                        </button>
+                    }
+                    if !store.client.is_local() {
+                        <button
+                            type="button"
+                            class="topcoat-icon-button--quiet fn-topbar__wide fn-topbar__shout"
+                            aria-label={t(lang, Key::shout_title)}
+                            title={t(lang, Key::shout_title)}
+                            onclick={{
+                                let store = store.clone();
+                                Callback::from(move |_: MouseEvent| {
+                                    store.dispatch(Action::OpenModal(crate::state::Modal::Shout));
+                                })
+                            }}
+                        >
+                            { icons::megaphone(18) }
+                        </button>
+                    }
                     // Hidden below the two-pane breakpoint by its class: a
                     // phone has one column whichever way this points, and a
                     // control that visibly does nothing teaches people to stop
@@ -423,21 +436,24 @@ pub fn shell(p: &ShellProps) -> Html {
                     // Mentions before invitations: being named is a thing that
                     // happens several times a day, an invitation a few times a
                     // year, and the frequent one belongs nearer the front.
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet fn-topbar__wide"
-                        aria-label={t(lang, Key::mentions)}
-                        title={t(lang, Key::mentions)}
-                        onclick={{
-                            let store = store.clone();
-                            Callback::from(move |_: MouseEvent| {
-                                store.dispatch(Action::OpenModal(Modal::Mentions))
-                            })
-                        }}
-                    >
-                        { icons::at_sign(18) }
-                        <MentionBadge count={mentions} />
-                    </button>
+                    // Neither exists in local mode — there is nobody else.
+                    if !store.client.is_local() {
+                        <button
+                            type="button"
+                            class="topcoat-icon-button--quiet fn-topbar__wide"
+                            aria-label={t(lang, Key::mentions)}
+                            title={t(lang, Key::mentions)}
+                            onclick={{
+                                let store = store.clone();
+                                Callback::from(move |_: MouseEvent| {
+                                    store.dispatch(Action::OpenModal(Modal::Mentions))
+                                })
+                            }}
+                        >
+                            { icons::at_sign(18) }
+                            <MentionBadge count={mentions} />
+                        </button>
+                    }
                     // Only for wallets the *server* names as administrators.
                     // Hiding it is a courtesy — every route behind it is
                     // checked server-side — but offering a console that 403s
@@ -469,20 +485,22 @@ pub fn shell(p: &ShellProps) -> Html {
                             { icons::gauge(18) }
                         </button>
                     }
-                    <button
-                        type="button"
-                        class="topcoat-icon-button--quiet fn-topbar__wide"
-                        aria-label={if invites == 1 {
-                            "Invitations, 1 pending".to_owned()
-                        } else {
-                            t(lang, Key::invitations_pending).replace("{n}", &invites.to_string())
-                        }}
-                        title={t(lang, Key::invitations)}
-                        onclick={go(Route::Invitations, p.on_navigate.clone())}
-                    >
-                        { icons::envelope(18) }
-                        <Unread count={invites} />
-                    </button>
+                    if !store.client.is_local() {
+                        <button
+                            type="button"
+                            class="topcoat-icon-button--quiet fn-topbar__wide"
+                            aria-label={if invites == 1 {
+                                "Invitations, 1 pending".to_owned()
+                            } else {
+                                t(lang, Key::invitations_pending).replace("{n}", &invites.to_string())
+                            }}
+                            title={t(lang, Key::invitations)}
+                            onclick={go(Route::Invitations, p.on_navigate.clone())}
+                        >
+                            { icons::envelope(18) }
+                            <Unread count={invites} />
+                        </button>
+                    }
                     <button
                         type="button"
                         class="topcoat-icon-button--quiet fn-topbar__wide"
@@ -560,11 +578,21 @@ pub fn shell(p: &ShellProps) -> Html {
                 { nav_item(&p.route, "chat", t(lang, Key::nav_chat), icons::chat(20), None,
                            room.is_none(),
                            room.clone().map(Route::Room).unwrap_or(Route::Rooms), &p.on_navigate) }
-                { nav_item(&p.route, "members", t(lang, Key::nav_members), icons::people(20), None,
-                           room.is_none(),
-                           room.clone().map(Route::Members).unwrap_or(Route::Rooms), &p.on_navigate) }
-                { nav_item(&p.route, "operator", t(lang, Key::nav_operator), icons::crown(20), Some(orders_left),
-                           false, Route::Operator, &p.on_navigate) }
+                // Members and the operator's file are multi-user surfaces;
+                // local mode swaps them for the two destinations it does
+                // have, so the bar never offers a screen that only 404s.
+                if store.client.is_local() {
+                    { nav_item(&p.route, "knowledge", t(lang, Key::nav_knowledge), icons::book(20), None,
+                               false, Route::Knowledge, &p.on_navigate) }
+                    { nav_item(&p.route, "bank", t(lang, Key::menu_bank), icons::bank(20), None,
+                               false, Route::Bank, &p.on_navigate) }
+                } else {
+                    { nav_item(&p.route, "members", t(lang, Key::nav_members), icons::people(20), None,
+                               room.is_none(),
+                               room.clone().map(Route::Members).unwrap_or(Route::Rooms), &p.on_navigate) }
+                    { nav_item(&p.route, "operator", t(lang, Key::nav_operator), icons::crown(20), Some(orders_left),
+                               false, Route::Operator, &p.on_navigate) }
+                }
                 // Marked current whenever the open screen is one that lives
                 // behind it, so the bar never claims you are nowhere. It
                 // carries the invitations badge for the same reason: that
