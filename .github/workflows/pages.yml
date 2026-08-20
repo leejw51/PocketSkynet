@@ -1,0 +1,65 @@
+# Pages — build the WASM web client and deploy it to Cloudflare Pages.
+#
+# Triggered by pushing a tag like `v1.0.0`, or manually via workflow_dispatch.
+# Separate from release.yml so a Pages deploy cannot block the macOS installer.
+
+name: Pages
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: app/web
+
+jobs:
+  deploy:
+    name: Deploy (Cloudflare Pages)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Pinned to the version development happens on — same as CI / Release.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
+          targets: wasm32-unknown-unknown
+
+      - uses: cargo-bins/cargo-binstall@e00d2c94cc0067b77737821097a62d91c0301baa # v1.21.1
+
+      # Pinned to a version with published binaries; --disable-strategies
+      # compile makes a missing binary a loud failure instead of a slow build.
+      - name: Install trunk
+        env:
+          # Unauthenticated GitHub API calls get rate-limited on shared
+          # runners, and binstall then cannot resolve any release artifact.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo binstall -y --disable-strategies compile trunk@0.21.14
+
+      # `app/web` is its own workspace with its own target dir; `app` is
+      # cached too because the client depends on `app/core` by path.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            app
+            app/web
+
+      - name: Build web client
+        run: trunk build --release
+
+      # Secrets are injected only for this step and are never echoed.
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler@4 pages deploy dist --project-name=pocketskynet --commit-dirty=true
