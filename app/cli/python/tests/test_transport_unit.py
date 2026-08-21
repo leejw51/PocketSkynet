@@ -188,6 +188,27 @@ def test_a_dead_connection_with_no_response_raises_transport_error():
     run(flow())
 
 
+def test_a_non_ascii_path_is_a_clean_error_not_a_codec_traceback():
+    """Callers validate ids, but a stray non-ASCII :path must surface as a
+    TransportError, never a UnicodeEncodeError from deep in the encoder."""
+
+    class _StubQuic:
+        def get_next_available_stream_id(self):
+            return 0
+
+    async def flow():
+        protocol = _protocol_with([])
+        protocol._quic = _StubQuic()
+        protocol._pending = {}  # the guard must fire before anything registers
+        with pytest.raises(TransportError, match="not ASCII"):
+            await protocol.perform_request(
+                "GET", "127.0.0.1:1", "/api/rooms/한글/messages", {}, None
+            )
+        assert protocol._pending == {}  # nothing was registered for the stream
+
+    run(flow())
+
+
 def test_pseudo_headers_are_not_surfaced():
     protocol = _protocol_with(
         [

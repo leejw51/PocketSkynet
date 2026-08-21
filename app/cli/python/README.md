@@ -30,11 +30,16 @@ Global flags (accepted before or after the subcommand):
 | `--server <url>` | Server base URL (default `https://127.0.0.1:9099`, env `POCKETSKYNET_SERVER`) |
 | `--http3` | Use HTTP/3 over QUIC — requires an `https://` URL |
 | `--insecure` | Skip certificate verification (the dev server's self-signed cert) |
-| `--key <hex>` | Wallet private key (or env `POCKETSKYNET_KEY`) |
+| `--key <hex>` | Wallet private key (prefer the env var below) |
 | `--username <name>` | Username for first-time login (otherwise auto-generated) |
 
 Commands: `login`, `rooms`, `create-room <name>`, `send <roomId> <text>`,
 `messages <roomId>`, `health`.
+
+**Prefer `POCKETSKYNET_KEY` over `--key`.** A key passed as `--key` appears in
+the process list (`ps`, `/proc`) and can land in shell history; the
+`POCKETSKYNET_KEY` environment variable does neither. `--key` is a fallback
+for one-off use.
 
 After a `login` the JWT is cached per (server, wallet) under
 `~/.config/pocketskynet-client/`, so later commands reuse it instead of

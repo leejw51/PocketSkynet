@@ -228,6 +228,11 @@ class ServerProc:
         self._teardown()
 
     def _teardown(self) -> None:
+        # Kill the child FIRST: the retry loop and the _wait_healthy timeout
+        # branch both call _teardown on a *running* server, and skipping stop()
+        # here would strand up to five children (and one more after
+        # pytest.fail).
+        self.stop()
         if self.root:
             shutil.rmtree(self.root, ignore_errors=True)
             self.root = ""

@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .api import Client
 from .crypto import parse_private_key, private_key_to_address
@@ -31,6 +34,21 @@ def _session_file() -> Path:
     return Path(base) / "pocketskynet-client" / "session.json"
 
 
+def _cache_key(server: str, address: str) -> str:
+    """A canonical (server, wallet) key. The scheme and host are lowercased
+    and any trailing slash dropped, so `https://H:9099` and `HTTPS://h:9099/`
+    do not become two entries -- which would each miss the cache and burn a
+    slot in the 5/min login limiter."""
+    parts = urlsplit(server)
+    if parts.scheme and parts.netloc:
+        normalized = (
+            f"{parts.scheme.lower()}://{parts.netloc.lower()}{parts.path.rstrip('/')}"
+        )
+    else:
+        normalized = server.rstrip("/")
+    return f"{normalized}|{address.lower()}"
+
+
 def _load_sessions() -> dict[str, Any]:
     try:
         return json.loads(_session_file().read_text())
@@ -40,15 +58,25 @@ def _load_sessions() -> dict[str, Any]:
 
 def _save_session(server: str, address: str, token: str) -> None:
     sessions = _load_sessions()
-    sessions[f"{server}|{address}"] = {"token": token}
+    sessions[_cache_key(server, address)] = {"token": token}
     path = _session_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sessions, indent=2))
-    path.chmod(0o600)
+    # Write via a 0600 temp file and atomically rename, so the token bytes are
+    # never briefly world-readable (as write_text-then-chmod would leave them).
+    data = json.dumps(sessions, indent=2)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".session-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:  # mkstemp already created it 0600
+            handle.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def _cached_token(server: str, address: str) -> str | None:
-    entry = _load_sessions().get(f"{server}|{address}")
+    entry = _load_sessions().get(_cache_key(server, address))
     return entry.get("token") if isinstance(entry, dict) else None
 
 

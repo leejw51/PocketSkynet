@@ -22,6 +22,14 @@ from pocketskynet_client.transport import (
 ALICE = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
 ALICE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
+_CHALLENGE = (
+    "Welcome to FruitNation!\n\n"
+    "Click to sign in and accept the FruitNation Terms of Service.\n\n"
+    "This request will not trigger a blockchain transaction or cost any gas "
+    "fees.\n\n"
+    f"Wallet address:\n{ALICE}\n\nNonce:\n{'0' * 64}"
+)
+
 
 # ------------------------------------------------------------- parsing --
 
@@ -153,9 +161,36 @@ def test_a_corrupt_session_file_reads_as_empty(session_file):
     assert cli._cached_token("https://a:1", "0xaaa") is None
 
 
+def test_the_cache_key_normalizes_scheme_host_and_trailing_slash(session_file):
+    cli._save_session("https://Host:9099/", "0xAAA", "tok")
+    # trailing slash, uppercase host, uppercase address -> same entry
+    assert cli._cached_token("https://host:9099", "0xaaa") == "tok"
+    assert cli._cached_token("HTTPS://HOST:9099/", "0xAAA") == "tok"
+    # a different port is still a different server
+    assert cli._cached_token("https://host:9100", "0xaaa") is None
+    # only one entry was written, not several near-duplicates
+    assert len(cli._load_sessions()) == 1
+
+
 def test_the_session_file_is_private(session_file):
     cli._save_session("https://a:1", "0xaaa", "secret")
     assert (session_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_the_session_file_is_never_briefly_world_readable(session_file, monkeypatch):
+    """The write goes through a 0600 temp file + atomic rename, so a reader
+    can never catch the token in a mode-0644 window."""
+    seen_modes = []
+    real_replace = cli.os.replace
+
+    def spy_replace(src, dst):
+        # at the moment of publish, the source (about to become dst) is 0600
+        seen_modes.append(cli.os.stat(src).st_mode & 0o777)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(cli.os, "replace", spy_replace)
+    cli._save_session("https://a:1", "0xaaa", "secret")
+    assert seen_modes == [0o600]
 
 
 # --------------------------------------------------- 401 -> fresh login --
@@ -176,7 +211,7 @@ class _RetryFakeTransport(Transport):
                 200,
                 {
                     "challengeId": "cid",
-                    "message": "challenge text",
+                    "message": _CHALLENGE,
                     "expiresAt": "2099-01-01T00:00:00.000Z",
                 },
             )

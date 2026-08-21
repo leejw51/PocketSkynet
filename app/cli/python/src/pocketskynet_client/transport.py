@@ -14,6 +14,7 @@ into the data dir on first run).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ssl
 from dataclasses import dataclass, field
 from typing import Self
@@ -119,11 +120,18 @@ class _H3ClientProtocol(QuicConnectionProtocol):
         body: bytes | None,
     ) -> TransportResponse:
         stream_id = self._quic.get_next_available_stream_id()
+        try:
+            path_bytes = path.encode("ascii")
+        except UnicodeEncodeError as exc:
+            # A non-ASCII path should never reach here (callers validate ids),
+            # but turn it into a clean client error rather than a codec
+            # traceback if one ever does.
+            raise TransportError(f"request path is not ASCII: {path!r}") from exc
         h3_headers = [
             (b":method", method.encode("ascii")),
             (b":scheme", b"https"),
             (b":authority", authority.encode("idna")),
-            (b":path", path.encode("ascii")),
+            (b":path", path_bytes),
         ]
         for name, value in headers.items():
             h3_headers.append((name.lower().encode("ascii"), value.encode("latin-1")))
@@ -211,6 +219,13 @@ class Http3Transport(Transport):
         async with self._lock:
             if self._protocol is not None and not self._protocol._closed.is_set():
                 return self._protocol
+            # The previous connection died; close its context manager before
+            # replacing it so a reconnect does not leak the old endpoint.
+            if self._connect_cm is not None:
+                with contextlib.suppress(Exception):  # teardown of a dead conn
+                    await self._connect_cm.__aexit__(None, None, None)
+                self._connect_cm = None
+                self._protocol = None
             configuration = QuicConfiguration(
                 is_client=True, alpn_protocols=list(H3_ALPN)
             )

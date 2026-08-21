@@ -19,6 +19,19 @@ ALICE = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
 ALICE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
 
+def challenge_message(address: str, nonce: str = "0" * 64) -> str:
+    """A challenge shaped like the server's (API.md section 6.2.1) -- the
+    client's signing guard only signs something starting with this template
+    and naming the wallet."""
+    return (
+        "Welcome to FruitNation!\n\n"
+        "Click to sign in and accept the FruitNation Terms of Service.\n\n"
+        "This request will not trigger a blockchain transaction or cost any "
+        "gas fees.\n\n"
+        f"Wallet address:\n{address}\n\nNonce:\n{nonce}"
+    )
+
+
 class FakeTransport(Transport):
     """Records every request; answers from a scripted queue (or a handler)."""
 
@@ -128,6 +141,48 @@ def test_context_manager_closes_the_transport():
     assert transport.closed
 
 
+# ------------------------------------------------------- room-id guard --
+
+
+@pytest.mark.parametrize(
+    "bad_room_id",
+    [
+        "../../admin",  # path traversal -> would POST to /admin/messages
+        "a#x",  # fragment -> would truncate the path before /messages
+        "room?a=1",  # query injection
+        "room id",  # space
+        "short",  # under 10 chars
+        "x" * 101,  # over 100 chars
+        "room/../x",  # embedded slash
+    ],
+)
+def test_send_rejects_a_malformed_room_id_without_touching_the_wire(bad_room_id):
+    transport = FakeTransport([ok({})])
+    with pytest.raises(ValueError, match="invalid room id"):
+        run(Client(transport, token="t").send_message(bad_room_id, "hi"))
+    assert transport.requests == []  # nothing left the client
+
+
+@pytest.mark.parametrize("bad_room_id", ["../../admin", "a#x", "short"])
+def test_messages_rejects_a_malformed_room_id_without_touching_the_wire(bad_room_id):
+    transport = FakeTransport([ok([])])
+    with pytest.raises(ValueError, match="invalid room id"):
+        run(Client(transport, token="t").messages(bad_room_id))
+    assert transport.requests == []
+
+
+def test_a_well_formed_room_id_is_accepted():
+    from pocketskynet_client.api import validate_room_id
+
+    # the real server shape, dots included (roomId allows [A-Za-z0-9_.-])
+    for good in [
+        "room_1749652739650_304e0eaf-bcf9-4682-a6a0-69bee8e40b97",
+        "room_0000000000_does-not-exist",
+        "a.b_c-d123",
+    ]:
+        assert validate_room_id(good) == good
+
+
 # -------------------------------------------------------- login plumbing --
 
 
@@ -139,7 +194,7 @@ def _login_handler(record):
         return ok(
             {
                 "challengeId": "cid-1",
-                "message": "sign me verbatim",
+                "message": challenge_message(ALICE),
                 "expiresAt": "2099-01-01T00:00:00.000Z",
             }
         )
@@ -178,7 +233,9 @@ def test_first_login_retries_with_a_generated_username():
             return ok(
                 {
                     "challengeId": f"cid-{state['challenges']}",
-                    "message": f"challenge {state['challenges']}",
+                    "message": challenge_message(
+                        ALICE, nonce=str(state["challenges"]) * 64
+                    ),
                     "expiresAt": "2099-01-01T00:00:00.000Z",
                 }
             )
@@ -202,13 +259,52 @@ def test_first_login_retries_with_a_generated_username():
     assert state["challenges"] == 2
 
 
+def test_signing_is_refused_for_a_non_login_challenge():
+    """A malicious/MITM server must not get the wallet to sign an arbitrary
+    string (e.g. an E2EE-key-derivation message) via the login flow."""
+
+    def handler(record):
+        assert record["path"] == "/api/auth/challenge"  # never reaches login
+        return ok(
+            {
+                "challengeId": "cid",
+                "message": (
+                    "FruitNation Encryption Key Derivation v2\n\nAddress: "
+                    f"{ALICE}\nSalt: 00\nPurpose: End-to-end encryption only"
+                ),
+                "expiresAt": "2099-01-01T00:00:00.000Z",
+            }
+        )
+
+    transport = FakeTransport(handler=handler)
+    with pytest.raises(ValueError, match="refusing to sign"):
+        run(Client(transport).login_with_key(ALICE_KEY, "alice"))
+    assert [r["path"] for r in transport.requests] == ["/api/auth/challenge"]
+
+
+def test_signing_is_refused_when_the_challenge_names_another_wallet():
+    other = "0x" + "ab" * 20
+
+    def handler(record):
+        return ok(
+            {
+                "challengeId": "cid",
+                "message": challenge_message(other),  # not ALICE
+                "expiresAt": "2099-01-01T00:00:00.000Z",
+            }
+        )
+
+    with pytest.raises(ValueError, match="refusing to sign"):
+        run(Client(FakeTransport(handler=handler)).login_with_key(ALICE_KEY, "alice"))
+
+
 def test_other_login_failures_are_not_retried():
     def handler(record):
         if record["path"] == "/api/auth/challenge":
             return ok(
                 {
                     "challengeId": "cid",
-                    "message": "m",
+                    "message": challenge_message(ALICE),
                     "expiresAt": "2099-01-01T00:00:00.000Z",
                 }
             )

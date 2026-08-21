@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Self
 
 from .crypto import parse_private_key, personal_sign, private_key_to_address
@@ -28,7 +29,28 @@ __all__ = [
     "login_request",
     "message_hash",
     "send_message_request",
+    "validate_room_id",
 ]
+
+# The server's roomId charset (API.md section 3.1 / PROTOCOL.md section 1):
+# 10-100 chars of [A-Za-z0-9_.-]. Validating before interpolation stops a
+# crafted id from steering the request off the /api/rooms/{id}/... path --
+# e.g. "../../admin" would otherwise POST to /admin/messages carrying the
+# caller's Bearer token, and "a#x" would truncate the path at the fragment.
+_ROOM_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{10,100}$")
+
+# The prefix every login challenge starts with (API.md section 6.2.1).
+_LOGIN_CHALLENGE_PREFIX = "Welcome to FruitNation!\n\n"
+
+
+def validate_room_id(room_id: str) -> str:
+    """Return `room_id` unchanged if it matches the server's roomId charset,
+    else raise ValueError. Guards path interpolation against injection."""
+    if not isinstance(room_id, str) or not _ROOM_ID_RE.match(room_id):
+        raise ValueError(
+            f"invalid room id {room_id!r}: expected 10-100 chars of [A-Za-z0-9_.-]"
+        )
+    return room_id
 
 
 def challenge_request(wallet_address: str) -> dict[str, Any]:
@@ -180,7 +202,20 @@ class Client:
 
         async def attempt(name: str | None) -> LoginResult:
             challenge = await self.challenge(address)
-            signature = personal_sign(key, challenge["message"])
+            message = challenge["message"]
+            # Defense in depth (matters most under --insecure): only ever sign
+            # something shaped like the login challenge. A malicious or MITM
+            # server must not be able to hand back an E2EE-key-derivation or
+            # key-binding string and have the wallet sign it here.
+            if (
+                not message.startswith(_LOGIN_CHALLENGE_PREFIX)
+                or address not in message
+            ):
+                raise ValueError(
+                    "refusing to sign: the server's challenge is not a "
+                    "login-challenge message for this wallet"
+                )
+            signature = personal_sign(key, message)
             return await self.login(address, challenge["challengeId"], signature, name)
 
         try:
@@ -210,6 +245,7 @@ class Client:
         )
 
     async def send_message(self, room_id: str, content: str) -> dict[str, Any]:
+        validate_room_id(room_id)
         return await self._call(
             "POST",
             f"/api/rooms/{room_id}/messages",
@@ -223,9 +259,10 @@ class Client:
         before: int | None = None,
         since: int | None = None,
     ) -> list[dict[str, Any]]:
-        query = f"limit={limit}"
+        validate_room_id(room_id)
+        query = f"limit={int(limit)}"
         if before is not None:
-            query += f"&before={before}"
+            query += f"&before={int(before)}"
         if since is not None:
-            query += f"&since={since}"
+            query += f"&since={int(since)}"
         return await self._call("GET", f"/api/rooms/{room_id}/messages?{query}")
