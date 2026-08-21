@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use pocketskynet_core::progression::Award;
-use pocketskynet_core::{RoomId, Wallet, WalletAddress};
+use pocketskynet_core::{LegacyTransaction, RoomId, SignedTransaction, Wallet, WalletAddress};
 
 use crate::api::{Client, RoomKeyWrap};
 use crate::components::toast;
@@ -1160,6 +1160,130 @@ pub async fn sign_in_with_wallet(
     let keys = SessionKeys::from_external(address, &derivation_sig, binding_sig)
         .map_err(|e| format!("Couldn't derive your encryption key: {e}"))?;
 
+    if let Err(e) = authed
+        .put_encryption_key(keys.public_key_hex(), keys.binding_sig())
+        .await
+    {
+        web_sys::console::warn_1(&format!("key publish failed: {}", e.user_message()).into());
+    }
+
+    Ok(Session {
+        token: login.token,
+        user: login.user,
+        keys: Rc::new(RefCell::new(keys)),
+        fruitnation_wallet: login.fruitnation_wallet,
+    })
+}
+
+/// Sign a transaction with whatever signer this session holds: the local key
+/// synchronously, or — for a TSS session — a threshold ceremony on the
+/// server over the transaction's `sighash`, assembled locally with
+/// `LegacyTransaction::sign_with_signature`. The raw bytes that come out are
+/// indistinguishable either way, which is the point (docs/CRYPTO.md §15.1).
+///
+/// Callers gate on [`SessionKeys::can_sign`] first so an external-wallet
+/// session still gets its explanatory refusal.
+pub async fn sign_transaction(
+    keys: &Rc<RefCell<SessionKeys>>,
+    tx: &LegacyTransaction,
+) -> Result<SignedTransaction, String> {
+    // Cloned out before the await: a `RefCell` borrow must not live across a
+    // suspension point another component could re-enter through.
+    let tss = keys.borrow().tss_signing();
+    match tss {
+        None => keys
+            .borrow()
+            .sign_transaction(tx)
+            .map_err(|e| e.to_string()),
+        Some((passphrase, shares)) => {
+            let client = Client::new(&crate::session::server_base());
+            // A ceremony is a multi-second server round trip and gloo has
+            // no request timeout, so an unreachable or hung server would
+            // pin the send dialog at its Sign phase forever. Two minutes is
+            // several ceremonies' worth of headroom.
+            let sighash = tx.sighash();
+            let sign = client.tss_sign_hash(&shares, &passphrase, &sighash);
+            let timeout = gloo_timers::future::TimeoutFuture::new(120_000);
+            futures::pin_mut!(sign);
+            let sig = match futures::future::select(sign, timeout).await {
+                futures::future::Either::Left((res, _)) => res.map_err(|e| e.user_message())?,
+                futures::future::Either::Right(_) => {
+                    return Err("the signing ceremony timed out".into());
+                }
+            };
+            if sig.v > 1 {
+                return Err(format!("invalid recovery id {}", sig.v));
+            }
+            let rs = sig.rs_bytes()?;
+            Ok(tx.sign_with_signature(&rs, sig.v))
+        }
+    }
+}
+
+/// The [`sign_in`] round trip for a TSS (m-of-n threshold) wallet.
+///
+/// The credential is a **quorum of share files** (docs/CRYPTO.md §15): any
+/// `t` of the `n` files minted at creation, plus the passphrase that seals
+/// them. The wallet address is read from the files' cleartext headers; the
+/// challenge is then ceremony-signed by presenting the files to the user's
+/// own server, which holds nothing between requests.
+///
+/// There is no derivation step and no salt: a TSS wallet's E2EE keypair is
+/// sealed inside every share file, not derived, because a ceremony
+/// signature is different on every run and `keccak256(signature)` would
+/// mint a new identity per login (§15.2 — the issue #85 blocker).
+pub async fn sign_in_with_tss(
+    client: Client,
+    shares: Vec<serde_json::Value>,
+    passphrase: String,
+    username: &str,
+) -> Result<Session, String> {
+    let address = shares
+        .first()
+        .and_then(crate::api::tss::TssShareHeader::of)
+        .and_then(|h| WalletAddress::new(&h.address).ok())
+        .ok_or_else(|| "Not a TSS share file".to_owned())?;
+
+    let challenge = client
+        .auth_challenge(&address)
+        .await
+        .map_err(|e| e.user_message())?;
+
+    // The server's bytes, verbatim, signed by ceremony — which also unseals
+    // and returns the E2EE identity, so one wrong passphrase fails one call.
+    let bundle = client
+        .tss_sign(&shares, &passphrase, &challenge.message)
+        .await
+        .map_err(|e| e.user_message())?;
+    if bundle.address != address.as_str() {
+        return Err("The server signed for a different wallet".into());
+    }
+
+    let login = client
+        .auth_login(
+            &address,
+            username,
+            &challenge.challenge_id,
+            &bundle.signature,
+            Some(&bundle.public_key),
+            Some(&bundle.binding_sig),
+        )
+        .await
+        .map_err(|e| e.user_message())?;
+
+    let authed = client.with_token(Some(&login.token));
+
+    let keys = SessionKeys::from_tss(
+        address,
+        passphrase,
+        shares,
+        &bundle.encryption_key,
+        bundle.binding_sig,
+    )
+    .map_err(|e| format!("Couldn't load your encryption key: {e}"))?;
+
+    // Same re-publish rule as `sign_in`: a login that omitted the key would
+    // have un-bound it server-side.
     if let Err(e) = authed
         .put_encryption_key(keys.public_key_hex(), keys.binding_sig())
         .await

@@ -51,6 +51,21 @@ enum Signer {
     /// An external EIP-1193 wallet. Only the address is known here; signing
     /// happens in `eip1193` before a `SessionKeys` is ever built.
     External(WalletAddress),
+    /// A threshold (m-of-n) wallet: the key exists nowhere, and every
+    /// signature is a ceremony run by the user's own server over a quorum
+    /// of the user's sealed share files (docs/CRYPTO.md §15). This session
+    /// holds those files and the passphrase that opens them — in memory
+    /// only, like a pasted key, and gone on reload. Signing is an async
+    /// round trip, so like `External` it cannot offer the synchronous
+    /// `sign_transaction`; unlike `External`, the send paths *can* sign
+    /// through [`SessionKeys::tss_signing`].
+    Tss {
+        address: WalletAddress,
+        passphrase: String,
+        /// The sealed share files presented at sign-in — at least the
+        /// wallet's threshold of them, opaque to this process.
+        shares: Vec<serde_json::Value>,
+    },
 }
 
 /// Everything derived from one unlocked wallet.
@@ -116,18 +131,76 @@ impl SessionKeys {
         })
     }
 
+    /// Build a session for a TSS wallet from what the sign-in quorum
+    /// unsealed: the stored E2EE private key and the ceremony-signed
+    /// binding (docs/CRYPTO.md §15.2). Nothing is derived — threshold
+    /// signatures are not deterministic, so there is nothing sound to
+    /// derive from. The share files stay with the session so transaction
+    /// ceremonies can present them again.
+    pub fn from_tss(
+        address: WalletAddress,
+        passphrase: String,
+        shares: Vec<serde_json::Value>,
+        enc_priv_hex: &str,
+        binding_sig: String,
+    ) -> Result<Self, CryptoError> {
+        let encryption = EncryptionKeypair::from_private_key_hex(enc_priv_hex)?;
+        Ok(Self {
+            signer: Signer::Tss {
+                address,
+                passphrase,
+                shares,
+            },
+            encryption,
+            binding_sig,
+            // Never populated for a TSS session: the wallet was born with the
+            // salted scheme, so no pre-salt wraps addressed to it can exist.
+            legacy: None,
+        })
+    }
+
     /// Whether this session can sign transactions on this device.
     ///
     /// The wallet and bank features ask before offering a send, so an external
     /// session gets a clear explanation instead of a failed signature.
+    /// The send paths gate on [`Self::can_sign`]; this finer distinction —
+    /// a key held on this device, signable without a round trip — backs the
+    /// synchronous `sign_transaction` contract and its tests, which are the
+    /// only callers left in the wasm build.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn can_sign_locally(&self) -> bool {
         matches!(self.signer, Signer::Local(_))
+    }
+
+    /// Whether this session can produce a transaction signature at all —
+    /// synchronously from a local key, or asynchronously by TSS ceremony.
+    /// Only an external browser wallet cannot; every send path (and the
+    /// agent's `chain` capability) gates on this one answer so the UI and
+    /// the agent never disagree about what the session can do.
+    pub fn can_sign(&self) -> bool {
+        matches!(self.signer, Signer::Local(_) | Signer::Tss { .. })
+    }
+
+    /// For a TSS session: what a ceremony needs — the quorum of share
+    /// files and the passphrase that opens them. `None` for every other
+    /// signer.
+    ///
+    /// Cloned out rather than borrowed so the caller can drop the `RefCell`
+    /// borrow before awaiting the server round trip.
+    pub fn tss_signing(&self) -> Option<(String, Vec<serde_json::Value>)> {
+        match &self.signer {
+            Signer::Tss {
+                passphrase, shares, ..
+            } => Some((passphrase.clone(), shares.clone())),
+            _ => None,
+        }
     }
 
     pub fn address(&self) -> &WalletAddress {
         match &self.signer {
             Signer::Local(w) => w.address(),
             Signer::External(a) => a,
+            Signer::Tss { address, .. } => address,
         }
     }
 
@@ -615,6 +688,67 @@ mod tests {
     }
 
     #[test]
+    fn a_tss_session_is_a_full_identity_with_a_ceremony_path_not_a_local_key() {
+        // Built the way `actions::sign_in_with_tss` builds one: from the
+        // sealed E2EE key and binding the sign-in quorum unsealed, plus the
+        // opaque share files themselves.
+        let enc_priv = format!("0x{}", "5e".repeat(32));
+        let binding_sig = format!("0x{}", "3d".repeat(65));
+        let files = vec![
+            serde_json::json!({ "partyIndex": 0 }),
+            serde_json::json!({ "partyIndex": 2 }),
+        ];
+        let mut s = SessionKeys::from_tss(
+            addr(7),
+            "open sesame".into(),
+            files.clone(),
+            &enc_priv,
+            binding_sig,
+        )
+        .unwrap();
+
+        // A publishable E2EE identity, same as any other signer's.
+        assert_eq!(s.public_key_hex().len(), 130);
+        assert!(s.public_key_hex().starts_with("04"));
+        assert_eq!(s.address(), &addr(7));
+
+        // The stored key is deterministic: rebuilding from the same hex is
+        // the same identity — the whole point of storing rather than
+        // deriving (CRYPTO.md §15.2).
+        let again = SessionKeys::from_tss(
+            addr(7),
+            "open sesame".into(),
+            files.clone(),
+            &enc_priv,
+            format!("0x{}", "3d".repeat(65)),
+        )
+        .unwrap();
+        assert_eq!(s.public_key_hex(), again.public_key_hex());
+
+        // No local key: the sync door refuses, the ceremony door opens —
+        // with the same files and passphrase the session was built from.
+        assert!(!s.can_sign_locally());
+        assert!(s.can_sign(), "a TSS session signs — by ceremony");
+        let (passphrase, shares) = s.tss_signing().expect("a ceremony context");
+        assert_eq!(passphrase, "open sesame");
+        assert_eq!(shares, files);
+
+        // And no legacy healing — a TSS wallet postdates the salted scheme.
+        assert!(matches!(s.legacy(), Err(CryptoError::NoLocalKey)));
+    }
+
+    #[test]
+    fn only_a_tss_session_offers_a_ceremony_context() {
+        assert!(external_session().tss_signing().is_none());
+        let wallet = Wallet::from_private_key_hex(
+            "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let local = SessionKeys::derive(wallet, &"ab".repeat(32)).unwrap();
+        assert!(local.tss_signing().is_none());
+    }
+
+    #[test]
     fn an_external_session_has_an_identity_but_no_local_key() {
         let s = external_session();
         // It is a full E2EE identity: it can be published and wrapped to.
@@ -623,6 +757,7 @@ mod tests {
         assert_eq!(s.address(), &addr(9));
         // But the wallet key is in the extension, not here.
         assert!(!s.can_sign_locally());
+        assert!(!s.can_sign(), "and no ceremony either");
     }
 
     #[test]

@@ -3255,6 +3255,11 @@ open past the hour re-fetches the listing when its tiles start failing.
 | 65 | POST | `/api/passwords` | ✓ | own entries only; client-minted id, 409 if taken |
 | 66 | PUT | `/api/passwords/:id` | ✓ | own entries only; 404 for anybody else's |
 | 67 | DELETE | `/api/passwords/:id` | ✓ | own entries only; 404 for anybody else's |
+| 68 | POST | `/api/tss/keygen` | — | passphrase seals the shares; 409 while one runs (PocketSkynet extension, §19.1) |
+| 69 | GET | `/api/tss/keygen/status` | — | phases only, never the files (§19.1) |
+| 70 | POST | `/api/tss/keygen/collect` | `keygenId` capability | one-shot handover of the sealed share files (§19.2) |
+| 71 | POST | `/api/tss/sign` | any t share files + passphrase | login signature + E2EE identity (§19.3) |
+| 72 | POST | `/api/tss/sign-hash` | any t share files + passphrase | transaction digests (§19.4) |
 | — | WS | `/ws` | ✓ (subprotocol or `?token=`) | subscribed to own rooms |
 
 ### 14.1 Route-precedence requirements
@@ -3592,3 +3597,77 @@ the resource is one they could reasonably know exists. An entry id is a 128-bit
 secret nobody but its owner holds, so a 403 would confirm a guess. `PUT` and
 `DELETE` therefore answer 404 with an identical message whether the entry
 belongs to somebody else or never existed at all.
+
+---
+
+## 19. TSS wallets (PocketSkynet extension)
+
+The m-of-n threshold wallet (`docs/CRYPTO.md` §15; `PROTOCOL.md` §20).
+Every ceremony runs inside the server; **custody is the user's**: keygen
+hands back `n` passphrase-sealed share files, the server persists nothing,
+and each signing request presents any `t` of the files in its body. All
+endpoints are unauthenticated by design — a TSS wallet must sign its login
+challenge before it has a JWT — and everything that touches key material is
+gated by the passphrase (PBKDF2-600k + AES-256-CBC + HMAC, re-derived per
+request) under the general per-IP rate limit. This router carries its own
+1 MB body limit: a five-share quorum of sealed files outgrows the general
+100 KB cap. A wrong passphrase is `401`; mixed wallets, a short quorum, or
+a malformed share is `400`.
+
+### 19.1 `POST /api/tss/keygen` / `GET /api/tss/keygen/status`
+
+Body: `{ "threshold": t, "parties": n, "passphrase": "…" }` with
+`2 ≤ t ≤ n ≤ 5` and a passphrase of at least 8 characters (`400`
+otherwise). Starts the DKG as a background task and answers
+`{ "started": true, "keygenId": "…64 hex…" }` immediately; the `keygenId`
+is the capability that will collect the output. A second keygen while one
+runs is `409`; starting a new one discards an uncollected previous result.
+
+Poll status; the states are, in order:
+`{"state":"idle"}` → `"generating_primes"` (the slow step) →
+`"running_protocol"` → `"binding"` (minting + binding the E2EE identity,
+sealing the files) → `{"state":"done","address":"0x…"}`, or
+`{"state":"error","error":"…"}`. Status never carries the files.
+
+### 19.2 `POST /api/tss/keygen/collect`
+
+Body: `{ "keygenId": "…" }`. Hands over the sealed share files **exactly
+once** and wipes them from memory; a second call, a wrong id, or a server
+restart since `done` is `404`.
+
+```json
+{ "address": "0x…", "threshold": 2, "parties": 3,
+  "shares": [ { "type": "pocketskynet-tss-share", "version": 1,
+                "address": "0x…", "threshold": 2, "parties": 3,
+                "partyIndex": 0, "createdAt": 1755000000,
+                "kdfSalt": "…", "kdfIterations": 600000,
+                "iv": "…", "ciphertext": "…base64…", "mac": "…" }, … ] }
+```
+
+The client saves each element verbatim as one downloadable file.
+
+### 19.3 `POST /api/tss/sign`
+
+Body: `{ "shares": [any t sealed share files], "passphrase", "message" }`.
+EIP-191 `personal_sign` by ceremony over the presented quorum, plus the
+E2EE identity the same quorum unseals — everything a login needs in one
+round trip. The `signature` is the standard `0x` + 130-hex wire form,
+self-verified against the wallet address before it leaves the server; feed
+it to `POST /api/auth/login` unchanged, with `publicKey`/`bindingSig` as
+that endpoint's `publicKey`/`publicKeySig`.
+
+```json
+{ "address": "0x…", "threshold": 2, "parties": 3, "signature": "0x…",
+  "encryptionKey": "0x…32B private key", "publicKey": "04…130 hex",
+  "bindingSig": "0x…65B" }
+```
+
+Presenting more than `t` files is fine (the lowest `t` distinct parties
+sign); duplicates collapse; files from different wallets are refused.
+
+### 19.4 `POST /api/tss/sign-hash`
+
+Body: `{ "shares", "passphrase", "hash" }` where `hash` is 32 bytes of hex
+(`0x` optional) — for transactions, `LegacyTransaction::sighash()`. Returns
+`{ "address", "r": "0x…32B", "s": "0x…32B", "v": 0|1 }`; assemble with
+`sign_with_signature(r‖s, v)` (PROTOCOL.md §20).

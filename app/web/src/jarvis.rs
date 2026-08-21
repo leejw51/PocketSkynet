@@ -311,7 +311,8 @@ pub struct Caps {
     /// The vault is unlocked *and* the owner switched Jarvis's access on for
     /// this session. Both halves are required and neither is remembered.
     pub vault: bool,
-    /// Wallet keys are on this device.
+    /// The session can sign transactions — a wallet key on this device, or
+    /// a TSS quorum that signs by server ceremony (`SessionKeys::can_sign`).
     pub chain: bool,
     /// A provider that can draw is configured.
     pub image: bool,

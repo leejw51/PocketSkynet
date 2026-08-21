@@ -1,0 +1,26 @@
+{
+    "address": "0x6d5abf341518c0927f6c344af072d058b2a56db9",
+    "message": "PocketSkynet TSS vector v1",
+    "messageSignature": "0x9a30d28c037092ef987fc11305a9fd35c6896ad89a131b67378cede879011c396cc4ee6d4485cf33c8ebcbed08c2b03a0c307f9785bfe8501ce492667b393c921b",
+    "parties": 3,
+    "signerSet": [
+        0,
+        2
+    ],
+    "threshold": 2,
+    "tx": {
+        "chainId": 338,
+        "data": "0x",
+        "gasLimit": 21000,
+        "gasPrice": "5000000000000",
+        "hash": "0x384964902c9149d5ec311ddec718c93ec62615dccd5e2988d89c45a16167b869",
+        "nonce": 9,
+        "r": "0x757fffafabc75182635552819cfbd46f642a09c2ec268b7c44d89c2eff390cda",
+        "raw": "0xf86f0986048c27395000825208943535353535353535353535353535353535353535880de0b6b3a7640000808202c7a0757fffafabc75182635552819cfbd46f642a09c2ec268b7c44d89c2eff390cdaa07c428206d126c7d9be654f23151080506fe8d0f5dfde0ae41cd433af4d75c555",
+        "recoveryId": 0,
+        "s": "0x7c428206d126c7d9be654f23151080506fe8d0f5dfde0ae41cd433af4d75c555",
+        "sighash": "0xe08ee102285ef7534f2215bba7c31ed927bc8cf38f7435b7ed53e432fbc738d8",
+        "to": "0x3535353535353535353535353535353535353535",
+        "value": "1000000000000000000"
+    }
+}

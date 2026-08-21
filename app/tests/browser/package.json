@@ -1,11 +1,12 @@
 {
   "name": "pocketskynet-browser-tests",
   "private": true,
-  "description": "Large-file transfer checks that only a real browser can make",
+  "description": "Checks that only a real browser can make: large-file transfers and the TSS wallet walkthrough",
   "scripts": {
     "upload": "node upload.js",
     "resume": "node resume.js",
-    "chunksize": "node chunksize.js"
+    "chunksize": "node chunksize.js",
+    "tss": "node tss.js"
   },
   "devDependencies": {
     "playwright": "^1.62.0"

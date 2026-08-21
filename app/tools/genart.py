@@ -735,6 +735,60 @@ MANIFEST: list[dict[str, str]] = [
         ),
     },
     {
+        # The TSS wallet's "movie moment" (login create wizard and its
+        # backup step). Base-skin only: the wizard is one panel, and the
+        # cinematic vault language already reads correctly under every skin
+        # — same economy as any other fallback asset.
+        "name": "tss-forge",
+        "themeless": True,
+        "cinematic": True,
+        "prompt": (
+            "Ultra realistic macro shot of a glowing cyan energy key "
+            "fracturing into three floating crystalline shards above a "
+            "brushed titanium ring, each shard trailing soft light, thin "
+            "energy filaments still connecting them, dark black background "
+            "with faint hexagonal circuit patterns, sci-fi multi-party "
+            "vault, cinematic rim lighting, photorealistic, square "
+            "composition, no text, no logos."
+        ),
+    },
+    {
+        # The quorum-met moment on the TSS login: the shards of `tss-forge`
+        # fused back into one whole key. Same subject, same ring, same
+        # palette — the pair has to read as before/after, not as two
+        # unrelated renders.
+        "name": "tss-united",
+        "themeless": True,
+        "cinematic": True,
+        "prompt": (
+            "Ultra realistic macro shot of a single whole glowing cyan "
+            "crystalline key hovering above a brushed titanium ring, "
+            "faint seams of light where three shards have just fused "
+            "together, bright energy flare at the moment of joining, dark "
+            "black background with faint hexagonal circuit patterns, sci-fi "
+            "multi-party vault unlocked, cinematic rim lighting, "
+            "photorealistic, square composition, no text, no logos."
+        ),
+    },
+    {
+        # The activation moment: the quorum assembled, the machine wakes.
+        # Same cinematic set as skynet-hero/boot-endoskull — this is the
+        # login's "it's alive" frame when enough shares are presented.
+        "name": "tss-armed",
+        "themeless": True,
+        "cinematic": True,
+        "prompt": (
+            "Ultra realistic cinematic shot of a chrome robotic endoskeleton "
+            "skull in darkness at the exact moment of activation, one eye "
+            "igniting in brilliant cyan with a sharp lens flare, the other "
+            "socket still dark with a faint red ember, a glowing cyan "
+            "crystalline key held up in its skeletal metal hand, black "
+            "background with faint hexagonal circuit traces, dramatic rim "
+            "lighting, movie still quality, photorealistic, square "
+            "composition, no text, no logos."
+        ),
+    },
+    {
         "name": "skynet-grid",
         "themeless": True,
         "cinematic": True,

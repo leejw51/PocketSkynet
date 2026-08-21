@@ -579,6 +579,15 @@ after it.
 | Divider | `.fn-rule` |
 | Tabs | `.fn-tabs` / `.fn-tab` (`role="tab"`, `aria-selected`) |
 | Panels | `.fn-tabpanel` (`role="tabpanel"`) |
+
+> **PocketSkynet divergence:** the tab row is Recovery phrase / Private key /
+> **TSS wallet** (`login.rs::Method`). The TSS tab collects a quorum of
+> user-held share files (any m of n) plus their passphrase instead of key
+> material, and carries the m-of-n create wizard — shape selects, passphrase
+> twice, an animated ceremony checklist over the `tss-forge` artwork, and a
+> backup panel that gates sign-in until every share file is downloaded —
+> `docs/CRYPTO.md` §15, `docs/API.md` §19. MetaMask/Privy are buttons below
+> the form, not tabs (see the module docs in `components/login.rs`).
 | Username, wallet index | `.topcoat-text-input` |
 | Generate / Generate new phrase | `.topcoat-button` |
 | Mnemonic | `.fn-mnemonic > .topcoat-textarea` (mono, 13px, 1.7 line height) |

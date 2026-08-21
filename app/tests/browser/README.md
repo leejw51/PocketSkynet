@@ -1,15 +1,23 @@
-# Browser tests for large file transfers
+# Browser tests
 
 Two kinds of test live here, and they answer different questions.
 
-`chunksize.js` is hermetic — it boots its own throwaway server (`harness.js`,
-the same contract as `tests/integration/supervisor.py::Backend`) and tears it
-down when it's done — and is part of plain `make test` (`make
-test-chunksize`, or transitively via `integrationtest`). It exists because
-`server/tests/uploads.rs` can only check what the server *advertises*
-(`chunkSize` in the `begin` response); it cannot see whether the real WASM
-client obeys it. This does: a small file goes up through a real browser, and
-every `PATCH …?offset=` on the wire is checked against the 500 KiB default.
+`chunksize.js` and `tss.js` are hermetic — each boots its own throwaway
+server (`harness.js`, the same contract as
+`tests/integration/supervisor.py::Backend`) and tears it down when it's done
+— and both are part of plain `make test` (`make test-chunksize` / `make
+test-tss`, or transitively via `integrationtest`). `chunksize.js` exists
+because `server/tests/uploads.rs` can only check what the server
+*advertises* (`chunkSize` in the `begin` response); it cannot see whether
+the real WASM client obeys it. This does: a small file goes up through a
+real browser, and every `PATCH …?offset=` on the wire is checked against
+the 500 KiB default. `tss.js` walks the m-of-n TSS wallet the way a person
+meets it — create a 2-of-3 wallet in the wizard, download every share
+through the backup gate, sign in, sign out, and sign back in with only
+shares 1 and 3 (the lost-share case) — because the Rust suites prove the
+cryptography and the API but cannot see the WASM client's wizard, gate, or
+quorum arithmetic. It runs a real CGGMP21 ceremony, so give it a couple of
+minutes.
 
 `upload.js`, `resume.js`, `movie.js`, `storm.js` are not — they drive a
 **running** server rather than starting one, and move real 120 MB–400 MB

@@ -95,7 +95,7 @@ endif
 .PHONY: help start https http http3 stop restart refresh custom custom-stop custom-restart \
         build gui package test \
         web server tools dev \
-        unittest integrationtest test-integration-rust test-integration-python test-wasm \
+        unittest integrationtest test-integration-rust test-integration-python test-wasm test-tss \
         package-installer verify fmt format fmt-check fmt-tools lint clean distclean assets assets-force assets-cute assets-human db-reset
 
 ## ----------------------------------------------------------------- help ----
@@ -345,7 +345,7 @@ unittest: ## Unit tests — workspace libraries and binaries, plus web client lo
 # Playwright check boots a third, real-browser backend to confirm the WASM
 # client actually chunks uploads the way the other two can only see it
 # *advertised* — see tests/browser/README.md.
-integrationtest: test-integration-rust test-integration-python test-chunksize ## Integration tests — Rust suite + Python supervisor + browser chunk-size check
+integrationtest: test-integration-rust test-integration-python test-chunksize test-tss ## Integration tests — Rust suite + Python supervisor + browser checks
 
 test-integration-rust: ## Rust end-to-end tests against servers they start themselves
 	@echo "==> integration tests (rust)"
@@ -377,6 +377,20 @@ test-chunksize: build ## Hermetic Playwright check that uploads chunk at 0.5 MB
 	# only CI has.
 	cd tests/browser && npx playwright install $(if $(CI),--with-deps,) chromium
 	cd tests/browser && node chunksize.js
+
+# Hermetic like the chunk-size check, and a browser test for the same
+# reason: the Rust suites prove the TSS cryptography and the API, but only
+# a real browser can prove the WASM client — the create wizard, the
+# download-every-share gate, the file picker's quorum arithmetic, and the
+# lost-share login. Runs a real 2-of-3 CGGMP21 ceremony, so it takes a
+# couple of minutes; that is the feature, not overhead.
+test-tss: build ## Hermetic Playwright walkthrough of the m-of-n TSS wallet
+	@echo "==> TSS wallet browser test (playwright)"
+	@command -v node >/dev/null \
+		|| { echo "ERROR: node not found. Install Node.js"; exit 1; }
+	cd tests/browser && npm install --no-audit --no-fund
+	cd tests/browser && npx playwright install $(if $(CI),--with-deps,) chromium
+	cd tests/browser && node tss.js
 
 test-browser: ## Large-file transfer checks against a *running* server (see tests/browser/README.md)
 	@echo "==> browser transfer tests (run 'make restart' first)"

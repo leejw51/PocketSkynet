@@ -413,15 +413,26 @@ impl LegacyTransaction {
         let (signature, recovery_id) = signing_key
             .sign_prehash_recoverable(&self.sighash())
             .map_err(|_| ChainError::SigningFailed)?;
+        let rs: [u8; 64] = signature.to_bytes().into();
+        Ok(self.sign_with_signature(&rs, recovery_id.to_byte()))
+    }
 
-        let v = self.chain_id * 2 + 35 + u64::from(recovery_id.to_byte());
-        let bytes = signature.to_bytes();
-        let r = strip_leading_zeros(&bytes[..32]);
-        let s = strip_leading_zeros(&bytes[32..]);
+    /// Assemble the signed transaction from an externally produced
+    /// recoverable signature over [`Self::sighash`] — `rs` is `r ‖ s`
+    /// big-endian, `recovery_id` the y-parity in {0, 1}.
+    ///
+    /// This is the seam a TSS wallet signs through (docs/CRYPTO.md §15): the
+    /// ceremony returns `(r, s, v)` and the transaction bytes must come out
+    /// identical to [`Self::sign`]'s for the same signature — which is
+    /// guaranteed by [`Self::sign`] itself being a caller of this.
+    pub fn sign_with_signature(&self, rs: &[u8; 64], recovery_id: u8) -> SignedTransaction {
+        let v = self.chain_id * 2 + 35 + u64::from(recovery_id);
+        let r = strip_leading_zeros(&rs[..32]);
+        let s = strip_leading_zeros(&rs[32..]);
 
         let raw = self.rlp_encode(Some((u128::from(v), r, s)));
         let hash = Keccak256::digest(&raw).into();
-        Ok(SignedTransaction { raw, hash })
+        SignedTransaction { raw, hash }
     }
 
     /// RLP-encode the nine-field list. `tail` carries either the EIP-155
@@ -767,6 +778,35 @@ mod tests {
         // must not panic or emit twenty zero bytes.
         let unsigned = tx.rlp_encode(Some((1, &[], &[])));
         assert!(unsigned.len() < eip155_example().rlp_encode(Some((1, &[], &[]))).len());
+    }
+
+    #[test]
+    fn an_external_signature_assembles_the_same_bytes_sign_produces() {
+        // The TSS seam: `sign` is now a caller of `sign_with_signature`, and
+        // this pins that equivalence from the outside — an externally
+        // produced (r, s, recovery_id) over the sighash must yield the exact
+        // raw transaction the local signer yields.
+        use k256::ecdsa::SigningKey;
+        let secret = SecretKey::from_slice(&[0x42; 32]).unwrap();
+        let tx = LegacyTransaction {
+            nonce: 7,
+            gas_price: 5_000_000_000_000,
+            gas_limit: 21_000,
+            to: Some(WalletAddress::new("0x3535353535353535353535353535353535353535").unwrap()),
+            value: 10u128.pow(18),
+            data: vec![],
+            chain_id: 338,
+        };
+        let local = tx.sign(&secret).unwrap();
+
+        let (signature, recovery_id) = SigningKey::from(&secret)
+            .sign_prehash_recoverable(&tx.sighash())
+            .unwrap();
+        let rs: [u8; 64] = signature.to_bytes().into();
+        let external = tx.sign_with_signature(&rs, recovery_id.to_byte());
+
+        assert_eq!(external.raw, local.raw);
+        assert_eq!(external.hash, local.hash);
     }
 
     #[test]

@@ -67,6 +67,34 @@ impl EncryptionKeypair {
     pub fn private_key_hex(&self) -> String {
         format!("0x{}", hex::encode(self.secret.to_bytes()))
     }
+
+    /// Rebuild a keypair from stored private-key hex (`0x` optional).
+    ///
+    /// The TSS wallet path (docs/CRYPTO.md §15.2): its E2EE keypair is
+    /// generated once at wallet creation and *stored*, never derived from a
+    /// signature — threshold signatures are not deterministic, so a derived
+    /// key would change on every login and orphan all prior ciphertext.
+    pub fn from_private_key_hex(private_hex: &str) -> Result<Self, CryptoError> {
+        let stripped = private_hex
+            .strip_prefix("0x")
+            .or_else(|| private_hex.strip_prefix("0X"))
+            .unwrap_or(private_hex);
+        if stripped.len() != 64 {
+            return Err(CryptoError::InvalidPrivateKey);
+        }
+        let bytes = hex::decode(stripped).map_err(|_| CryptoError::InvalidPrivateKey)?;
+        let secret = SecretKey::from_slice(&bytes).map_err(|_| CryptoError::InvalidPrivateKey)?;
+        let public_hex = uncompressed_public_key_hex(&secret.public_key());
+        Ok(EncryptionKeypair { secret, public_hex })
+    }
+
+    /// A fresh keypair from the OS CSPRNG — what a TSS wallet mints at
+    /// creation time (docs/CRYPTO.md §15.2).
+    pub fn generate() -> Result<Self, CryptoError> {
+        let secret = crate::random::secret_key()?;
+        let public_hex = uncompressed_public_key_hex(&secret.public_key());
+        Ok(EncryptionKeypair { secret, public_hex })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +483,47 @@ mod tests {
         assert_eq!(
             verify_key_binding(w.address(), Some(&upper), Some(&sig)).err(),
             Some(CryptoError::KeyBindingFailed)
+        );
+    }
+
+    #[test]
+    fn a_stored_keypair_round_trips_through_its_private_hex() {
+        // The TSS path (CRYPTO.md §15.2): generate once, store, rebuild —
+        // the rebuilt keypair must be the same identity, hex for hex.
+        let generated = EncryptionKeypair::generate().unwrap();
+        let rebuilt =
+            EncryptionKeypair::from_private_key_hex(&generated.private_key_hex()).unwrap();
+        assert_eq!(rebuilt.public_key_hex(), generated.public_key_hex());
+        assert_eq!(rebuilt.private_key_hex(), generated.private_key_hex());
+        // And the binding built for it verifies like any other keypair's.
+        assert_eq!(generated.public_key_hex().len(), 130);
+        assert!(generated.public_key_hex().starts_with("04"));
+    }
+
+    #[test]
+    fn a_malformed_stored_private_key_is_rejected() {
+        for bad in [
+            "",
+            "0x",
+            "0x1234",                          // too short
+            &format!("0x{}", "gg".repeat(32)), // not hex
+            &"ab".repeat(33),                  // too long
+            &format!("0x{}", "00".repeat(32)), // zero is not a valid scalar
+        ] {
+            assert_eq!(
+                EncryptionKeypair::from_private_key_hex(bad).err(),
+                Some(CryptoError::InvalidPrivateKey),
+                "{bad:?} must be rejected"
+            );
+        }
+        // The 0x prefix is optional — storage may hold either form.
+        let k = EncryptionKeypair::generate().unwrap();
+        let no_prefix = k.private_key_hex().trim_start_matches("0x").to_owned();
+        assert_eq!(
+            EncryptionKeypair::from_private_key_hex(&no_prefix)
+                .unwrap()
+                .public_key_hex(),
+            k.public_key_hex()
         );
     }
 }
