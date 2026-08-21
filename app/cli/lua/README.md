@@ -106,8 +106,8 @@ Lower-level modules: `pocketskynet.eip191` (digest/sign/address/EIP-55),
 **Unit suites** (no server needed):
 
 ```sh
-lua app/clients/lua/test.lua          # runs everything in test/unit_*.lua
-lua app/clients/lua/test/unit.lua crypto json   # or a subset by name
+lua app/cli/lua/test.lua          # runs everything in test/unit_*.lua
+lua app/cli/lua/test/unit.lua crypto json   # or a subset by name
 ```
 
 Expected output: `unit: 123 passed, 0 failed`. Coverage:
@@ -137,7 +137,7 @@ built binary at `app/target/{release,debug}/pocketskynet`, in the main
 checkout when running from a git worktree, or via `$POCKETSKYNET_BIN`):
 
 ```sh
-lua app/clients/lua/test/integration.lua
+lua app/cli/lua/test/integration.lua
 ```
 
 Expected output: `integration: 31 passed, 0 failed` (+ 1 skip on machines

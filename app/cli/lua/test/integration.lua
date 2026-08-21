@@ -3,7 +3,7 @@
 -- server (one process per transport variant, ephemeral ports, temp data
 -- dirs, guaranteed teardown — see harness.lua).
 --
---   lua app/clients/lua/test/integration.lua
+--   lua app/cli/lua/test/integration.lua
 --
 -- Needs a built server binary (app/target/{release,debug}/pocketskynet, or
 -- $POCKETSKYNET_BIN). The HTTP/3 group is skipped with a message when no

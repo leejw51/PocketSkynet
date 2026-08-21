@@ -1,7 +1,7 @@
 #!/usr/bin/env lua
 -- test.lua — entry point for the client's unit suites (no server needed):
 --
---   lua app/clients/lua/test.lua
+--   lua app/cli/lua/test.lua
 --
 -- The suites live in test/unit_*.lua (crypto vectors, JSON codec, client
 -- wire shapes, transport quoting, CLI exit codes); this file just runs
