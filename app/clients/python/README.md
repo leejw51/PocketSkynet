@@ -98,12 +98,26 @@ Signing utilities live in `pocketskynet_client.crypto`
 
 ## Tests
 
-The signing and derivation tests are pinned byte-exactly against the
-canonical protocol vectors in `app/core/tests/vectors/protocol-v1.json`
-(EIP-191 signatures, key → address derivation, msgHash), plus camelCase
-request-serialization checks:
+Two layers, both under `tests/`:
+
+- **Unit tests** — no server. Signing and derivation are pinned byte-exactly
+  against the canonical protocol vectors in
+  `app/core/tests/vectors/protocol-v1.json` (EIP-191 digests/signatures,
+  key-binding signatures, v2 encryption-key derivation, key → address,
+  EIP-55, msgHash), plus request building, response/error-envelope parsing,
+  the CLI's JWT cache and 401 → re-login retry, and the HTTP/3 protocol's
+  event handling (including the GREASE-swallowed FIN) against fakes.
+- **Integration tests** (marked `integration`) — boot one real
+  `pocketskynet` server with `--tls --http3 --jwt-secret …` (harness modeled
+  on `app/server/tests/common/harness.rs`) and cover the auth flow and its
+  failure edges (burned challenges, wrong signatures, tampered/expired/
+  minted JWTs), rooms, messages (validation, ordering, membership,
+  concurrency), and transport parity over HTTP/1.1+TLS and HTTP/3 with
+  cross-transport read-back. They need a built server binary under
+  `app/target/{debug,release}/` (or `POCKETSKYNET_BIN=…`).
 
 ```sh
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest                      # everything
+.venv/bin/python -m pytest -m "not integration" # unit only, no binary needed
 .venv/bin/ruff check src tests
 ```

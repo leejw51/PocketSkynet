@@ -28,6 +28,7 @@ __all__ = [
     "personal_sign",
     "private_key_to_address",
     "private_key_to_public_key",
+    "to_checksum_address",
 ]
 
 
@@ -73,6 +74,23 @@ def private_key_to_address(private_key: bytes) -> str:
     """
     public = private_key_to_public_key(private_key)
     return "0x" + keccak256(public[1:]).hex()[-40:]
+
+
+def to_checksum_address(address: str) -> str:
+    """EIP-55 checksummed form -- display only; the wire form is lowercase.
+
+    Nibble *i* of keccak256 of the lowercase 40-char address decides whether
+    hex letter *i* is uppercased.
+    """
+    lower = address.lower().removeprefix("0x")
+    if len(lower) != 40 or any(c not in "0123456789abcdef" for c in lower):
+        raise ValueError("not a 20-byte hex address")
+    digest = keccak256(lower.encode("ascii")).hex()
+    checksummed = "".join(
+        c.upper() if c.isalpha() and int(digest[i], 16) >= 8 else c
+        for i, c in enumerate(lower)
+    )
+    return "0x" + checksummed
 
 
 def eip191_digest(message: str) -> bytes:

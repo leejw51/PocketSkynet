@@ -7,18 +7,23 @@ character-count length prefix all fail here.
 
 from __future__ import annotations
 
-import pytest
+from coincurve import PrivateKey
 
 from pocketskynet_client.crypto import (
     eip191_digest,
+    keccak256,
     parse_private_key,
     personal_sign,
     private_key_to_address,
 )
 
 
-def eip191_cases(vectors):
-    return [pytest.param(v, id=v["name"]) for v in vectors["eip191"]]
+def _wallet_key_for(vectors, address: str) -> str:
+    """The wallet private key behind a vector address, via privateKeyImports."""
+    for entry in vectors["wallet"]["privateKeyImports"]:
+        if entry["address"] == address:
+            return entry["privateKeyHex"]
+    raise AssertionError(f"no known key for {address}")
 
 
 def test_vector_file_has_multiple_eip191_entries(vectors):
@@ -77,3 +82,45 @@ def test_login_challenge_vector_signs_verbatim(vectors):
     assert vector["message"].startswith("Welcome to FruitNation!\n\n")
     key = parse_private_key(vector["privateKeyHex"])
     assert personal_sign(key, vector["message"]) == vector["signatureHex"]
+
+
+def test_key_binding_signatures_byte_exact(vectors):
+    """keyBindings[] messages are wallet-signed EIP-191; same rules apply."""
+    assert len(vectors["keyBindings"]) >= 2
+    for vector in vectors["keyBindings"]:
+        key = parse_private_key(_wallet_key_for(vectors, vector["address"]))
+        assert personal_sign(key, vector["message"]) == vector["signatureHex"]
+        assert vector["message"].startswith("FruitNation Public Key Binding\n\n")
+
+
+def test_encryption_key_derivation_v2_from_signature(vectors):
+    """encPriv = keccak256 of the 65 RAW signature bytes (not the 0x string),
+    encPub = the uncompressed point -- pinned end to end by the v2 vectors."""
+    for vector in vectors["encryptionKeyDerivation"]["v2"]:
+        wallet_key = parse_private_key(_wallet_key_for(vectors, vector["address"]))
+        signature = personal_sign(wallet_key, vector["message"])
+        enc_priv = keccak256(bytes.fromhex(signature[2:]))
+        assert "0x" + enc_priv.hex() == vector["encryptionPrivateKeyHex"]
+        enc_pub = PrivateKey(enc_priv).public_key.format(compressed=False)
+        assert enc_pub.hex() == vector["encryptionPublicKeyHex"]
+
+
+def test_digest_of_empty_message():
+    # length prefix is the decimal byte length -- "0" here, nothing after it
+    assert eip191_digest("") == keccak256(b"\x19Ethereum Signed Message:\n0")
+
+
+def test_digest_length_prefix_is_decimal_bytes_not_padded():
+    # a 100-byte message gets the three ASCII digits "100"
+    message = "a" * 100
+    assert eip191_digest(message) == keccak256(
+        b"\x19Ethereum Signed Message:\n100" + message.encode()
+    )
+
+
+def test_signing_is_deterministic_across_calls(vectors):
+    vector = vectors["eip191"][0]
+    key = parse_private_key(vector["privateKeyHex"])
+    assert personal_sign(key, vector["message"]) == personal_sign(
+        key, vector["message"]
+    )

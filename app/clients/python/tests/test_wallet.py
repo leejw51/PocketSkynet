@@ -69,3 +69,31 @@ def test_parse_private_key_rejects_bad_input():
 def test_parse_private_key_accepts_with_and_without_prefix(vectors):
     hex_key = vectors["wallet"]["privateKeyImports"][0]["privateKeyHex"]
     assert parse_private_key(hex_key) == parse_private_key(hex_key[2:])
+
+
+def test_eip55_checksum_vectors(vectors):
+    from pocketskynet_client.crypto import to_checksum_address
+
+    assert len(vectors["wallet"]["eip55"]) >= 2
+    for vector in vectors["wallet"]["eip55"]:
+        assert to_checksum_address(vector["lower"]) == vector["checksummed"]
+        # checksumming is idempotent and case-insensitive on input
+        assert to_checksum_address(vector["checksummed"]) == vector["checksummed"]
+
+
+def test_eip55_checksum_of_derived_addresses(vectors):
+    from pocketskynet_client.crypto import to_checksum_address
+
+    for vector in vectors["wallet"]["privateKeyImports"]:
+        assert to_checksum_address(vector["address"]) == vector["addressChecksummed"]
+    for vector in vectors["wallet"]["accounts"]:
+        assert to_checksum_address(vector["address"]) == vector["addressChecksummed"]
+
+
+def test_eip55_rejects_garbage():
+    from pocketskynet_client.crypto import to_checksum_address
+
+    with pytest.raises(ValueError):
+        to_checksum_address("0x1234")
+    with pytest.raises(ValueError):
+        to_checksum_address("0x" + "zz" * 20)

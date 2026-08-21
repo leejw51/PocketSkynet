@@ -31,3 +31,6 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: boots a real pocketskynet server (needs a built app/target binary)",
+]
