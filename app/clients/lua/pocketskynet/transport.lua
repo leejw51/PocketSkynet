@@ -93,4 +93,8 @@ function M:request(method, path, body, headers)
   return tonumber(status), resp_body
 end
 
+-- Exposed for the test suite: the quoting function is security-relevant
+-- (hostile message text must stay an inert argument) and tested directly.
+M._shquote = shquote
+
 return M

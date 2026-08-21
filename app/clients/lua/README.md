@@ -103,14 +103,50 @@ Lower-level modules: `pocketskynet.eip191` (digest/sign/address/EIP-55),
 
 ## Tests
 
-Byte-exact validation against the canonical vectors in
-`app/core/tests/vectors/protocol-v1.json` — Keccak-256, EIP-191 digests
-(UTF-8 byte lengths, not char counts), RFC 6979 deterministic low-S
-signatures with `v = 27/28`, key → address derivation, and EIP-55 checksums
-— plus FIPS/RFC self-tests for SHA-256 and HMAC-SHA256:
+**Unit suites** (no server needed):
 
 ```sh
-lua app/clients/lua/test.lua
+lua app/clients/lua/test.lua          # runs everything in test/unit_*.lua
+lua app/clients/lua/test/unit.lua crypto json   # or a subset by name
 ```
 
-Expected output: `55 passed, 0 failed`.
+Expected output: `unit: 123 passed, 0 failed`. Coverage:
+
+- `test/unit_crypto.lua` — byte-exact validation against the canonical
+  vectors in `app/core/tests/vectors/protocol-v1.json`: every `eip191[]`
+  digest/signature/address, `wallet.privateKeyImports` / `wallet.accounts` /
+  `wallet.eip55`, and every `msgHash` vector (plaintext trim rule, encrypted
+  base64 rule, emoticon event strings). Plus FIPS/RFC 4231 SHA-256 and
+  HMAC-SHA256 vectors (padding boundaries, >block-size keys), Keccak-256
+  edges (empty, rate-boundary and single-byte-padding blocks, ≠ SHA3-256),
+  and secp256k1 edges (key 0 / ≥ n rejected, n−1 accepted, RFC 6979
+  determinism, low-S with v ∈ {27, 28} enforced across many digests).
+- `test/unit_json.lua` — codec round-trips, surrogate-pair decoding, null
+  sentinel vs omitted key, escapes, malformed-input rejection.
+- `test/unit_client.lua` — wire shapes against a stub transport: camelCase
+  bodies, username omitted vs present, verbatim challenge signing, Bearer
+  headers, msgHash of the trimmed content, error-envelope surfacing.
+- `test/unit_transport.lua` — the curl transport against a fake curl
+  binary: flag mapping (`--http3` → curl `--http3`, `--insecure` → `-k`),
+  and the shell-quoting security property — hostile message text, headers,
+  and URLs (`"; rm -rf ~"`, `$(…)`, backticks, newlines) stay inert.
+- `test/unit_cli.lua` — CLI exit codes and usage errors.
+
+**Integration suite** (boots real servers on ephemeral ports; needs a
+built binary at `app/target/{release,debug}/pocketskynet`, in the main
+checkout when running from a git worktree, or via `$POCKETSKYNET_BIN`):
+
+```sh
+lua app/clients/lua/test/integration.lua
+```
+
+Expected output: `integration: 31 passed, 0 failed` (+ 1 skip on machines
+without an HTTP/3-capable curl). Covers the login protocol (happy path,
+first-login username, wrong-wallet signature → 401, challenge reuse → 400,
+bad/missing JWT → 401), rooms (create/list/validation/auth), messages
+(unicode round-trips, ordering, limit, non-member → 403, malformed
+msgHash → 400), the CLI end to end with exit codes, HTTPS with
+`--insecure`, and — when an HTTP/3 curl exists — the same flow over QUIC,
+verified via `/api/server/info` reporting `protocol: "h3"`. The harness
+(`test/harness.lua`) kills every server it spawned even when tests fail,
+and the suite's last test asserts none is still alive.
