@@ -184,6 +184,44 @@ return function(T)
     T.eq(args[i + 1], "\\n%{http_code}")
   end)
 
+  T.test("the body temp file is created private (0600) and owner-only", function()
+    -- A curl that reports the octal mode of its --data-binary file.
+    local perm_curl = FIXTURE_DIR .. "/perm-curl"
+    write_file(perm_curl, [[#!/bin/sh
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--data-binary" ]; then
+    f="${a#@}"
+    stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null
+  fi
+  prev="$a"
+done
+printf '\n200'
+]])
+    os.execute("chmod +x '" .. perm_curl .. "'")
+    local t = transport.new({ curl = perm_curl, server = "http://x" })
+    local status, body = t:request("POST", "/x", '{"a":1}')
+    T.eq(status, 200)
+    T.eq((body:gsub("%s+$", "")), "600", "temp body file must be mode 0600")
+  end)
+
+  T.test("a NUL byte in the path is rejected, not silently truncated", function()
+    local t = fresh()
+    local status, err = t:request("GET", "/api/rooms/room\0injected")
+    T.eq(status, nil)
+    T.contains(err, "NUL byte")
+    -- and nothing was executed
+    local ran = read_file(ARGS_FILE)
+    T.ok(ran == nil or ran == "", "curl must not have been invoked")
+  end)
+
+  T.test("a NUL byte in the server URL is rejected", function()
+    local t = fresh({ server = "http://127.0.0.1:1/\0" })
+    local status, err = t:request("GET", "/api/health")
+    T.eq(status, nil)
+    T.contains(err, "NUL byte")
+  end)
+
   -------------------------------------------------------------------------
   -- hostile input stays inert (the security property)
   -------------------------------------------------------------------------

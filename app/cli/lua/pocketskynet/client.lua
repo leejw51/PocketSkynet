@@ -99,7 +99,9 @@ function Client:health()
 end
 
 function Client:rooms()
-  return self:req("GET", "/api/rooms", nil, true)
+  -- An empty/nil body (e.g. a 200 with no JSON) becomes an empty list, so
+  -- callers can always `ipairs`/`#` the result without a nil-length error.
+  return self:req("GET", "/api/rooms", nil, true) or {}
 end
 
 function Client:create_room(name, description)
@@ -115,7 +117,12 @@ end
 function Client:send_message(room_id, text)
   local content = text:match("^%s*(.-)%s*$")
   assert(#content > 0, "message content must not be empty")
-  assert(#content <= 5000, "message content must be at most 5000 chars")
+  -- The server's 1–5000 limit counts characters, not bytes, so measure in
+  -- UTF-8 codepoints (falling back to bytes only if the text is not valid
+  -- UTF-8). Counting bytes would reject a multibyte message the server
+  -- would happily accept.
+  local char_len = utf8.len(content) or #content
+  assert(char_len <= 5000, "message content must be at most 5000 characters")
   return self:req("POST", "/api/rooms/" .. room_id .. "/messages", {
     content = content,
     msgHash = sha2.to_hex(sha2.sha256(content)),
@@ -126,7 +133,8 @@ end
 function Client:messages(room_id, limit)
   local path = "/api/rooms/" .. room_id .. "/messages"
   if limit then path = path .. "?limit=" .. tostring(limit) end
-  return self:req("GET", path, nil, true)
+  -- Coerce an empty/nil body to an empty list — see Client:rooms.
+  return self:req("GET", path, nil, true) or {}
 end
 
 return Client

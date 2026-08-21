@@ -149,6 +149,24 @@ return function(T)
     T.eq(#c.t.calls, 0)
   end)
 
+  T.test("send_message limit counts characters, not bytes", function()
+    -- 5000 three-byte characters = 15000 bytes: within the server's
+    -- character limit, so a byte-based check would wrongly reject it.
+    local c = client_with({ { 200, json.encode({ id = "m" }) } }, { token = "tok" })
+    local text = string.rep("한", 5000) -- 5000 chars, 15000 bytes
+    T.eq(#text, 15000)
+    T.eq(utf8.len(text), 5000)
+    c:send_message("room_x", text) -- must not raise
+    T.eq(#c.t.calls, 1, "the message must reach the wire")
+
+    -- 5001 characters is over the limit and rejected
+    local c2 = client_with({}, { token = "tok" })
+    T.err_match(function()
+      c2:send_message("room_x", string.rep("한", 5001))
+    end, "5000")
+    T.eq(#c2.t.calls, 0)
+  end)
+
   T.test("create_room omits an empty description", function()
     local c = client_with({ { 200, json.encode({ id = "room_1" }) } },
       { token = "tok" })
@@ -171,6 +189,20 @@ return function(T)
     T.eq(c.t.calls[1].path, "/api/rooms/room_x/messages")
     c:messages("room_x", 5)
     T.eq(c.t.calls[2].path, "/api/rooms/room_x/messages?limit=5")
+  end)
+
+  T.test("rooms with an empty 200 body returns an empty list, not nil", function()
+    local c = client_with({ { 200, "" } }, { token = "tok" })
+    local rooms = c:rooms()
+    T.eq(type(rooms), "table")
+    T.eq(#rooms, 0, "must be safely lengthable")
+  end)
+
+  T.test("messages with an empty 200 body returns an empty list, not nil", function()
+    local c = client_with({ { 200, "" } }, { token = "tok" })
+    local msgs = c:messages("room_x")
+    T.eq(type(msgs), "table")
+    T.eq(#msgs, 0)
   end)
 
   T.test("the plain error envelope surfaces status and message", function()

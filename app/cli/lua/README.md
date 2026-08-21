@@ -16,17 +16,19 @@ HTTP/1.1 or HTTP/3.
 ## Design choices (what is actually active)
 
 **Transport — the `curl` binary, one code path for both protocols.**
-The preferred routes from the porting notes (lua-curl bindings, or a native
-Lua HTTP library for HTTP/1.1) both require luarocks, which is not present
-on the target machine, and the system libcurl on macOS (SecureTransport
-build, curl 8.7.1) has no HTTP/3 anyway. So `pocketskynet/transport.lua`
+The alternative routes (lua-curl bindings, or a native Lua HTTP library for
+HTTP/1.1) require luarocks packages, and many system libcurl builds have no
+HTTP/3 at all. Depending only on the `curl` binary keeps the client working
+with nothing but Lua and curl installed. So `pocketskynet/transport.lua`
 shells out to `curl`: the same invocation serves HTTP/1.1 and HTTPS, and
 `--http3` simply appends curl's `--http3` flag. Request bodies travel
-through a temp file (`--data-binary @file`), never through shell
-interpolation.
+through a temp file (`--data-binary @file`), created exclusively with
+`0600` permissions, never through shell interpolation.
 
 For HTTP/3 you need an HTTP/3-capable curl (check `curl --version` for
-`HTTP3` in Features). On macOS:
+`HTTP3` in its Features line). Point the client at one with `--curl` or
+`POCKETSKYNET_CURL` if the default `curl` on `PATH` lacks it — for example a
+Homebrew build on macOS:
 
 ```sh
 brew install curl        # Homebrew curl ships with HTTP3
@@ -37,8 +39,8 @@ brew install curl        # Homebrew curl ships with HTTP3
 With a non-HTTP/3 curl, `--http3` fails fast with curl's own message
 ("the installed libcurl version doesn't support this").
 
-**Signing — bundled pure-Lua secp256k1 + RFC 6979** (option (b) from the
-porting notes, again because luarocks/luaossl are unavailable). 256-bit
+**Signing — bundled pure-Lua secp256k1 + RFC 6979**, so signing needs no
+luarocks or native crypto library. 256-bit
 arithmetic on 16-bit limbs, Jacobian point math, Fermat inverses, HMAC-SHA256
 DRBG nonces, low-S normalization, `v = 27/28`. Correctness over speed — a
 signature takes ~0.1 s — and validated **byte-exactly** against the canonical
@@ -76,6 +78,10 @@ Flags: `--server <url>`, `--http3`, `--insecure`, `--key <hex>`,
 `--token <jwt>`, `--username <name>`, `--curl <path>`. Environment
 equivalents: `POCKETSKYNET_SERVER`, `POCKETSKYNET_KEY`, `POCKETSKYNET_TOKEN`,
 `POCKETSKYNET_CURL`.
+
+Prefer `POCKETSKYNET_KEY` over `--key`: a value passed on the command line is
+visible to any other user on the machine via the process list (`ps`), whereas
+an environment variable is not. The same applies to `--token`.
 
 `login` prints the JWT; export it as `POCKETSKYNET_TOKEN` to skip the
 challenge/login round-trip on subsequent commands (each command otherwise
