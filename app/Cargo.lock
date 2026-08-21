@@ -3228,6 +3228,7 @@ dependencies = [
  "h3-quinn",
  "hex",
  "http",
+ "jsonwebtoken",
  "pocketskynet-core",
  "quinn",
  "reqwest 0.12.28",

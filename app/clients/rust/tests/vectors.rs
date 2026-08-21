@@ -9,6 +9,7 @@
 
 use pocketskynet_client::types::{LoginRequest, SendMessageRequest};
 use pocketskynet_client::Wallet;
+use pocketskynet_core::k256::elliptic_curve::sec1::ToEncodedPoint;
 use serde_json::Value;
 
 fn protocol_vectors() -> Value {
@@ -167,4 +168,124 @@ fn request_bodies_serialize_with_camel_case_field_names() {
     );
     assert_eq!(send["isEncrypted"], false);
     assert!(send.get("msg_hash").is_none() && send.get("is_encrypted").is_none());
+}
+
+#[test]
+fn every_private_key_import_vector_reproduces_its_address_and_public_key() {
+    // Wallet::from_private_key_hex is exactly how the CLI turns --key into a
+    // signer, so all three canonical imports are replayed through it.
+    let doc = protocol_vectors();
+    let imports = doc["wallet"]["privateKeyImports"]
+        .as_array()
+        .expect("privateKeyImports vectors");
+    assert_eq!(imports.len(), 3, "the canonical file carries three imports");
+
+    for vector in imports {
+        let key = vector["privateKeyHex"].as_str().unwrap();
+        let wallet = Wallet::from_private_key_hex(key).expect("a canonical key imports");
+        assert_eq!(
+            wallet.address().as_str(),
+            vector["address"].as_str().unwrap(),
+            "address for {key}"
+        );
+        assert_eq!(
+            hex::encode(wallet.public_key().to_encoded_point(false).as_bytes()),
+            vector["publicKeyUncompressedHex"].as_str().unwrap(),
+            "uncompressed public key for {key}"
+        );
+        // The private key round-trips with its 0x prefix.
+        assert_eq!(wallet.private_key_hex(), key.to_lowercase());
+    }
+}
+
+#[test]
+fn every_mnemonic_account_vector_derives_the_same_wallet() {
+    // The library also accepts mnemonics (Wallet::from_mnemonic); the
+    // accounts vectors pin the BIP-39/44 path m/44'/60'/0'/0/{index}.
+    let doc = protocol_vectors();
+    let accounts = doc["wallet"]["accounts"]
+        .as_array()
+        .expect("accounts vectors");
+    assert!(accounts.len() >= 4);
+
+    for vector in accounts {
+        let phrase = vector["phrase"].as_str().unwrap();
+        let index = vector["index"].as_u64().unwrap() as u32;
+        let wallet = Wallet::from_mnemonic(phrase, index).expect("a canonical phrase parses");
+        assert_eq!(
+            wallet.address().as_str(),
+            vector["address"].as_str().unwrap(),
+            "address for {phrase:?}#{index}"
+        );
+        assert_eq!(
+            wallet.private_key_hex(),
+            vector["privateKeyHex"].as_str().unwrap(),
+            "derived key for {phrase:?}#{index}"
+        );
+    }
+}
+
+#[test]
+fn bad_private_keys_are_rejected_not_mangled() {
+    // The CLI surfaces these as "invalid private key"; none may panic and
+    // none may silently produce a wallet.
+    let cases: Vec<String> = vec![
+        String::new(),
+        "0x".into(),
+        "0x1234".into(),                   // too short
+        format!("0x{}", "0".repeat(64)),   // zero is not a valid scalar
+        format!("0x{}", "f".repeat(64)),   // >= the curve order n
+        format!("0x{}", "0".repeat(63)),   // odd length
+        format!("0x{}z", "0".repeat(63)),  // non-hex
+        format!("0x{}00", "a".repeat(64)), // too long
+    ];
+    for case in cases {
+        assert!(
+            Wallet::from_private_key_hex(&case).is_err(),
+            "should have rejected {case:?}"
+        );
+    }
+}
+
+#[test]
+fn msg_hash_matches_every_plaintext_vector() {
+    // send_message computes msgHash via msg_hash_plaintext; the vectors pin
+    // both the SHA-256 (not Keccak) choice and the server-side trim.
+    let doc = protocol_vectors();
+    let cases = doc["msgHash"]["plaintext"]
+        .as_array()
+        .expect("plaintext msgHash vectors");
+    assert!(cases.len() >= 3);
+
+    for case in cases {
+        let content = case["content"].as_str().unwrap();
+        assert_eq!(
+            pocketskynet_core::msg_hash_plaintext(content),
+            case["msgHashHex"].as_str().unwrap(),
+            "msgHash of {content:?}"
+        );
+        if let Some(trimmed) = case["trimmedTo"].as_str() {
+            // Hashing the pre-trim and the trimmed string agree, because the
+            // hash is defined over the trimmed content.
+            assert_eq!(
+                pocketskynet_core::msg_hash_plaintext(trimmed),
+                case["msgHashHex"].as_str().unwrap(),
+            );
+        }
+    }
+}
+
+#[test]
+fn deterministic_usernames_match_the_vectors() {
+    // The first-login fallback (Client::login with no username) sends
+    // deterministic_username(address); the vectors pin the word tables.
+    let doc = protocol_vectors();
+    for case in doc["usernames"].as_array().expect("username vectors") {
+        let address =
+            pocketskynet_core::WalletAddress::new(case["address"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            pocketskynet_core::deterministic_username(&address),
+            case["username"].as_str().unwrap(),
+        );
+    }
 }

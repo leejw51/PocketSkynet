@@ -47,3 +47,8 @@ rustls = { version = "0.23", default-features = false, features = [
     "std",
 ] }
 webpki-roots = "0.26"
+
+[dev-dependencies]
+# Minting deliberately expired/tampered JWTs against the harness's
+# `--jwt-secret`, the way the server's own auth suite does.
+jsonwebtoken = "9"

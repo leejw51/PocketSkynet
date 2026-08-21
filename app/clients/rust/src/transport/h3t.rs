@@ -40,19 +40,7 @@ impl H3Transport {
         options: &TransportOptions,
         port_override: Option<u16>,
     ) -> Result<Self, ClientError> {
-        let parsed =
-            url::Url::parse(base_url).map_err(|e| ClientError::InvalidUrl(e.to_string()))?;
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| ClientError::InvalidUrl(format!("no host in {base_url:?}")))?
-            .to_owned();
-        let port = port_override.or_else(|| parsed.port()).unwrap_or_else(|| {
-            if parsed.scheme() == "http" {
-                80
-            } else {
-                443
-            }
-        });
+        let (host, port) = crate::transport::h3_target(base_url, port_override)?;
 
         let _ = rustls::crypto::ring::default_provider().install_default();
 
