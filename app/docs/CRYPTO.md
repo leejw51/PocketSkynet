@@ -1411,14 +1411,22 @@ kdf   = PBKDF2-HMAC-SHA256, 600_000 iterations, random 16-byte salt
         opens a quorum; a fresh IV per file)
 okm   = kdf(passphrase) → 64 bytes; encKey = okm[0..32], macKey = okm[32..64]
 seal  = AES-256-CBC(encKey, iv) over the secrets JSON,
-        then HMAC-SHA256(macKey, iv ‖ ciphertext)  (encrypt-then-MAC;
-        MAC is verified before any decryption is attempted)
+        then HMAC-SHA256(macKey, header ‖ iv ‖ ciphertext)
+        (encrypt-then-MAC; MAC is verified before any decryption is
+        attempted, and it covers the cleartext header fields too —
+        length-prefixed strings, fixed-width integers — because fields
+        like partyIndex and kdfIterations drive the ceremony and must
+        not be silently editable)
 ```
 
 The plaintext under a file's seal is `{ share, encPrivHex, bindingSig }`;
 its cleartext header is `type`, `version`, `address`, `threshold`,
 `parties`, `partyIndex`, `createdAt` and the KDF parameters — the public
 facts a login screen needs to name a file before any passphrase work.
+`kdfIterations` is honored only up to a hard ceiling (1,000,000) when
+opening: the count is attacker-controlled cleartext reaching an
+unauthenticated endpoint, and an unbounded value would be a CPU
+denial-of-service priced by the request body.
 
 What this means, without euphemism:
 

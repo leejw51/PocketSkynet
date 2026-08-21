@@ -687,7 +687,7 @@ async fn run_send(
     // no key on this device, and "signing failed: no signing key on this
     // device" is a dead end where a sentence about how to fix it belongs. A
     // TSS session passes — it signs by server ceremony.
-    if !keys.borrow().can_sign_locally() && keys.borrow().tss_signing().is_none() {
+    if !keys.borrow().can_sign() {
         return fail(t(lang, Key::wallet_no_local_key).to_owned());
     }
     tx_phase(hud, TxPhase::Sign);

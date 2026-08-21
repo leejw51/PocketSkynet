@@ -195,7 +195,7 @@ pub async fn reply(store: Store, room_id: RoomId, question: String, ui: Ui) {
         chain: store
             .auth
             .session()
-            .map(|s| s.keys.borrow().can_sign_locally())
+            .map(|s| s.keys.borrow().can_sign())
             .unwrap_or(false),
         image: image.is_some(),
         server: !store.client.is_local(),

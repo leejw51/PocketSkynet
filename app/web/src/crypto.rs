@@ -163,8 +163,22 @@ impl SessionKeys {
     ///
     /// The wallet and bank features ask before offering a send, so an external
     /// session gets a clear explanation instead of a failed signature.
+    /// The send paths gate on [`Self::can_sign`]; this finer distinction —
+    /// a key held on this device, signable without a round trip — backs the
+    /// synchronous `sign_transaction` contract and its tests, which are the
+    /// only callers left in the wasm build.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn can_sign_locally(&self) -> bool {
         matches!(self.signer, Signer::Local(_))
+    }
+
+    /// Whether this session can produce a transaction signature at all —
+    /// synchronously from a local key, or asynchronously by TSS ceremony.
+    /// Only an external browser wallet cannot; every send path (and the
+    /// agent's `chain` capability) gates on this one answer so the UI and
+    /// the agent never disagree about what the session can do.
+    pub fn can_sign(&self) -> bool {
+        matches!(self.signer, Signer::Local(_) | Signer::Tss { .. })
     }
 
     /// For a TSS session: what a ceremony needs — the quorum of share
@@ -714,6 +728,7 @@ mod tests {
         // No local key: the sync door refuses, the ceremony door opens —
         // with the same files and passphrase the session was built from.
         assert!(!s.can_sign_locally());
+        assert!(s.can_sign(), "a TSS session signs — by ceremony");
         let (passphrase, shares) = s.tss_signing().expect("a ceremony context");
         assert_eq!(passphrase, "open sesame");
         assert_eq!(shares, files);
@@ -742,6 +757,7 @@ mod tests {
         assert_eq!(s.address(), &addr(9));
         // But the wallet key is in the extension, not here.
         assert!(!s.can_sign_locally());
+        assert!(!s.can_sign(), "and no ceremony either");
     }
 
     #[test]

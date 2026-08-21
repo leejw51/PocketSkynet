@@ -12,8 +12,12 @@
 //! okm    = PBKDF2-HMAC-SHA256(passphrase, salt, 600_000) → 64 bytes
 //! encKey = okm[0..32]   macKey = okm[32..64]
 //! ct     = AES-256-CBC(encKey, iv) over the secrets JSON (PKCS-7)
-//! mac    = HMAC-SHA256(macKey, iv ‖ ct)      — verified before decryption
+//! mac    = HMAC-SHA256(macKey, header ‖ iv ‖ ct) — verified before decryption
 //! ```
+//!
+//! The MAC covers the cleartext header too: fields like `partyIndex` and
+//! `kdfIterations` drive the ceremony, so a tampered header must fail the
+//! seal here rather than surface minutes later as an opaque ceremony error.
 //!
 //! One wallet's files share a KDF salt (so opening a quorum costs one key
 //! derivation) but never an IV. The header — address, `t`, `n`, party index
@@ -39,6 +43,14 @@ pub const FILE_TYPE: &str = "pocketskynet-tss-share";
 /// share file and its key material; OWASP's 2023 floor for
 /// PBKDF2-HMAC-SHA256 is 600k and that is what ships.
 pub const KDF_ITERATIONS: u32 = 600_000;
+
+/// The most iterations `open_shares` will run. The count is read from the
+/// file's cleartext header, and unauthenticated routes feed user-supplied
+/// files straight into the KDF — without a ceiling, a crafted header with
+/// `u32::MAX` iterations is ~35 minutes of pure CPU per request, an
+/// anonymous denial of service. Genuine files always say [`KDF_ITERATIONS`];
+/// the headroom only keeps a future work-factor bump openable.
+pub const MAX_KDF_ITERATIONS: u32 = 1_000_000;
 
 /// One party's sealed share — the unit the user downloads, stores, and
 /// later presents `t` of.
@@ -66,7 +78,7 @@ pub struct ShareFile {
     pub iv: String,
     /// The sealed [`ShareSecrets`] JSON, base64.
     pub ciphertext: String,
-    /// HMAC-SHA256 over `iv ‖ ciphertext`, 32 bytes hex.
+    /// HMAC-SHA256 over the header fields ‖ `iv` ‖ `ciphertext`, 32 bytes hex.
     pub mac: String,
 }
 
@@ -132,8 +144,9 @@ pub fn seal_shares(
         let iv = pocketskynet_core::random::bytes::<16>().map_err(|_| TssError::Entropy)?;
         let ct = cbc::Encryptor::<aes::Aes256>::new(&enc_key.into(), &iv.into())
             .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
-        let mac = seal_mac(&mac_key, &iv, &ct);
-        files.push(ShareFile {
+        // Built with an empty `mac` first: the MAC covers the header fields,
+        // so the file has to exist before its seal can.
+        let mut file = ShareFile {
             file_type: FILE_TYPE.to_owned(),
             version: FORMAT_VERSION,
             address: address.as_str().to_owned(),
@@ -145,8 +158,14 @@ pub fn seal_shares(
             kdf_iterations: KDF_ITERATIONS,
             iv: hex::encode(iv),
             ciphertext: base64::engine::general_purpose::STANDARD.encode(&ct),
-            mac: hex::encode(mac),
-        });
+            mac: String::new(),
+        };
+        let mac: [u8; 32] = seal_mac(&mac_key, &file, &iv, &ct)
+            .finalize()
+            .into_bytes()
+            .into();
+        file.mac = hex::encode(mac);
+        files.push(file);
     }
     Ok(files)
 }
@@ -173,6 +192,14 @@ pub fn open_shares(files: &[ShareFile], passphrase: &str) -> Result<OpenedWallet
     let address = WalletAddress::new(&first.address)
         .map_err(|e| TssError::Store(format!("bad address in share file: {e}")))?;
     crate::validate_params(first.threshold, first.parties)?;
+    // Bound the work factor *before* paying it — the header is untrusted
+    // input and the KDF cost is exactly what it dictates.
+    if first.kdf_iterations == 0 || first.kdf_iterations > MAX_KDF_ITERATIONS {
+        return Err(TssError::Store(format!(
+            "share file asks for {} KDF iterations; this build accepts at most {MAX_KDF_ITERATIONS}",
+            first.kdf_iterations
+        )));
+    }
 
     // One wallet, one seal family: any header disagreement is two different
     // wallets' files mixed together, named before any passphrase work.
@@ -233,10 +260,7 @@ pub fn open_shares(files: &[ShareFile], passphrase: &str) -> Result<OpenedWallet
             .map_err(|_| TssError::BadPassphrase)?;
         let mac = hex::decode(&f.mac).map_err(|_| TssError::BadPassphrase)?;
 
-        let mut verifier = <Hmac<Sha256> as Mac>::new_from_slice(&mac_key).expect("any key length");
-        verifier.update(&iv);
-        verifier.update(&ct);
-        verifier
+        seal_mac(&mac_key, f, &iv, &ct)
             .verify_slice(&mac)
             .map_err(|_| TssError::BadPassphrase)?;
 
@@ -270,11 +294,26 @@ fn derive_keys(passphrase: &str, salt: &[u8], iterations: u32) -> ([u8; 32], [u8
     (enc, mac)
 }
 
-fn seal_mac(mac_key: &[u8; 32], iv: &[u8; 16], ct: &[u8]) -> [u8; 32] {
+/// The seal's HMAC, fed everything the file asserts: the cleartext header
+/// fields, then `iv ‖ ct`. String fields are length-prefixed so no two
+/// layouts share an encoding; the raw `iv` and ciphertext bytes go in
+/// rather than their hex/base64 spellings. Returned unfinalized so sealing
+/// finalizes and opening verifies in constant time.
+fn seal_mac(mac_key: &[u8; 32], f: &ShareFile, iv: &[u8; 16], ct: &[u8]) -> Hmac<Sha256> {
     let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(mac_key).expect("any key length");
+    for s in [&f.file_type, &f.address, &f.kdf_salt] {
+        mac.update(&(s.len() as u32).to_be_bytes());
+        mac.update(s.as_bytes());
+    }
+    mac.update(&f.version.to_be_bytes());
+    mac.update(&f.threshold.to_be_bytes());
+    mac.update(&f.parties.to_be_bytes());
+    mac.update(&f.party_index.to_be_bytes());
+    mac.update(&f.created_at.to_be_bytes());
+    mac.update(&f.kdf_iterations.to_be_bytes());
     mac.update(iv);
     mac.update(ct);
-    mac.finalize().into_bytes().into()
+    mac
 }
 
 /// Unix seconds now — the `created_at` stamp.
@@ -375,6 +414,34 @@ mod tests {
         assert!(matches!(
             open_shares(&files, "pass pass"),
             Err(TssError::BadPassphrase)
+        ));
+    }
+
+    #[test]
+    fn a_tampered_header_fails_the_seal_too() {
+        // `partyIndex` drives the ceremony's Lagrange interpolation: a
+        // renumbered file must die here as a seal failure, not minutes
+        // later as an opaque ceremony error.
+        let mut files = sealed(2, 3, "pass pass");
+        files[0].party_index = 2;
+        assert!(matches!(
+            open_shares(&files[..2], "pass pass"),
+            Err(TssError::BadPassphrase)
+        ));
+    }
+
+    #[test]
+    fn an_absurd_kdf_work_factor_is_rejected_before_any_kdf_runs() {
+        // The iteration count is attacker-controlled cleartext reaching
+        // unauthenticated routes; u32::MAX would be ~35 minutes of CPU.
+        // The rejection is a named header error — cheap by construction.
+        let mut files = sealed(2, 2, "pass pass");
+        for f in &mut files {
+            f.kdf_iterations = u32::MAX;
+        }
+        assert!(matches!(
+            open_shares(&files, "pass pass"),
+            Err(TssError::Store(_))
         ));
     }
 

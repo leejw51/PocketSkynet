@@ -598,7 +598,6 @@ pub fn login(p: &LoginProps) -> Html {
             tss_created.set(None);
             set_error.emit(None);
 
-            let tss_new_pass = tss_new_pass.clone();
             let tss_new_pass2 = tss_new_pass2.clone();
             let tss_keygen_busy = tss_keygen_busy.clone();
             let tss_step = tss_step.clone();
@@ -615,13 +614,25 @@ pub fn login(p: &LoginProps) -> Html {
                     Ok(id) => id,
                     Err(e) => return fail(e.user_message()),
                 };
+                let mut misses = 0u32;
                 loop {
                     gloo_timers::future::TimeoutFuture::new(1_500).await;
                     let status = match client.tss_keygen_status().await {
-                        Ok(s) => s,
+                        Ok(s) => {
+                            misses = 0;
+                            s
+                        }
                         // One dropped poll is not a failed ceremony — the
-                        // server is still working; keep watching.
-                        Err(_) => continue,
+                        // server is still working; keep watching. Twenty in
+                        // a row (~30 s) is a server that is gone, and this
+                        // loop must not spin forever behind a busy flag.
+                        Err(e) => {
+                            misses += 1;
+                            if misses >= 20 {
+                                return fail(e.user_message());
+                            }
+                            continue;
+                        }
                     };
                     match status.state.as_str() {
                         "generating_primes" => tss_step.set(Some(TssStep::Primes)),
@@ -634,16 +645,22 @@ pub fn login(p: &LoginProps) -> Html {
                             };
                             tss_downloaded.set(vec![false; collected.shares.len()]);
                             tss_created.set(Some(collected));
+                            // The passphrase stays in `tss_new_pass`: the
+                            // backup panel signs in with it directly.
                             tss_new_pass2.set(String::new());
                             tss_step.set(None);
                             tss_keygen_busy.set(false);
-                            // The passphrase stays in `tss_new_pass`: the
-                            // backup panel signs in with it directly.
-                            let _ = &tss_new_pass;
                             return;
                         }
                         "error" => {
                             return fail(status.error.unwrap_or_else(|| "unknown".into()));
+                        }
+                        // The server answers but no longer knows this
+                        // ceremony: keygen state is memory-only, so a
+                        // restart lands here — and these shares can never
+                        // arrive. Say so instead of polling forever.
+                        "idle" => {
+                            return fail(t(lang, Key::tss_keygen_lost).to_owned());
                         }
                         _ => {}
                     }
@@ -2342,34 +2359,22 @@ fn tss_step_list(lang: Lang, current: Option<TssStep>) -> Html {
 /// threshold is *the* moment of this screen — the shards become a key — so
 /// that state arrives with the fused-key artwork snapping in over a glow.
 fn tss_quorum_status(lang: Lang, skin: Skin, files: &[TssLoadedFile]) -> Html {
-    let headers: Vec<&crate::api::tss::TssShareHeader> =
-        files.iter().filter_map(|f| f.header.as_ref()).collect();
-    let Some(first) = headers.first() else {
-        return html! { <p class="fn-field__help">{ t(lang, Key::tss_files_hint) }</p> };
-    };
-    if headers.iter().any(|h| {
-        h.address != first.address || h.threshold != first.threshold || h.parties != first.parties
-    }) {
-        return html! {
+    match tss_quorum_check(files) {
+        TssQuorumCheck::Empty => html! {
+            <p class="fn-field__help">{ t(lang, Key::tss_files_hint) }</p>
+        },
+        TssQuorumCheck::Mismatch => html! {
             <p class="fn-login__error" role="alert">{ t(lang, Key::tss_files_mismatch) }</p>
-        };
-    }
-    let mut parties: Vec<u16> = headers.iter().map(|h| h.party_index).collect();
-    parties.sort_unstable();
-    parties.dedup();
-    let have = parties.len();
-    let need = usize::from(first.threshold);
-    if have < need {
-        html! {
+        },
+        TssQuorumCheck::NeedMore(more) => html! {
             <p class="fn-field__help">
-                { t(lang, Key::tss_need_more).replace("{more}", &(need - have).to_string()) }
+                { t(lang, Key::tss_need_more).replace("{more}", &more.to_string()) }
             </p>
-        }
-    } else {
+        },
         // The quorum assembled: the machine wakes. A short activation
         // sequence — dark flicker, a scanline sweep, the eye-flash — over
         // the armed artwork, then the status line types itself in.
-        html! {
+        TssQuorumCheck::Ready { have, need, .. } => html! {
             <>
                 <div class="fn-tss-armed" aria-hidden="true">
                     <img src={crate::asset::img(skin, "tss-armed")} alt="" />
@@ -2385,7 +2390,7 @@ fn tss_quorum_status(lang: Lang, skin: Skin, files: &[TssLoadedFile]) -> Html {
                     </span>
                 </p>
             </>
-        }
+        },
     }
 }
 
@@ -2458,27 +2463,62 @@ fn tss_backup_panel(
     }
 }
 
+/// One verdict on the picked files, computed one way for every consumer.
+/// The status line renders it and the submit gate acts on it; deriving the
+/// two answers separately is how a screen ends up saying "ready to sign
+/// in" over a button that refuses.
+enum TssQuorumCheck {
+    /// No parsed share file yet.
+    Empty,
+    /// The headers disagree — files from different wallets mixed together.
+    Mismatch,
+    /// One wallet, but this many more *distinct* parties are needed.
+    NeedMore(usize),
+    /// A signable quorum.
+    Ready {
+        address: String,
+        have: usize,
+        need: usize,
+    },
+}
+
+fn tss_quorum_check(files: &[TssLoadedFile]) -> TssQuorumCheck {
+    let headers: Vec<&crate::api::tss::TssShareHeader> =
+        files.iter().filter_map(|f| f.header.as_ref()).collect();
+    let Some(first) = headers.first() else {
+        return TssQuorumCheck::Empty;
+    };
+    if headers.iter().any(|h| {
+        h.address != first.address || h.threshold != first.threshold || h.parties != first.parties
+    }) {
+        return TssQuorumCheck::Mismatch;
+    }
+    let mut parties: Vec<u16> = headers.iter().map(|h| h.party_index).collect();
+    parties.sort_unstable();
+    parties.dedup();
+    let have = parties.len();
+    let need = usize::from(first.threshold);
+    if have < need {
+        TssQuorumCheck::NeedMore(need - have)
+    } else {
+        TssQuorumCheck::Ready {
+            address: first.address.clone(),
+            have,
+            need,
+        }
+    }
+}
+
 /// The picked files' consensus: `Some((address, share JSONs))` when every
 /// parsed share belongs to one wallet and at least its threshold of
 /// *distinct* parties is present. Anything else — mixed wallets, too few
 /// shares, no valid share at all — is `None`, and the panel's status line
 /// says which.
 fn tss_quorum(files: &[TssLoadedFile]) -> Option<(WalletAddress, Vec<serde_json::Value>)> {
-    let headers: Vec<&crate::api::tss::TssShareHeader> =
-        files.iter().filter_map(|f| f.header.as_ref()).collect();
-    let first = headers.first()?;
-    if headers.iter().any(|h| {
-        h.address != first.address || h.threshold != first.threshold || h.parties != first.parties
-    }) {
+    let TssQuorumCheck::Ready { address, .. } = tss_quorum_check(files) else {
         return None;
-    }
-    let mut parties: Vec<u16> = headers.iter().map(|h| h.party_index).collect();
-    parties.sort_unstable();
-    parties.dedup();
-    if parties.len() < usize::from(first.threshold) {
-        return None;
-    }
-    let address = WalletAddress::new(&first.address).ok()?;
+    };
+    let address = WalletAddress::new(&address).ok()?;
     let values = files
         .iter()
         .filter(|f| f.header.is_some())
@@ -2489,9 +2529,16 @@ fn tss_quorum(files: &[TssLoadedFile]) -> Option<(WalletAddress, Vec<serde_json:
 
 /// `0x1234…abcd` for the TSS share cards — the shape is the interesting
 /// half of the row, so the address only has to be recognisable.
+///
+/// Counted in characters, not bytes: the string comes from a picked file's
+/// untrusted header, and a byte-index slice through a multi-byte character
+/// would panic — taking the whole app down over one malformed file.
 fn abbreviate_hex(address: &str) -> String {
-    if address.len() > 12 {
-        format!("{}…{}", &address[..8], &address[address.len() - 4..])
+    let chars: Vec<char> = address.chars().collect();
+    if chars.len() > 12 {
+        let head: String = chars[..8].iter().collect();
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("{head}…{tail}")
     } else {
         address.to_owned()
     }
@@ -2584,6 +2631,19 @@ mod tests {
 
     fn derive(method: Method, mnemonic: &str, key: &str, index: u32) -> Result<String, String> {
         derive_wallet(Lang::En, method, mnemonic, key, index).map(|w| w.address().to_string())
+    }
+
+    #[test]
+    fn abbreviating_a_malformed_address_never_panics() {
+        // The string is a picked file's untrusted header. Multi-byte
+        // characters must abbreviate (or pass through) rather than panic
+        // on a byte boundary and blank the whole login page.
+        assert_eq!(
+            abbreviate_hex("0x00112233445566778899aabbccddeeff00112233"),
+            "0x001122…2233"
+        );
+        assert_eq!(abbreviate_hex("0x€€€€€"), "0x€€€€€");
+        assert_eq!(abbreviate_hex("0x€€€€€€€€€€€€€"), "0x€€€€€€…€€€€");
     }
 
     #[test]

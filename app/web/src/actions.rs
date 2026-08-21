@@ -1181,8 +1181,8 @@ pub async fn sign_in_with_wallet(
 /// `LegacyTransaction::sign_with_signature`. The raw bytes that come out are
 /// indistinguishable either way, which is the point (docs/CRYPTO.md §15.1).
 ///
-/// Callers gate on `can_sign_locally() || tss_signing().is_some()` first so
-/// an external-wallet session still gets its explanatory refusal.
+/// Callers gate on [`SessionKeys::can_sign`] first so an external-wallet
+/// session still gets its explanatory refusal.
 pub async fn sign_transaction(
     keys: &Rc<RefCell<SessionKeys>>,
     tx: &LegacyTransaction,
@@ -1197,10 +1197,20 @@ pub async fn sign_transaction(
             .map_err(|e| e.to_string()),
         Some((passphrase, shares)) => {
             let client = Client::new(&crate::session::server_base());
-            let sig = client
-                .tss_sign_hash(&shares, &passphrase, &tx.sighash())
-                .await
-                .map_err(|e| e.user_message())?;
+            // A ceremony is a multi-second server round trip and gloo has
+            // no request timeout, so an unreachable or hung server would
+            // pin the send dialog at its Sign phase forever. Two minutes is
+            // several ceremonies' worth of headroom.
+            let sighash = tx.sighash();
+            let sign = client.tss_sign_hash(&shares, &passphrase, &sighash);
+            let timeout = gloo_timers::future::TimeoutFuture::new(120_000);
+            futures::pin_mut!(sign);
+            let sig = match futures::future::select(sign, timeout).await {
+                futures::future::Either::Left((res, _)) => res.map_err(|e| e.user_message())?,
+                futures::future::Either::Right(_) => {
+                    return Err("the signing ceremony timed out".into());
+                }
+            };
             if sig.v > 1 {
                 return Err(format!("invalid recovery id {}", sig.v));
             }

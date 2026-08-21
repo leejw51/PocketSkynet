@@ -257,7 +257,7 @@ async fn send_contract_tx_inner(
     // one, so this would fail with a bare "no signing key on this device".
     // Say what can be done about it instead — and say it before anything is
     // broadcast. A TSS session passes: it signs by server ceremony.
-    if !keys.borrow().can_sign_locally() && keys.borrow().tss_signing().is_none() {
+    if !keys.borrow().can_sign() {
         return Err(t(lang, Key::wallet_no_local_key).to_owned());
     }
     tx_phase(hud, TxPhase::Sign);

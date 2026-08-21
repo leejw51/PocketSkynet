@@ -56,7 +56,18 @@ struct PendingShares {
     threshold: u16,
     parties: u16,
     files: Vec<store::ShareFile>,
+    /// When the ceremony parked these — a fresh parking means the
+    /// requester's 1.5 s poll loop is about to collect, and a new keygen
+    /// must not evict the slot out from under that handover.
+    parked_at: std::time::Instant,
 }
+
+/// How long a finished ceremony's shares hold the slot against a new
+/// keygen. The collector polls every 1.5 s, so a minute covers any
+/// realistic network hiccup; past it, the requester has walked away, and
+/// holding key material in memory for them indefinitely is worse than
+/// making them rerun.
+const COLLECT_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -175,6 +186,11 @@ async fn keygen(
         )));
     }
 
+    // Everything fallible happens *before* the slot is claimed: a `?` after
+    // the claim would leave the status stuck in-progress forever, wedging
+    // every future keygen until a restart.
+    let keygen_id = crate::auth::random_hex_32()?;
+
     // One ceremony at a time. Take the write lock for the check *and* the
     // claim so two concurrent requests cannot both pass an in-progress test.
     {
@@ -186,16 +202,24 @@ async fn keygen(
         if keygen.in_progress() {
             return Err(ApiError::conflict("A key generation is already running"));
         }
+        // A freshly finished ceremony keeps the slot while its requester's
+        // poll loop collects it; past the grace they have walked away, and
+        // the new ceremony evicts the abandoned shares below.
+        if let Ok(pending) = state.tss.pending.lock() {
+            if let Some(p) = pending.as_ref() {
+                if p.parked_at.elapsed() < COLLECT_GRACE {
+                    return Err(ApiError::conflict(
+                        "The previous key generation is still being collected — try again shortly",
+                    ));
+                }
+            }
+        }
         *keygen = KeygenStatus::GeneratingPrimes;
     }
-    // Starting a new ceremony abandons an uncollected previous one — the
-    // person who never collected has walked away, and holding key material
-    // in memory for them indefinitely is worse than making them rerun.
     if let Ok(mut pending) = state.tss.pending.lock() {
         *pending = None;
     }
 
-    let keygen_id = crate::auth::random_hex_32()?;
     let app = state.clone();
     let task_id = keygen_id.clone();
     tokio::spawn(async move {
@@ -316,6 +340,7 @@ async fn run_keygen(
         threshold: t,
         parties: n,
         files,
+        parked_at: std::time::Instant::now(),
     });
     Ok(address)
 }
@@ -365,6 +390,12 @@ async fn keygen_collect(
             "Nothing to collect — wrong keygenId, already collected, or the server restarted",
         ));
     };
+    // The handover is done: return the status to idle so the new wallet's
+    // address stops being served from an unauthenticated endpoint, and so
+    // a stale `done` cannot lure another tab into a doomed collect.
+    if let Ok(mut keygen) = state.tss.keygen.write() {
+        *keygen = KeygenStatus::Idle;
+    }
     Ok(Json(json!({
         "address": p.address,
         "threshold": p.threshold,
@@ -594,6 +625,68 @@ mod tests {
         });
         let res = send(&app, "POST", "/api/tss/sign", None, Some(body)).await;
         assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn collect_hands_over_once_and_returns_the_status_to_idle() {
+        let st = state("tss-collect");
+        {
+            *st.tss.keygen.write().unwrap() = super::KeygenStatus::Done {
+                address: "0x00112233445566778899aabbccddeeff00112233".into(),
+            };
+            *st.tss.pending.lock().unwrap() = Some(super::PendingShares {
+                keygen_id: "a".repeat(64),
+                address: "0x00112233445566778899aabbccddeeff00112233".into(),
+                threshold: 2,
+                parties: 3,
+                files: sealed_files(2, 3, "a fine passphrase"),
+                parked_at: std::time::Instant::now(),
+            });
+        }
+        let app = crate::routes::build(st);
+        let body = serde_json::json!({ "keygenId": "a".repeat(64) });
+        let res = send(&app, "POST", "/api/tss/keygen/collect", None, Some(body)).await;
+        assert_eq!(res.status, StatusCode::OK);
+        assert_eq!(res.json()["shares"].as_array().unwrap().len(), 3);
+
+        // The collected wallet's address must not linger on the
+        // unauthenticated status endpoint.
+        let res = send(&app, "GET", "/api/tss/keygen/status", None, None).await;
+        assert_eq!(res.json()["state"], "idle");
+
+        // And the handover was exactly once.
+        let body = serde_json::json!({ "keygenId": "a".repeat(64) });
+        let res = send(&app, "POST", "/api/tss/keygen/collect", None, Some(body)).await;
+        assert_eq!(res.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_new_keygen_cannot_evict_shares_still_being_collected() {
+        let st = state("tss-grace");
+        {
+            *st.tss.keygen.write().unwrap() = super::KeygenStatus::Done {
+                address: "0x00112233445566778899aabbccddeeff00112233".into(),
+            };
+            *st.tss.pending.lock().unwrap() = Some(super::PendingShares {
+                keygen_id: "a".repeat(64),
+                address: "0x00112233445566778899aabbccddeeff00112233".into(),
+                threshold: 2,
+                parties: 3,
+                files: sealed_files(2, 3, "a fine passphrase"),
+                parked_at: std::time::Instant::now(),
+            });
+        }
+        let app = crate::routes::build(st);
+        // Valid params, honest passphrase — refused anyway: the previous
+        // ceremony's requester is inside its collection window.
+        let body = serde_json::json!({ "threshold": 2, "parties": 3, "passphrase": "long enough" });
+        let res = send(&app, "POST", "/api/tss/keygen", None, Some(body)).await;
+        assert_eq!(res.status, StatusCode::CONFLICT);
+
+        // The parked shares survived the attempt.
+        let body = serde_json::json!({ "keygenId": "a".repeat(64) });
+        let res = send(&app, "POST", "/api/tss/keygen/collect", None, Some(body)).await;
+        assert_eq!(res.status, StatusCode::OK);
     }
 
     #[tokio::test]
