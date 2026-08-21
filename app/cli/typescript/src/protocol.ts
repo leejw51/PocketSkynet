@@ -4,6 +4,23 @@ import { sha256 } from "@noble/hashes/sha2";
 import { bytesToHex, utf8Bytes } from "./hex.js";
 
 /**
+ * The distinctive opening of the login challenge message
+ * (`templates.loginChallenge`). A login client must refuse to sign a challenge
+ * that does not begin with this: it is the one thing that separates a login
+ * challenge from the E2EE key-derivation and public-key-binding messages,
+ * which are also EIP-191 personal_sign payloads. A malicious or MITM server
+ * that returned a derivation string in place of a challenge could otherwise
+ * trick the user into signing it — and that signature *is* the E2EE private
+ * key. See PROTOCOL.md §4–§6.
+ */
+export const LOGIN_CHALLENGE_PREFIX = "Welcome to FruitNation!";
+
+/** Whether a server-returned challenge message is a genuine login challenge. */
+export function isLoginChallenge(message: string): boolean {
+  return message.startsWith(LOGIN_CHALLENGE_PREFIX);
+}
+
+/**
  * `msgHash` for a plaintext message: lowercase hex SHA-256 (never keccak) of
  * the **trimmed** content — the server trims before storing.
  */

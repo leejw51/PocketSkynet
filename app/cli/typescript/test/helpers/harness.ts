@@ -18,7 +18,7 @@ import { createSocket } from "node:dgram";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Agent, fetch as undiciFetch } from "undici";
 import { normalizePrivateKey } from "../../src/wallet.js";
@@ -71,7 +71,13 @@ export function resolveServerBinary(): string {
         { encoding: "utf8" },
       ).trim();
       if (coreWorktree.length > 0) {
-        const mainRepoApp = join(commonDir, coreWorktree, "app");
+        // core.worktree may be absolute or relative to the git dir. join()
+        // silently concatenates an absolute second segment, so resolve the
+        // absolute case explicitly rather than mis-joining it.
+        const worktreeRoot = isAbsolute(coreWorktree)
+          ? coreWorktree
+          : join(commonDir, coreWorktree);
+        const mainRepoApp = join(worktreeRoot, "app");
         if (existsSync(mainRepoApp)) roots.push(mainRepoApp);
       }
     } catch {

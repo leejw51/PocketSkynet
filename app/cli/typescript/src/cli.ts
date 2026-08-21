@@ -220,7 +220,15 @@ export async function main(argv: string[]): Promise<number> {
 const invokedDirectly =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
-  main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  });
+  main(process.argv.slice(2))
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err: unknown) => {
+      // `main` maps known failures to exit codes itself; this catches anything
+      // unexpected (e.g. a synchronous throw during teardown) so it becomes a
+      // clean `error: … ` + exit 1 rather than an unhandled rejection.
+      process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 1;
+    });
 }

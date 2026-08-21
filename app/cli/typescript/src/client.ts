@@ -5,7 +5,7 @@
 
 import { personalSign } from "./eip191.js";
 import { ApiError, apiErrorFromBody } from "./errors.js";
-import { generatedUsername, msgHashPlaintext } from "./protocol.js";
+import { generatedUsername, isLoginChallenge, msgHashPlaintext } from "./protocol.js";
 import {
   createTransport,
   Transport,
@@ -69,6 +69,9 @@ export class PocketSkynetClient {
   readonly transport: Transport;
   private readonly opts: ClientOptions;
   private jwt: string | undefined;
+  /** A login in progress, so parallel first calls share one (and burn one
+   * challenge) instead of racing N logins. */
+  private loginInFlight: Promise<unknown> | undefined;
 
   constructor(opts: ClientOptions) {
     this.opts = opts;
@@ -116,13 +119,22 @@ export class PocketSkynetClient {
     return parseJsonBody<T>(response.bodyText);
   }
 
-  /** The cached JWT, logging in first when a key is available. */
+  /**
+   * The cached JWT, logging in first when a key is available. Concurrent
+   * callers before the first login completes share one in-flight login, so N
+   * parallel requests burn one challenge rather than N.
+   */
   async ensureToken(): Promise<string> {
     if (this.jwt !== undefined) return this.jwt;
     if (this.opts.privateKey === undefined) {
       throw new Error("not logged in and no private key configured");
     }
-    await this.login();
+    if (this.loginInFlight === undefined) {
+      this.loginInFlight = this.login().finally(() => {
+        this.loginInFlight = undefined;
+      });
+    }
+    await this.loginInFlight;
     return this.jwt!;
   }
 
@@ -152,6 +164,16 @@ export class PocketSkynetClient {
 
     const attempt = async (username: string | undefined): Promise<LoginResponse> => {
       const challenge = await this.requestChallenge(address);
+      // Defense in depth: never sign a message that is not a login challenge.
+      // The E2EE key-derivation and key-binding messages are also EIP-191
+      // payloads, and a signature over one of them *is* a private key — a
+      // malicious or MITM server must not be able to get us to produce it by
+      // returning it here instead of a challenge.
+      if (!isLoginChallenge(challenge.message)) {
+        throw new Error(
+          "refusing to sign: the server's challenge does not look like a login challenge",
+        );
+      }
       const signature = personalSign(challenge.message, account.privateKey);
       const body = buildLoginBody({
         walletAddress: address,

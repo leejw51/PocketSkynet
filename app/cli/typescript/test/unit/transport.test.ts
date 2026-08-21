@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { TransportError } from "../../src/errors.js";
 import {
   buildCurlArgs,
+  buildCurlConfig,
   createTransport,
   CurlHttp3Transport,
   findHttp3Curl,
@@ -37,25 +38,24 @@ test("http3 with an http:// URL fails fast (QUIC mandates TLS)", () => {
   );
 });
 
-test("http3 transport without a capable curl fails with a clear error", async () => {
+test("http3 transport with curlPath:null fails fast with a clear error", async () => {
+  // An explicit null means "known unavailable" — deterministic on any host,
+  // unlike relying on the machine having no HTTP/3 curl.
   const transport = new CurlHttp3Transport({
     baseUrl: "https://127.0.0.1:1",
     http3: true,
-    // A curl that exists but has no HTTP3 feature must be refused by the
-    // probe; pointing the probe at /usr/bin/true guarantees "no candidate".
-    curlPath: undefined as unknown as string,
+    curlPath: null,
   });
-  // Force the probe to find nothing by narrowing candidates via env.
-  const saved = process.env["PSKYNET_CURL"];
-  process.env["PSKYNET_CURL"] = "/usr/bin/false";
-  try {
-    const found = await findHttp3Curl(["/usr/bin/false", "/nonexistent/curl"]);
-    assert.equal(found, null);
-  } finally {
-    if (saved === undefined) delete process.env["PSKYNET_CURL"];
-    else process.env["PSKYNET_CURL"] = saved;
-  }
+  await assert.rejects(
+    () => transport.request({ method: "GET", path: "/api/health" }),
+    (err: unknown) => err instanceof TransportError && /HTTP\/3-capable curl/.test(err.message),
+  );
   await transport.close();
+});
+
+test("findHttp3Curl returns null when no candidate advertises HTTP3", async () => {
+  const found = await findHttp3Curl(["/usr/bin/false", "/nonexistent/curl"]);
+  assert.equal(found, null);
 });
 
 test("findHttp3Curl rejects a curl whose features lack HTTP3", async () => {
@@ -67,8 +67,8 @@ test("findHttp3Curl rejects a curl whose features lack HTTP3", async () => {
   assert.equal(found !== null, hasH3);
 });
 
-test("curl argv: exact shape, URL last after --", () => {
-  const args = buildCurlArgs(
+test("curl argv: exact shape, URL last after --, secrets NOT in argv", () => {
+  const { args, stdin } = buildCurlArgs(
     "https://127.0.0.1:9101",
     { method: "POST", path: "/api/auth/login", body: { walletAddress: "0xabc" }, token: "tok.en" },
     { insecure: true, timeoutMs: 5000 },
@@ -77,35 +77,76 @@ test("curl argv: exact shape, URL last after --", () => {
   assert.equal(args[args.length - 2], "--");
   assert.equal(args[args.length - 1], "https://127.0.0.1:9101/api/auth/login");
   assert.ok(args.includes("--insecure"));
-  const dataAt = args.indexOf("--data-binary");
-  assert.ok(dataAt > 0);
-  assert.equal(args[dataAt + 1], '{"walletAddress":"0xabc"}');
-  const authAt = args.findIndex((a) => a.startsWith("authorization:"));
-  assert.equal(args[authAt], "authorization: Bearer tok.en");
-  assert.equal(args[authAt - 1], "--header");
+  // The secret-bearing header/body go through `--config -`, never argv.
+  assert.ok(args.includes("--config"));
+  assert.equal(args[args.indexOf("--config") + 1], "-");
+  assert.ok(!args.includes("--data-binary"), "body must not be an argv element");
+  // The token and body must not appear anywhere in argv (the `ps` leak fix):
+  for (const arg of args) {
+    assert.ok(!arg.includes("tok.en"), `token leaked into argv: ${arg}`);
+    assert.ok(!arg.includes("authorization:"), `auth header leaked into argv: ${arg}`);
+    assert.ok(!arg.includes("0xabc"), `body leaked into argv: ${arg}`);
+  }
+  // They live in the stdin config instead:
+  assert.match(stdin, /header = "authorization: Bearer tok\.en"/);
+  assert.match(stdin, /data-binary = "\{\\"walletAddress\\":\\"0xabc\\"\}"/);
 });
 
-test("curl argv: hostile body content stays a single inert argv element", () => {
+test("curl config: a GET with no token or body needs no --config", () => {
+  const { args, stdin } = buildCurlArgs("https://h:1", { method: "GET", path: "/api/health" });
+  assert.equal(stdin, "");
+  assert.ok(!args.includes("--config"));
+});
+
+test("curl config: hostile body is one opaque, escaped config value", () => {
   const hostile = {
     content: "$(rm -rf /) `touch /tmp/pwned` ; & | > /etc/passwd '\" \\ \n --insecure",
     msgHash: "ab".repeat(32),
   };
-  const args = buildCurlArgs("https://h:1", {
+  const { args, stdin } = buildCurlArgs("https://h:1", {
     method: "POST",
     path: "/api/rooms/room_0123456789/messages",
     body: hostile,
   });
-  const dataAt = args.indexOf("--data-binary");
-  const payload = args[dataAt + 1]!;
-  // The whole hostile body is one argv element, byte-identical to its JSON:
-  assert.equal(payload, JSON.stringify(hostile));
-  // and no argv element other than the payload contains shell metacharacters:
-  for (const [i, arg] of args.entries()) {
-    if (i === dataAt + 1) continue;
-    assert.ok(!/[$`|;&<>]/.test(arg), `unexpected metacharacter in argv[${i}]: ${arg}`);
+  // Nothing sensitive in argv, and no argv element carries shell metacharacters:
+  for (const arg of args) {
+    assert.ok(!/[$`|;&<>]/.test(arg), `unexpected metacharacter in argv element: ${arg}`);
   }
-  // "--insecure" inside the *payload* must not add a flag:
-  assert.equal(args.filter((a) => a === "--insecure").length, 0);
+  assert.ok(!args.includes("--insecure"), "'--insecure' in the body must not add a flag");
+
+  // The body is a single quoted config value: the real newline is escaped to
+  // an "\n" sequence, backslash and quote are escaped, so curl reads exactly
+  // the JSON and a config line can never be split into a second directive.
+  const json = JSON.stringify(hostile);
+  const expectedValue = json
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n");
+  const lines = stdin.split("\n");
+  const dataLine = lines.find((l) => l.startsWith("data-binary = "));
+  assert.ok(dataLine, "data-binary config line present");
+  assert.equal(dataLine, `data-binary = "${expectedValue}"`);
+});
+
+test("buildCurlConfig: token and body only, header-splitting refused", () => {
+  assert.equal(buildCurlConfig({ method: "GET", path: "/api/health" }), "");
+
+  const withToken = buildCurlConfig({ method: "GET", path: "/api/rooms", token: "jwt.tok.en" });
+  assert.equal(withToken, 'header = "authorization: Bearer jwt.tok.en"\n');
+
+  const withBody = buildCurlConfig({
+    method: "POST",
+    path: "/api/rooms",
+    body: { name: "x" },
+  });
+  assert.match(withBody, /^header = "content-type: application\/json"\n/);
+  assert.match(withBody, /data-binary = "\{\\"name\\":\\"x\\"\}"\n$/);
+
+  // A CRLF-bearing token is refused before it can inject a second directive:
+  assert.throws(
+    () => buildCurlConfig({ method: "GET", path: "/api/rooms", token: "a\r\nheader = evil" }),
+    TransportError,
+  );
 });
 
 test("curl argv: a hostile string is never interpreted by a shell", async () => {

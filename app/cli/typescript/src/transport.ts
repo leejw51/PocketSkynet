@@ -12,6 +12,12 @@
  *   maintained pure-JS HTTP/3 client, so curl is the pragmatic path. When no
  *   HTTP/3-capable curl exists on the machine the transport fails fast with a
  *   clear error instead of pretending.
+ *
+ *   Secrets never touch argv: the bearer token and the request body are fed to
+ *   curl through a `--config -` file on stdin, so they are invisible to
+ *   `ps`/`/proc` for other local users (an account-takeover leak the argv
+ *   would otherwise carry for the process lifetime). Only non-sensitive flags
+ *   and the URL (after `--`) stay on the command line.
  */
 
 import { execFile } from "node:child_process";
@@ -21,6 +27,35 @@ import { Agent, fetch as undiciFetch } from "undici";
 import { TransportError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Run curl, writing `stdin` to its standard input (the `--config -` file), and
+ * resolve with stdout. Uses the `execFile` callback form rather than its
+ * promisified version because only the callback form hands back the
+ * `ChildProcess` whose `stdin` we must write the secret-bearing config to.
+ */
+function runCurl(
+  curl: string,
+  args: string[],
+  stdin: string,
+  opts: { timeout: number; maxBuffer: number },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(curl, args, opts, (err, stdout, stderr) => {
+      if (err) {
+        // Surface stdout/stderr on the error the way the promisified form does.
+        Object.assign(err, { stdout, stderr });
+        reject(err);
+      } else {
+        resolve(stdout);
+      }
+    });
+    child.on("error", reject);
+    // `end` writes the config and closes stdin; curl reads it as its `--config`
+    // file. Writing before the child spawns is safe — the stream buffers.
+    child.stdin?.end(stdin);
+  });
+}
 
 export type TransportKind = "http1" | "http3-curl";
 
@@ -58,12 +93,18 @@ export interface TransportOptions {
   caPem?: string;
   /** Trust exactly this CA (path to PEM file). */
   caPath?: string;
-  /** Explicit curl binary for HTTP/3 (else probed). */
-  curlPath?: string;
+  /**
+   * Explicit curl binary for HTTP/3. `undefined` probes for one; an explicit
+   * `null` means "known unavailable" and makes the transport fail fast — used
+   * to exercise the fail-fast path deterministically regardless of the host.
+   */
+  curlPath?: string | null;
   timeoutMs?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** Ceiling on a response body, matching the curl path's `maxBuffer`. */
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 function normalizeBaseUrl(baseUrl: string): string {
   let url: URL;
@@ -143,7 +184,7 @@ class FetchTransport implements Transport {
         err,
       );
     }
-    const bodyText = await response.text();
+    const bodyText = await readBodyCapped(response, `${this.baseUrl}${req.path}`);
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       responseHeaders[key.toLowerCase()] = value;
@@ -154,6 +195,41 @@ class FetchTransport implements Transport {
   async close(): Promise<void> {
     await this.dispatcher?.close();
   }
+}
+
+/**
+ * Read a fetch response body as UTF-8, aborting past {@link MAX_RESPONSE_BYTES}
+ * rather than buffering an unbounded stream into memory. `Response.text()` has
+ * no size limit, so a hostile or broken server could otherwise exhaust memory.
+ */
+async function readBodyCapped(
+  response: Awaited<ReturnType<typeof undiciFetch>>,
+  target: string,
+): Promise<string> {
+  const stream = response.body;
+  if (stream === null) return "";
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value !== undefined) {
+        total += value.byteLength;
+        if (total > MAX_RESPONSE_BYTES) {
+          await reader.cancel();
+          throw new TransportError(
+            `response body from ${target} exceeded ${MAX_RESPONSE_BYTES} bytes`,
+          );
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function readFileUtf8(path: string): string {
@@ -211,17 +287,65 @@ export interface CurlArgOptions {
   timeoutMs?: number;
 }
 
+/** A curl invocation: non-sensitive `args` on the command line, secrets in
+ * `stdin` (a `--config -` file). `stdin` is `""` when there is nothing
+ * sensitive to pass. */
+export interface CurlInvocation {
+  args: string[];
+  stdin: string;
+}
+
 /**
- * Build the curl argv (no shell is ever involved — `execFile` passes this
- * array straight to the kernel, so quoting is a non-issue; validation exists
- * to keep hostile values from being *interpreted by curl* as extra flags or
- * extra headers).
+ * Encode a value for a curl `--config` file. curl parses a value that begins
+ * with `"` as a C-style quoted string (honoring `\\ \" \t \n \r \v`), so
+ * wrapping and escaping keeps a body with quotes, newlines or leading `@`/`-`
+ * a single opaque value that curl never re-reads as a flag or a filename.
+ */
+function curlConfigValue(value: string): string {
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\t/g, "\\t")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\v/g, "\\v");
+  return `"${escaped}"`;
+}
+
+/**
+ * Build the curl `--config -` stdin content carrying the request's secrets:
+ * the bearer token (as an `authorization` header) and the JSON body. Returns
+ * `""` when the request has neither, so no `--config` flag is added.
+ *
+ * Keeping these off argv is the whole point — argv is world-readable via `ps`
+ * for the curl process's lifetime, so a token there is an account-takeover
+ * leak the HTTP/1.1 path does not have.
+ */
+export function buildCurlConfig(req: TransportRequest): string {
+  const lines: string[] = [];
+  if (req.token !== undefined) {
+    validateToken(req.token);
+    lines.push(`header = ${curlConfigValue(`authorization: Bearer ${req.token}`)}`);
+  }
+  if (req.body !== undefined) {
+    lines.push(`header = ${curlConfigValue("content-type: application/json")}`);
+    lines.push(`data-binary = ${curlConfigValue(JSON.stringify(req.body))}`);
+  }
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}
+
+/**
+ * Build the curl invocation (no shell is ever involved — `execFile` passes the
+ * argv array straight to the kernel, so quoting is a non-issue; validation
+ * exists to keep hostile values from being *interpreted by curl* as extra
+ * flags or extra headers). Secrets go on stdin via `buildCurlConfig`, never in
+ * argv; the URL is last, after `--`.
  */
 export function buildCurlArgs(
   baseUrl: string,
   req: TransportRequest,
   opts: CurlArgOptions = {},
-): string[] {
+): CurlInvocation {
   const base = normalizeBaseUrl(baseUrl);
   if (!base.startsWith("https://")) {
     throw new TransportError("HTTP/3 requires an https:// server URL (QUIC mandates TLS)");
@@ -241,20 +365,14 @@ export function buildCurlArgs(
     "--write-out",
     `${STATUS_MARKER}%{response_code}`,
   ];
-  if (req.token !== undefined) {
-    validateToken(req.token);
-    args.push("--header", `authorization: Bearer ${req.token}`);
-  }
-  if (req.body !== undefined) {
-    // The body is a single argv element; curl never re-parses it as flags
-    // because it follows `--data-binary`, and no shell ever sees it.
-    args.push("--header", "content-type: application/json");
-    args.push("--data-binary", JSON.stringify(req.body));
-  }
+  const stdin = buildCurlConfig(req);
+  // `--config -` reads the secret-bearing header/body from stdin. Added only
+  // when there is something sensitive, so a plain GET stays config-free.
+  if (stdin.length > 0) args.push("--config", "-");
   if (opts.insecure) args.push("--insecure");
   else if (opts.caPath !== undefined) args.push("--cacert", opts.caPath);
   args.push("--", `${base}${req.path}`);
-  return args;
+  return { args, stdin };
 }
 
 /** Parse curl stdout produced with the {@link STATUS_MARKER} write-out. */
@@ -303,14 +421,13 @@ export class CurlHttp3Transport implements Transport {
     if (this.opts.insecure !== undefined) argOpts.insecure = this.opts.insecure;
     if (this.opts.caPath !== undefined) argOpts.caPath = this.opts.caPath;
     if (this.opts.timeoutMs !== undefined) argOpts.timeoutMs = this.opts.timeoutMs;
-    const args = buildCurlArgs(this.baseUrl, req, argOpts);
+    const { args, stdin } = buildCurlArgs(this.baseUrl, req, argOpts);
     let stdout: string;
     try {
-      const result = await execFileAsync(curl, args, {
+      stdout = await runCurl(curl, args, stdin, {
         timeout: (this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS) + 5_000,
         maxBuffer: 32 * 1024 * 1024,
       });
-      stdout = result.stdout;
     } catch (err) {
       const stderr =
         typeof err === "object" && err !== null && "stderr" in err

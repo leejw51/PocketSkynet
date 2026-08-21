@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { generatedUsername, msgHashCiphertext, msgHashPlaintext } from "../../src/protocol.js";
+import {
+  generatedUsername,
+  isLoginChallenge,
+  msgHashCiphertext,
+  msgHashPlaintext,
+} from "../../src/protocol.js";
 import { protocolVectors } from "../helpers/vectors.js";
 
 const vectors = protocolVectors();
@@ -33,6 +38,27 @@ test("msgHash.encrypted vectors: SHA-256 of the base64 string, padding included"
 
 test("msgHash output shape is 64 lowercase hex", () => {
   assert.match(msgHashPlaintext("abc"), /^[a-f0-9]{64}$/);
+});
+
+test("isLoginChallenge accepts a real challenge, rejects derivation messages", () => {
+  // The login-challenge vector must be recognized...
+  const vector = vectors.eip191.find((v) => v.name === "login-challenge");
+  assert.ok(vector, "login-challenge vector present");
+  assert.equal(isLoginChallenge(vector.message), true);
+
+  // ...and the EIP-191 messages a MITM server might substitute must not be —
+  // signing one of these yields an E2EE private key.
+  assert.equal(
+    isLoginChallenge(
+      "FruitNation Encryption Key Derivation v2\n\nAddress: 0x…\nSalt: …\nPurpose: End-to-end encryption only",
+    ),
+    false,
+  );
+  assert.equal(
+    isLoginChallenge("FruitNation Public Key Binding\n\nAddress: 0x…\nEncryption Public Key: …"),
+    false,
+  );
+  assert.equal(isLoginChallenge(""), false);
 });
 
 test("generated usernames satisfy the server's username schema", () => {

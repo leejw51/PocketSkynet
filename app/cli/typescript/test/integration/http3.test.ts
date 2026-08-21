@@ -77,32 +77,21 @@ test("http3: full auth flow and room create over QUIC", { skip: curlPathMissing(
 });
 
 test("http3 transport fails fast with a clear error when curl is unavailable", async () => {
-  const transport = new CurlHttp3Transport({
-    baseUrl: "https://127.0.0.1:1",
-    http3: true,
-  });
-  const saved = process.env["PSKYNET_CURL"];
-  // Point every candidate somewhere hopeless so the probe finds nothing,
-  // regardless of what this machine has installed.
-  process.env["PSKYNET_CURL"] = "/nonexistent/curl";
+  // `curlPath: null` means "known unavailable", so this exercises the
+  // fail-fast path unconditionally — even on machines that DO have an
+  // HTTP/3-capable curl, where a probe-based test would silently skip it.
   const forced = new CurlHttp3Transport({
     baseUrl: "https://127.0.0.1:1",
     http3: true,
-    curlPath: undefined as unknown as string,
+    curlPath: null,
   });
   try {
-    if (curlPath === null) {
-      // The unforced transport also fails on this machine:
-      await assert.rejects(
-        () => transport.request({ method: "GET", path: "/api/health" }),
-        (err: unknown) =>
-          err instanceof TransportError && /HTTP\/3-capable curl/.test(err.message),
-      );
-    }
+    await assert.rejects(
+      () => forced.request({ method: "GET", path: "/api/health" }),
+      (err: unknown) =>
+        err instanceof TransportError && /HTTP\/3-capable curl/.test(err.message),
+    );
   } finally {
-    if (saved === undefined) delete process.env["PSKYNET_CURL"];
-    else process.env["PSKYNET_CURL"] = saved;
-    await transport.close();
     await forced.close();
   }
 });

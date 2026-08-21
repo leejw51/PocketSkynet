@@ -32,19 +32,22 @@ cargo when absent, or honors `POCKETSKYNET_BIN`.
 
 ## CLI usage
 
-```sh
-# HTTP/1.1 against a local dev server
-pskynet-ts health --server http://127.0.0.1:9099
-pskynet-ts login --key 0x<privkey> --username alice
-pskynet-ts rooms --key 0x<privkey>
-pskynet-ts create-room "Team chat" --key 0x<privkey>
-pskynet-ts send <roomId> "hello world" --key 0x<privkey>
-pskynet-ts messages <roomId> --limit 20 --key 0x<privkey>
+The key comes from `POCKETSKYNET_KEY` — prefer it over `--key`, which is
+visible to other local users via `ps`/`/proc` while the process runs:
 
-# The key can come from the environment instead:
+```sh
 export POCKETSKYNET_KEY=0x<privkey>
 export POCKETSKYNET_SERVER=http://127.0.0.1:9099
+
+pskynet-ts health
+pskynet-ts login --username alice
 pskynet-ts rooms
+pskynet-ts create-room "Team chat"
+pskynet-ts send <roomId> "hello world"
+pskynet-ts messages <roomId> --limit 20
+
+# --key / --server also work as flags (the key is then visible in `ps`):
+pskynet-ts rooms --server http://127.0.0.1:9099 --key 0x<privkey>
 
 # Reuse a JWT without re-signing:
 pskynet-ts rooms --token <jwt>        # or POCKETSKYNET_TOKEN
@@ -56,6 +59,10 @@ pskynet-ts health --server https://127.0.0.1:9099 --insecure             # dev-o
 # HTTP/3 (QUIC — the server's --http3-port listener; TLS is mandatory):
 pskynet-ts health --server https://127.0.0.1:9101 --http3 --ca /path/to/ca.crt
 ```
+
+On the `--http3` path the bearer token and request body are passed to curl via
+a `--config -` file on stdin, so they never appear in `ps` — only `--key`
+itself (and `--token`, if you use it) is visible there.
 
 Exit codes: `0` success, `1` API/transport failure, `2` usage error.
 `--json` prints raw server JSON. First-time logins need a username; when
@@ -100,15 +107,18 @@ is not exposed (not even under `--experimental-quic`, which only turns on the
 flag), and npm has no maintained pure-JS HTTP/3 client. So `--http3` shells
 out to an **HTTP/3-capable curl** via `child_process.execFile` — an argv
 array, never a shell, so hostile message content is inert (unit tests pin
-this, plus header-injection rejection for tokens). The binary is probed at
-first use: `PSKYNET_CURL`, then Homebrew curl
+this, plus header-injection rejection for tokens). Secrets stay off argv: the
+bearer token and request body go to curl through a `--config -` file on stdin,
+so they are not exposed via `ps`/`/proc` to other local users. The binary is
+probed at first use: `PSKYNET_CURL`, then Homebrew curl
 (`/opt/homebrew/opt/curl/bin/curl`, `/usr/local/opt/curl/bin/curl`), then
 `curl` on PATH — accepting only builds whose `curl --version` features
 advertise `HTTP3`. Without one, the transport fails fast with a clear error
-and the HTTP/3 integration test group SKIPs with the reason. On this
-machine Homebrew curl 8.21 (ngtcp2/nghttp3) is present, so the HTTP/3
-integration tests run end to end — QUIC health, full login flow, and a
-cross-check that a room created over HTTP/3 is visible over TCP.
+and the HTTP/3 integration test group SKIPs with the reason. When an
+HTTP/3-capable curl is present (e.g. a Homebrew curl built with
+ngtcp2/nghttp3), the HTTP/3 integration tests run end to end — QUIC health,
+full login flow, and a cross-check that a room created over HTTP/3 is visible
+over TCP.
 
 ## Test coverage
 
