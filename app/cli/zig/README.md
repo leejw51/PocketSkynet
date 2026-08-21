@@ -44,6 +44,10 @@ Flags: `--server`, `--key` (or `POCKETSKYNET_KEY`), `--username`, `--token`
 `--insecure`, `--cacert <pem>`, `--limit`. Exit codes: 0 success, 1
 runtime/API failure, 2 usage error.
 
+Prefer `POCKETSKYNET_KEY` (and `POCKETSKYNET_TOKEN`) over the `--key`/`--token`
+flags: a value on the command line is visible to other local users via `ps`,
+while an environment variable is not.
+
 Login follows the spec exactly: `POST /api/auth/challenge`, sign the returned
 message **verbatim**, `POST /api/auth/login` with the required `challengeId`.
 A challenge is burned by failure as well as success, so the first-time-login
@@ -74,15 +78,25 @@ One request interface (`src/transport.zig`), two backends:
   skip-verification switch.
 
   The curl subprocess is spawned **exec-style** (`std.process.run`, argv
-  array, no shell anywhere); the JSON body travels via a temp file
-  (`--data-binary @file`), and the URL is passed with `--url`, so hostile
-  message text can never be word-split, glob-expanded, or parsed as an
-  option. Unit tests pin this with `"; rm -rf ~`, `$(…)`, backticks and
-  newline payloads.
+  array, no shell anywhere); the JSON body and the bearer header each travel
+  via a private `0600` temp file created with `O_EXCL` and an unpredictable
+  name (`--data-binary @file`, `--header @file`), and the URL is passed with
+  `--url`. So hostile message text can never be word-split, glob-expanded, or
+  parsed as an option, and neither the request body (which carries the login
+  signature) nor the JWT ever appears in argv (`ps`) or in a world-readable
+  file. Unit tests pin the argv construction with `"; rm -rf ~`, `$(…)`,
+  backticks and newline payloads, and the secure temp-file creation
+  (mode/exclusivity/cleanup).
 
-On this machine the HTTP/3 integration test runs **end-to-end over QUIC**
-(health, login, create-room, send, list) against the server's UDP listener
-using Homebrew curl 8.21 (ngtcp2/nghttp3).
+With an HTTP/3-capable curl (e.g. Homebrew curl ≥ 8.x, built with
+ngtcp2/nghttp3), the HTTP/3 integration test runs **end-to-end over QUIC**
+(health, login, create-room, send, list) against the server's UDP listener;
+otherwise that one test reports SKIP.
+
+The std backend also bounds each response at 64 MB and applies a connect
+timeout, so a wedged or hostile server can neither exhaust memory nor hang
+the CLI on connect (the curl backend already enforces `--max-time` and the
+same 64 MB stdout cap).
 
 ## Signing (pure Zig)
 

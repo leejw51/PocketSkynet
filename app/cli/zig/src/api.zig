@@ -309,14 +309,22 @@ pub const Client = struct {
     pub fn login(self: *Client, key: secp.PrivateKey, username: ?[]const u8) Error!std.json.Parsed(LoginResponse) {
         const first = self.loginAttempt(key, username);
         if (first) |parsed| {
-            try self.setToken(parsed.value.token);
+            // If storing the token fails (OOM), the parsed response would
+            // otherwise leak its arena — free it before propagating.
+            self.setToken(parsed.value.token) catch |err| {
+                parsed.deinit();
+                return err;
+            };
             return parsed;
         } else |err| {
             if (err != error.Api or username != null) return err;
             if (!self.lastFailureNeedsUsername()) return err;
             const generated = fallbackUsername(key.addressHex());
             const second = try self.loginAttempt(key, &generated);
-            try self.setToken(second.value.token);
+            self.setToken(second.value.token) catch |set_err| {
+                second.deinit();
+                return set_err;
+            };
             return second;
         }
     }

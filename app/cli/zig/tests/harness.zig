@@ -154,6 +154,9 @@ pub const TestServer = struct {
         var last_err: anyerror = error.BootFailed;
         for (0..5) |_| {
             return tryStart(gpa, io, opts) catch |err| {
+                // A missing binary will never appear on a retry, and each
+                // attempt could trigger a full `cargo build` — fail fast.
+                if (err == error.ServerBinaryNotFound) return err;
                 last_err = err;
                 continue;
             };
@@ -281,15 +284,22 @@ pub const TestServer = struct {
         return server;
     }
 
-    /// True while the child has not exited. Reaps on exit.
+    /// True while the child has not exited. Reaps only on a *real* exit, so a
+    /// transient `waitpid` error (e.g. EINTR, rc = -1) never makes us treat a
+    /// still-running server as dead — which would leak it past teardown.
     fn childAlive(self: *TestServer) bool {
         if (self.reaped) return false;
         const pid = self.child.id orelse return false;
         var status: c_int = 0;
         const rc = std.c.waitpid(pid, &status, std.posix.W.NOHANG);
-        if (rc == 0) return true;
-        self.reaped = true;
-        return false;
+        if (rc == pid) {
+            // The child was reaped by this call.
+            self.reaped = true;
+            return false;
+        }
+        // rc == 0: still running. rc < 0: waitpid error (e.g. EINTR); assume
+        // still running and let a later call (or `stop`) reap it.
+        return true;
     }
 
     fn awaitHealth(self: *TestServer) !void {
