@@ -1851,8 +1851,18 @@ pub fn login(p: &LoginProps) -> Html {
                                 *busy,
                             ) }
                         } else {
+                            // The hero tells the state: fractured shards
+                            // while shares are still missing, the fused key
+                            // once a quorum is in hand.
                             <div class="fn-tss-hero" aria-hidden="true" data-busy={tss_keygen_busy.to_string()}>
-                                <img src={crate::asset::img(store.skin, "tss-forge")} alt="" loading="lazy" />
+                                <img
+                                    src={crate::asset::img(
+                                        store.skin,
+                                        if tss_quorum(&tss_files).is_some() { "tss-united" } else { "tss-forge" },
+                                    )}
+                                    alt=""
+                                    loading="lazy"
+                                />
                             </div>
                             <p class="fn-field__help">{ t(lang, Key::tss_intro) }</p>
 
@@ -1888,6 +1898,7 @@ pub fn login(p: &LoginProps) -> Html {
                                 if tss_files.is_empty() {
                                     <p class="fn-field__help">{ t(lang, Key::tss_files_hint) }</p>
                                 } else {
+                                    { tss_shard_slots(&tss_files) }
                                     <ul class="fn-tss-filelist">
                                         { for tss_files.iter().map(|f| html! {
                                             <li data-ok={f.header.is_some().to_string()}>
@@ -1908,7 +1919,7 @@ pub fn login(p: &LoginProps) -> Html {
                                             </li>
                                         }) }
                                     </ul>
-                                    { tss_quorum_status(lang, &tss_files) }
+                                    { tss_quorum_status(lang, store.skin, &tss_files) }
                                 }
                             </div>
 
@@ -1936,7 +1947,17 @@ pub fn login(p: &LoginProps) -> Html {
                             if !is_unlock {
                                 <div class="fn-rule">{ t(lang, Key::tss_create_title) }</div>
                                 if *tss_keygen_busy {
+                                    // The forge, mid-ceremony: the shard
+                                    // artwork inside a slowly rotating energy
+                                    // ring, right above the act list, so the
+                                    // minute of Paillier arithmetic has a
+                                    // heartbeat where the user is looking.
+                                    <div class="fn-tss-forging" aria-hidden="true">
+                                        <span class="fn-tss-forging__ring"></span>
+                                        <img src={crate::asset::img(store.skin, "tss-forge")} alt="" />
+                                    </div>
                                     { tss_step_list(lang, *tss_step) }
+                                    <div class="fn-tss-energybar" aria-hidden="true"><span></span></div>
                                     <p class="fn-field__help">{ t(lang, Key::tss_creating_hint) }</p>
                                 } else {
                                     <div class="fn-row">
@@ -2237,6 +2258,52 @@ fn download_json(_filename: &str, _contents: &str) {}
 /// along with the phrase — the same words at index 1 are a different account,
 /// so a phrase stored without its index would silently sign the user in as
 /// somebody else.
+/// A crystal-shard glyph, drawn inline so it wears `currentColor` and stays
+/// crisp at slot size — the recurring mark of the whole TSS flow: shards
+/// collected, shards forged, shards fused.
+fn tss_shard_glyph(size: u16) -> Html {
+    html! {
+        <svg
+            viewBox="0 0 24 24"
+            width={size.to_string()}
+            height={size.to_string()}
+            fill="currentColor"
+            aria-hidden="true"
+        >
+            <path d="M12 1.5 L19 7.5 L15.5 22 L8.5 20 L5 8.5 Z" />
+            <path d="M12 1.5 L12.6 21.2" stroke="rgba(0,0,0,0.35)" stroke-width="1" fill="none" />
+        </svg>
+    }
+}
+
+/// The collection strip: one slot per party, the slots for the files in
+/// hand lit with their shard, the rest waiting as dashed sockets. The
+/// inventory metaphor is doing real work — it shows *which* shares these
+/// are, how many exist, and how close the quorum is, without a sentence.
+fn tss_shard_slots(files: &[TssLoadedFile]) -> Html {
+    let headers: Vec<&crate::api::tss::TssShareHeader> =
+        files.iter().filter_map(|f| f.header.as_ref()).collect();
+    let Some(first) = headers.first() else {
+        return Html::default();
+    };
+    let n = first.parties;
+    let filled: std::collections::HashSet<u16> = headers.iter().map(|h| h.party_index).collect();
+    html! {
+        <div class="fn-tss-slots" aria-hidden="true">
+            { for (0..n).map(|i| {
+                let has = filled.contains(&i);
+                html! {
+                    <span class="fn-tss-slot" data-filled={has.to_string()}>
+                        if has {
+                            { tss_shard_glyph(16) }
+                        }
+                    </span>
+                }
+            }) }
+        </div>
+    }
+}
+
 /// The create ceremony's animated act list: every act with its state —
 /// done (✓), active (pulsing), or still ahead — so a minute of Paillier
 /// arithmetic reads as progress rather than a stuck spinner.
@@ -2266,8 +2333,10 @@ fn tss_step_list(lang: Lang, current: Option<TssStep>) -> Html {
 }
 
 /// The one-line verdict under the picked-file list: enough shares, or what
-/// is still missing, or why these files cannot go together.
-fn tss_quorum_status(lang: Lang, files: &[TssLoadedFile]) -> Html {
+/// is still missing, or why these files cannot go together. Reaching the
+/// threshold is *the* moment of this screen — the shards become a key — so
+/// that state arrives with the fused-key artwork snapping in over a glow.
+fn tss_quorum_status(lang: Lang, skin: Skin, files: &[TssLoadedFile]) -> Html {
     let headers: Vec<&crate::api::tss::TssShareHeader> =
         files.iter().filter_map(|f| f.header.as_ref()).collect();
     let Some(first) = headers.first() else {
@@ -2292,13 +2361,25 @@ fn tss_quorum_status(lang: Lang, files: &[TssLoadedFile]) -> Html {
             </p>
         }
     } else {
+        // The quorum assembled: the machine wakes. A short activation
+        // sequence — dark flicker, a scanline sweep, the eye-flash — over
+        // the armed artwork, then the status line types itself in.
         html! {
-            <p class="fn-tss-quorum-ok">
-                { icons::check(14) }
-                { t(lang, Key::tss_files_loaded)
-                    .replace("{have}", &have.to_string())
-                    .replace("{need}", &need.to_string()) }
-            </p>
+            <>
+                <div class="fn-tss-armed" aria-hidden="true">
+                    <img src={crate::asset::img(skin, "tss-armed")} alt="" />
+                    <span class="fn-tss-armed__scan"></span>
+                    <span class="fn-tss-armed__flare"></span>
+                </div>
+                <p class="fn-tss-quorum-ok">
+                    { icons::check(14) }
+                    <span class="fn-tss-quorum-ok__text">
+                        { t(lang, Key::tss_files_loaded)
+                            .replace("{have}", &have.to_string())
+                            .replace("{need}", &need.to_string()) }
+                    </span>
+                </p>
+            </>
         }
     }
 }
@@ -2332,9 +2413,13 @@ fn tss_backup_panel(
                 { for created.shares.iter().enumerate().map(|(i, _)| {
                     let saved = downloaded.get(i).copied().unwrap_or(false);
                     let on_download = on_download.clone();
+                    // Staggered entrance: the shares land one after another,
+                    // which is what makes them read as n distinct objects
+                    // being handed over rather than one list appearing.
+                    let delay = format!("animation-delay: {}ms", i * 110);
                     html! {
-                        <li class="fn-tss-share" data-saved={saved.to_string()}>
-                            <span class="fn-tss-share__badge">{ (i + 1).to_string() }</span>
+                        <li class="fn-tss-share" data-saved={saved.to_string()} style={delay}>
+                            <span class="fn-tss-share__badge">{ tss_shard_glyph(14) }</span>
                             <span class="fn-grow">
                                 { t(lang, Key::tss_share_n)
                                     .replace("{i}", &(i + 1).to_string())

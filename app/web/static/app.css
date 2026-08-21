@@ -11543,6 +11543,269 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
   margin: 6px 0 0;
   color: var(--fn-accent, #40c8e0);
   font-size: 0.9em;
+  animation: fn-tss-quorum-in 0.4s ease;
+}
+
+@keyframes fn-tss-quorum-in {
+  from {
+    transform: translateY(4px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* The quorum assembled: the machine wakes. The armed artwork boots like a
+   Terminator coming online — near-black with a hesitant flicker, a scanline
+   sweeping down, the eye-flash blooming, then the settled glow. Timing is
+   one continuous 1.6 s sequence across img/scan/flare, tuned so the flash
+   lands as the scan finishes. */
+.fn-tss-armed {
+  position: relative;
+  width: min(200px, 60%);
+  margin: 10px auto 4px;
+  border-radius: 12px;
+  overflow: hidden;
+  animation: fn-tss-armed-glow 1.6s ease-out forwards;
+}
+
+.fn-tss-armed img {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+  animation: fn-tss-ignite 1.6s ease-out forwards;
+}
+
+@keyframes fn-tss-ignite {
+  0% {
+    filter: brightness(0.05) saturate(0.4);
+  }
+  22% {
+    filter: brightness(0.14) saturate(0.4);
+  }
+  28% {
+    filter: brightness(0.05) saturate(0.4);
+  }
+  45% {
+    filter: brightness(0.28) saturate(0.6);
+  }
+  62% {
+    filter: brightness(1.9) saturate(1.35);
+  }
+  100% {
+    filter: brightness(1) saturate(1);
+  }
+}
+
+@keyframes fn-tss-armed-glow {
+  0%,
+  55% {
+    box-shadow: none;
+  }
+  65% {
+    box-shadow: 0 0 46px rgba(64, 200, 224, 0.8);
+  }
+  100% {
+    box-shadow: 0 0 22px rgba(64, 200, 224, 0.35);
+  }
+}
+
+.fn-tss-armed__scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, rgba(64, 200, 224, 0.95), transparent);
+  opacity: 0;
+  animation: fn-tss-scan 0.65s ease-in 0.35s;
+}
+
+@keyframes fn-tss-scan {
+  from {
+    top: 0;
+    opacity: 1;
+  }
+  to {
+    top: 100%;
+    opacity: 0.2;
+  }
+}
+
+.fn-tss-armed__flare {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  background: radial-gradient(
+    circle at 38% 28%,
+    rgba(120, 235, 255, 0.95),
+    rgba(64, 200, 224, 0) 45%
+  );
+  opacity: 0;
+  animation: fn-tss-flare 0.9s ease-out 0.85s;
+}
+
+@keyframes fn-tss-flare {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+/* The status line types itself in once the ignition settles, caret and all
+   — terminal diction for a terminal moment. */
+.fn-tss-quorum-ok__text {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: bottom;
+  max-width: 100%;
+  border-right: 2px solid transparent;
+  animation:
+    fn-tss-type 0.8s steps(28) 1.15s backwards,
+    fn-tss-caret 0.7s step-end 1.15s 4;
+}
+
+@keyframes fn-tss-type {
+  from {
+    max-width: 0;
+  }
+  to {
+    max-width: 100%;
+  }
+}
+
+@keyframes fn-tss-caret {
+  0%,
+  100% {
+    border-right-color: transparent;
+  }
+  50% {
+    border-right-color: currentColor;
+  }
+}
+
+/* ---- the shard inventory ------------------------------------------------ */
+
+/* One socket per party; the shares in hand light theirs. */
+.fn-tss-slots {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 12px 0 6px;
+}
+
+.fn-tss-slot {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--fn-border, rgba(128, 128, 128, 0.4));
+  color: var(--fn-accent, #40c8e0);
+  transition: border-color 0.25s ease, background-color 0.25s ease;
+}
+
+.fn-tss-slot[data-filled="true"] {
+  border-style: solid;
+  border-color: var(--fn-accent, #40c8e0);
+  background: rgba(64, 200, 224, 0.1);
+  box-shadow: 0 0 12px rgba(64, 200, 224, 0.35);
+}
+
+.fn-tss-slot[data-filled="true"] svg {
+  animation: fn-tss-slot-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.4);
+  filter: drop-shadow(0 0 5px rgba(64, 200, 224, 0.8));
+}
+
+@keyframes fn-tss-slot-in {
+  from {
+    transform: scale(0.2) rotate(-25deg);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+/* ---- the forge's energy bar --------------------------------------------- */
+
+.fn-tss-energybar {
+  height: 4px;
+  margin: 10px 0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(64, 200, 224, 0.12);
+}
+
+.fn-tss-energybar span {
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--fn-accent, #40c8e0), transparent);
+  animation: fn-tss-energy 1.4s ease-in-out infinite;
+}
+
+@keyframes fn-tss-energy {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(360%);
+  }
+}
+
+/* The forge, mid-ceremony: the shard artwork breathing inside a slowly
+   rotating energy ring. Pure decoration over the act list's real states. */
+.fn-tss-forging {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 8px 0 12px;
+}
+
+.fn-tss-forging img {
+  width: min(160px, 45%);
+  border-radius: 50%;
+  animation: fn-tss-breathe 2.4s ease-in-out infinite;
+}
+
+.fn-tss-forging__ring {
+  position: absolute;
+  width: min(200px, 58%);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    rgba(64, 200, 224, 0.55) 40deg,
+    transparent 90deg,
+    transparent 180deg,
+    rgba(64, 200, 224, 0.35) 220deg,
+    transparent 270deg
+  );
+  -webkit-mask: radial-gradient(closest-side, transparent 88%, #000 90%);
+  mask: radial-gradient(closest-side, transparent 88%, #000 90%);
+  animation: fn-tss-orbit 3.5s linear infinite;
+}
+
+@keyframes fn-tss-orbit {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ---- the backup panel's share cards ------------------------------------- */
@@ -11563,14 +11826,45 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
   content: none;
 }
 
+/* Written against `.fn-warnpanel li`'s two-column grid (10px + 1fr), which
+   otherwise wins on specificity and crushes the badge into the label and
+   the button into the 10px marker column. The cards land as a staggered
+   drop (delay set inline per card) — n distinct objects being handed over,
+   not one list appearing. */
+.fn-warnpanel li.fn-tss-share,
 .fn-tss-share {
   display: flex;
+  grid-template-columns: none;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
   border: 1px solid var(--fn-border, rgba(128, 128, 128, 0.4));
   border-radius: 10px;
   transition: border-color 0.25s ease;
+  animation: fn-tss-share-drop 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.15) backwards;
+}
+
+@keyframes fn-tss-share-drop {
+  from {
+    transform: translateY(14px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.fn-warnpanel li.fn-tss-share::before {
+  content: none;
+}
+
+/* The card's button sizes to its own label — never to the warn panel's
+   equal-width row rule or anything else's flex arithmetic. */
+.fn-tss-share > .topcoat-button {
+  flex: 0 0 auto;
+  inline-size: auto;
+  min-inline-size: max-content;
 }
 
 .fn-tss-share[data-saved="true"] {
@@ -11585,9 +11879,14 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: 0.85em;
+  color: var(--fn-accent, #40c8e0);
   border: 2px solid var(--fn-accent, #40c8e0);
+}
+
+/* Claimed: the card arms — border and shard light up together. */
+.fn-tss-share[data-saved="true"] .fn-tss-share__badge {
+  background: rgba(64, 200, 224, 0.12);
+  box-shadow: 0 0 10px rgba(64, 200, 224, 0.45);
 }
 
 .fn-tss-share__saved {
@@ -11609,7 +11908,18 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
 @media (prefers-reduced-motion: reduce) {
   .fn-tss-hero[data-busy="true"] img,
   .fn-tss-step[data-state="active"] .fn-tss-step__dot,
-  .fn-tss-share__saved {
+  .fn-tss-share,
+  .fn-tss-share__saved,
+  .fn-tss-forging img,
+  .fn-tss-forging__ring,
+  .fn-tss-armed,
+  .fn-tss-armed img,
+  .fn-tss-armed__scan,
+  .fn-tss-armed__flare,
+  .fn-tss-slot[data-filled="true"] svg,
+  .fn-tss-energybar span,
+  .fn-tss-quorum-ok,
+  .fn-tss-quorum-ok__text {
     animation: none;
   }
 }
