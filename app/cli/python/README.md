@@ -12,7 +12,7 @@ the required `msgHash` (SHA-256 of the trimmed content).
 Python 3.11+.
 
 ```sh
-cd app/clients/python
+cd app/cli/python
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 ```
