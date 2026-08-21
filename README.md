@@ -12,8 +12,9 @@ plaintext messages or symmetric keys.
 - **Wallet** — send native CRO/TCRO and USDC on Cronos (mainnet 25 /
   testnet 338); transactions are signed in the browser, the server never
   sees a key. Or create an **m-of-n TSS wallet**: the key never exists in
-  one piece — your server holds passphrase-sealed shares and signs by
-  CGGMP21 threshold ceremony ([`PROTOCOL.md`](PROTOCOL.md) §20).
+  one piece — you hold n passphrase-sealed share files, any m of them sign
+  by CGGMP21 threshold ceremony, and losing up to n−m of them loses
+  nothing ([`PROTOCOL.md`](PROTOCOL.md) §20).
 - **AI assistant** — Grok, OpenAI, Anthropic and Gemini behind one dialog:
   draft, reply-in-context, image generation, and video generation. Bring your
   own keys; they stay in your browser. Generated media is stored on your own

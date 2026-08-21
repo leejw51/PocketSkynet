@@ -11,7 +11,6 @@ use pocketskynet_tss::{dkg, eth, sign, store, TssError};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_of_three_dkg_signs_with_any_quorum_and_never_below_it() {
-    let dir = tempdir();
     let (t, n) = (2u16, 3u16);
 
     // 1. DKG.
@@ -28,47 +27,48 @@ async fn two_of_three_dkg_signs_with_any_quorum_and_never_below_it() {
         assert_eq!(eth::eth_address(s).unwrap(), address);
     }
 
-    // 2. Seal into the wallet file and read it back through the passphrase.
-    let info = store::WalletInfo {
-        address: address.as_str().to_owned(),
-        threshold: t,
-        parties: n,
-        created_at: store::now_secs(),
-    };
-    let secrets = store::WalletSecrets {
-        shares: shares
-            .iter()
-            .enumerate()
-            .map(|(i, s)| store::StoredShare {
-                party_index: i as u16,
-                share: s.clone(),
-            })
-            .collect(),
-        enc_priv_hex: format!("0x{}", "11".repeat(32)),
-        binding_sig: format!("0x{}", "22".repeat(65)),
-    };
-    store::save_wallet(&dir, &info, &secrets, "test passphrase", false).expect("save");
-    let (_, loaded) = store::open_wallet(&dir, &address, "test passphrase").expect("open");
-    assert_eq!(loaded.shares.len(), usize::from(n));
+    // 2. Seal into the n user-held share files and open a quorum back
+    // through the passphrase — the custody round trip with *real* shares.
+    let raw: Vec<serde_json::Value> = shares
+        .iter()
+        .map(|s| serde_json::to_value(s).unwrap())
+        .collect();
+    let files = store::seal_shares(
+        &address,
+        t,
+        n,
+        &raw,
+        &format!("0x{}", "11".repeat(32)),
+        &format!("0x{}", "22".repeat(65)),
+        "test passphrase",
+    )
+    .expect("seal");
+    assert_eq!(files.len(), usize::from(n));
 
-    // 3. Sign an EIP-191 message with subset {0, 1} of the *reloaded* shares.
+    let reload = |quorum: &[usize]| -> Vec<(u16, pocketskynet_tss::Share)> {
+        let picked: Vec<store::ShareFile> = quorum.iter().map(|&i| files[i].clone()).collect();
+        let opened = store::open_shares(&picked, "test passphrase").expect("open");
+        assert_eq!(opened.address, address);
+        opened
+            .signers
+            .into_iter()
+            .map(|(i, v)| (i, serde_json::from_value(v).expect("a real key share")))
+            .collect()
+    };
+
+    // 3. Sign an EIP-191 message with the quorum {0, 1} of reloaded shares.
     let message = "hello cronos, threshold edition";
     let prehash = eip191::eip191_digest(message);
-    let subset_01: Vec<(u16, pocketskynet_tss::Share)> = loaded.shares[..2]
-        .iter()
-        .map(|s| (s.party_index, s.share.clone()))
-        .collect();
+    let subset_01 = reload(&[0, 1]);
     let sig = sign::sign_prehash(&subset_01, prehash, seed(b"sig1"))
         .await
         .expect("sign with parties 0,1");
     assert_signature_is_ordinary(&sig, message, &address);
 
-    // 4. A different quorum — parties {0, 2} — signs for the same address.
-    // This is the m-of-n property the 2-of-2 reference could not show.
-    let subset_02: Vec<(u16, pocketskynet_tss::Share)> = [0usize, 2]
-        .iter()
-        .map(|&i| (loaded.shares[i].party_index, loaded.shares[i].share.clone()))
-        .collect();
+    // 4. A different quorum — parties {0, 2}, i.e. file 1 lost — signs for
+    // the same address. This is the m-of-n property the 2-of-2 reference
+    // could not show.
+    let subset_02 = reload(&[0, 2]);
     let sig2 = sign::sign_prehash(&subset_02, prehash, seed(b"sig2"))
         .await
         .expect("sign with parties 0,2");
@@ -116,10 +116,4 @@ fn seed(tag: &[u8; 4]) -> [u8; 32] {
     let mut eid = [1u8; 32];
     eid[..4].copy_from_slice(tag);
     eid
-}
-
-fn tempdir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("ps-tss-e2e-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
 }

@@ -216,11 +216,6 @@ impl Config {
         self.data_dir.join("pocketskynet.db")
     }
 
-    /// Passphrase-sealed TSS wallet files (docs/CRYPTO.md §15.4).
-    pub fn tss_dir(&self) -> PathBuf {
-        self.data_dir.join("tss")
-    }
-
     /// Whether this deployment generates its own CA into `tls_dir`.
     ///
     /// True for self-signed HTTPS, and *also* for plain HTTP with HTTP/3 on:

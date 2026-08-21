@@ -52,15 +52,19 @@ enum Signer {
     /// happens in `eip1193` before a `SessionKeys` is ever built.
     External(WalletAddress),
     /// A threshold (m-of-n) wallet: the key exists nowhere, and every
-    /// signature is a ceremony run by the user's own server
-    /// (docs/CRYPTO.md §15). This session holds the passphrase that
-    /// authorizes ceremonies — in memory only, like a pasted key, and gone on
-    /// reload. Signing is an async round trip, so like `External` it cannot
-    /// offer the synchronous `sign_transaction`; unlike `External`, the
-    /// send paths *can* sign through [`SessionKeys::tss_signing`].
+    /// signature is a ceremony run by the user's own server over a quorum
+    /// of the user's sealed share files (docs/CRYPTO.md §15). This session
+    /// holds those files and the passphrase that opens them — in memory
+    /// only, like a pasted key, and gone on reload. Signing is an async
+    /// round trip, so like `External` it cannot offer the synchronous
+    /// `sign_transaction`; unlike `External`, the send paths *can* sign
+    /// through [`SessionKeys::tss_signing`].
     Tss {
         address: WalletAddress,
         passphrase: String,
+        /// The sealed share files presented at sign-in — at least the
+        /// wallet's threshold of them, opaque to this process.
+        shares: Vec<serde_json::Value>,
     },
 }
 
@@ -127,14 +131,16 @@ impl SessionKeys {
         })
     }
 
-    /// Build a session for a TSS wallet from what `/api/tss/session-keys`
-    /// released against the passphrase: the stored E2EE private key and the
-    /// ceremony-signed binding (docs/CRYPTO.md §15.2). Nothing is derived —
-    /// threshold signatures are not deterministic, so there is nothing sound
-    /// to derive from.
+    /// Build a session for a TSS wallet from what the sign-in quorum
+    /// unsealed: the stored E2EE private key and the ceremony-signed
+    /// binding (docs/CRYPTO.md §15.2). Nothing is derived — threshold
+    /// signatures are not deterministic, so there is nothing sound to
+    /// derive from. The share files stay with the session so transaction
+    /// ceremonies can present them again.
     pub fn from_tss(
         address: WalletAddress,
         passphrase: String,
+        shares: Vec<serde_json::Value>,
         enc_priv_hex: &str,
         binding_sig: String,
     ) -> Result<Self, CryptoError> {
@@ -143,6 +149,7 @@ impl SessionKeys {
             signer: Signer::Tss {
                 address,
                 passphrase,
+                shares,
             },
             encryption,
             binding_sig,
@@ -160,17 +167,17 @@ impl SessionKeys {
         matches!(self.signer, Signer::Local(_))
     }
 
-    /// For a TSS session: what a ceremony needs — the wallet address and the
-    /// passphrase. `None` for every other signer.
+    /// For a TSS session: what a ceremony needs — the quorum of share
+    /// files and the passphrase that opens them. `None` for every other
+    /// signer.
     ///
     /// Cloned out rather than borrowed so the caller can drop the `RefCell`
     /// borrow before awaiting the server round trip.
-    pub fn tss_signing(&self) -> Option<(WalletAddress, String)> {
+    pub fn tss_signing(&self) -> Option<(String, Vec<serde_json::Value>)> {
         match &self.signer {
             Signer::Tss {
-                address,
-                passphrase,
-            } => Some((address.clone(), passphrase.clone())),
+                passphrase, shares, ..
+            } => Some((passphrase.clone(), shares.clone())),
             _ => None,
         }
     }
@@ -669,11 +676,22 @@ mod tests {
     #[test]
     fn a_tss_session_is_a_full_identity_with_a_ceremony_path_not_a_local_key() {
         // Built the way `actions::sign_in_with_tss` builds one: from the
-        // stored E2EE key and binding the server released.
+        // sealed E2EE key and binding the sign-in quorum unsealed, plus the
+        // opaque share files themselves.
         let enc_priv = format!("0x{}", "5e".repeat(32));
         let binding_sig = format!("0x{}", "3d".repeat(65));
-        let mut s =
-            SessionKeys::from_tss(addr(7), "open sesame".into(), &enc_priv, binding_sig).unwrap();
+        let files = vec![
+            serde_json::json!({ "partyIndex": 0 }),
+            serde_json::json!({ "partyIndex": 2 }),
+        ];
+        let mut s = SessionKeys::from_tss(
+            addr(7),
+            "open sesame".into(),
+            files.clone(),
+            &enc_priv,
+            binding_sig,
+        )
+        .unwrap();
 
         // A publishable E2EE identity, same as any other signer's.
         assert_eq!(s.public_key_hex().len(), 130);
@@ -686,17 +704,19 @@ mod tests {
         let again = SessionKeys::from_tss(
             addr(7),
             "open sesame".into(),
+            files.clone(),
             &enc_priv,
             format!("0x{}", "3d".repeat(65)),
         )
         .unwrap();
         assert_eq!(s.public_key_hex(), again.public_key_hex());
 
-        // No local key: the sync door refuses, the ceremony door opens.
+        // No local key: the sync door refuses, the ceremony door opens —
+        // with the same files and passphrase the session was built from.
         assert!(!s.can_sign_locally());
-        let (address, passphrase) = s.tss_signing().expect("a ceremony context");
-        assert_eq!(address, addr(7));
+        let (passphrase, shares) = s.tss_signing().expect("a ceremony context");
         assert_eq!(passphrase, "open sesame");
+        assert_eq!(shares, files);
 
         // And no legacy healing — a TSS wallet postdates the salted scheme.
         assert!(matches!(s.legacy(), Err(CryptoError::NoLocalKey)));

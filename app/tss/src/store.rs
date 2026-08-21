@@ -1,9 +1,12 @@
-//! Passphrase-sealed wallet persistence (CRYPTO.md §15.4).
+//! Passphrase-sealed **share files** (CRYPTO.md §15.4).
 //!
-//! One wallet = one file `<dir>/<address>.wallet.json`, mode 0600. The
-//! header (address, t, n, KDF parameters) is cleartext so the login screen
-//! can list wallets without a passphrase; the shares, the E2EE private key
-//! and the binding signature live under an encrypt-then-MAC seal:
+//! Custody is the user's, not the server's: key generation hands back `n`
+//! sealed files — one per party — and the server keeps **nothing** on disk.
+//! Any `t` of the files sign; fewer than `t` can do nothing; losing up to
+//! `n − t` of them loses nothing. Each file carries the whole E2EE identity
+//! (§15.2) so any quorum also recovers messaging.
+//!
+//! The seal, per file:
 //!
 //! ```text
 //! okm    = PBKDF2-HMAC-SHA256(passphrase, salt, 600_000) → 64 bytes
@@ -11,9 +14,10 @@
 //! ct     = AES-256-CBC(encKey, iv) over the secrets JSON (PKCS-7)
 //! mac    = HMAC-SHA256(macKey, iv ‖ ct)      — verified before decryption
 //! ```
-
-use std::io::Write;
-use std::path::{Path, PathBuf};
+//!
+//! One wallet's files share a KDF salt (so opening a quorum costs one key
+//! derivation) but never an IV. The header — address, `t`, `n`, party index
+//! — is cleartext, so a login screen can name a file without a passphrase.
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use base64::Engine;
@@ -21,215 +25,239 @@ use hmac::{Hmac, Mac};
 use pocketskynet_core::WalletAddress;
 use sha2::Sha256;
 
-use crate::{Share, TssError};
+use crate::TssError;
 
-/// Current on-disk format version; bump when the layout changes.
+/// Current share-file format version; bump when the layout changes.
 pub const FORMAT_VERSION: u32 = 1;
 
-/// PBKDF2 work factor. The passphrase gates every ceremony, so this is the
-/// entire cost of a stolen-file guess; OWASP's 2023 floor for
+/// The `type` tag every share file carries, mirroring the wallet-backup
+/// convention (`pocketskynet-wallet-backup`) so a file manager full of JSON
+/// stays legible.
+pub const FILE_TYPE: &str = "pocketskynet-tss-share";
+
+/// PBKDF2 work factor. The passphrase is the only thing between a found
+/// share file and its key material; OWASP's 2023 floor for
 /// PBKDF2-HMAC-SHA256 is 600k and that is what ships.
 pub const KDF_ITERATIONS: u32 = 600_000;
 
-const SUFFIX: &str = ".wallet.json";
-
-/// The cleartext header — everything the UI may know before a passphrase.
+/// One party's sealed share — the unit the user downloads, stores, and
+/// later presents `t` of.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WalletInfo {
-    /// Lowercase `0x…` — the wallet's identity.
+pub struct ShareFile {
+    /// Always [`FILE_TYPE`]; checked on open.
+    #[serde(rename = "type")]
+    pub file_type: String,
+    pub version: u32,
+    /// Lowercase `0x…` — which wallet this share belongs to.
     pub address: String,
     /// `t`: how many shares a signing ceremony needs.
     pub threshold: u16,
     /// `n`: how many shares exist.
     pub parties: u16,
+    /// This share's index at keygen, `0..n`.
+    pub party_index: u16,
     /// Unix seconds at creation.
     pub created_at: u64,
-}
-
-/// The full on-disk file: header + sealed blob.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WalletFile {
-    pub version: u32,
-    #[serde(flatten)]
-    pub info: WalletInfo,
-    /// PBKDF2 salt, 16 bytes hex.
+    /// PBKDF2 salt, 16 bytes hex — identical across one wallet's files.
     pub kdf_salt: String,
     pub kdf_iterations: u32,
-    /// AES-CBC IV, 16 bytes hex.
+    /// AES-CBC IV, 16 bytes hex — unique per file.
     pub iv: String,
-    /// The sealed secrets JSON, base64.
+    /// The sealed [`ShareSecrets`] JSON, base64.
     pub ciphertext: String,
     /// HMAC-SHA256 over `iv ‖ ciphertext`, 32 bytes hex.
     pub mac: String,
 }
 
-/// One party's share, tagged with its keygen index so the file format
-/// already supports distributing shares across holders later.
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct StoredShare {
-    pub party_index: u16,
-    pub share: Share,
-}
-
-/// What lives under the seal (§15.2: the E2EE keypair is independent of any
-/// signature and shares the shares' custody).
+/// What lives under one file's seal.
+///
+/// The share itself is kept as raw JSON rather than a typed
+/// `cggmp21::KeyShare`: sealing and unsealing are transport, and only the
+/// signing layer needs (and validates) the real type.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WalletSecrets {
-    pub shares: Vec<StoredShare>,
-    /// E2EE private key, `0x` + 64 hex.
+pub struct ShareSecrets {
+    /// The cggmp21 key share, verbatim.
+    pub share: serde_json::Value,
+    /// E2EE private key, `0x` + 64 hex (§15.2 — stored, never derived).
     pub enc_priv_hex: String,
     /// The wallet's ceremony signature over the key-binding message.
     pub binding_sig: String,
 }
 
-fn wallet_path(dir: &Path, address: &WalletAddress) -> PathBuf {
-    // `WalletAddress` is validated `0x` + 40 lowercase hex — safe as a
-    // filename by construction.
-    dir.join(format!("{}{SUFFIX}", address.as_str()))
+/// Everything a quorum of opened files yields.
+pub struct OpenedWallet {
+    pub address: WalletAddress,
+    pub threshold: u16,
+    pub parties: u16,
+    /// Exactly `threshold` `(party_index, share_json)` pairs, ascending.
+    pub signers: Vec<(u16, serde_json::Value)>,
+    pub enc_priv_hex: String,
+    pub binding_sig: String,
 }
 
-pub fn wallet_exists(dir: &Path, address: &WalletAddress) -> bool {
-    wallet_path(dir, address).exists()
-}
-
-/// Seal and write a wallet. Refuses to overwrite unless `force` — the old
-/// shares would be gone for good.
-pub fn save_wallet(
-    dir: &Path,
-    info: &WalletInfo,
-    secrets: &WalletSecrets,
+/// Seal one wallet's `n` shares into `n` files under one passphrase.
+///
+/// `shares[i]` must be party `i`'s share. All files reuse one KDF salt (one
+/// derivation to open a quorum) and each gets its own IV.
+pub fn seal_shares(
+    address: &WalletAddress,
+    threshold: u16,
+    parties: u16,
+    shares: &[serde_json::Value],
+    enc_priv_hex: &str,
+    binding_sig: &str,
     passphrase: &str,
-    force: bool,
-) -> Result<PathBuf, TssError> {
-    let address = WalletAddress::new(&info.address)
-        .map_err(|e| TssError::Store(format!("bad address in wallet info: {e}")))?;
-    let path = wallet_path(dir, &address);
-    if path.exists() && !force {
-        return Err(TssError::WalletExists);
-    }
-    std::fs::create_dir_all(dir).map_err(|e| TssError::Store(format!("creating {dir:?}: {e}")))?;
-    restrict_dir(dir);
-
-    let plaintext = serde_json::to_vec(secrets)
-        .map_err(|e| TssError::Store(format!("encoding secrets: {e}")))?;
-
-    let salt = pocketskynet_core::random::bytes::<16>().map_err(|_| TssError::Entropy)?;
-    let iv = pocketskynet_core::random::bytes::<16>().map_err(|_| TssError::Entropy)?;
-    let (enc_key, mac_key) = derive_keys(passphrase, &salt, KDF_ITERATIONS);
-
-    let ct = cbc::Encryptor::<aes::Aes256>::new(&enc_key.into(), &iv.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
-    let mac = seal_mac(&mac_key, &iv, &ct);
-
-    let file = WalletFile {
-        version: FORMAT_VERSION,
-        info: info.clone(),
-        kdf_salt: hex::encode(salt),
-        kdf_iterations: KDF_ITERATIONS,
-        iv: hex::encode(iv),
-        ciphertext: base64::engine::general_purpose::STANDARD.encode(&ct),
-        mac: hex::encode(mac),
-    };
-    let json = serde_json::to_vec_pretty(&file)
-        .map_err(|e| TssError::Store(format!("encoding wallet file: {e}")))?;
-    write_owner_only(&path, &json)
-        .map_err(|e| TssError::Store(format!("writing {path:?}: {e}")))?;
-    Ok(path)
-}
-
-/// Every wallet in `dir`, headers only, newest first. Unreadable files are
-/// skipped rather than failing the listing — one corrupt file must not make
-/// the login screen claim there are no wallets at all.
-pub fn list_wallets(dir: &Path) -> Vec<WalletInfo> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut wallets: Vec<WalletInfo> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().ends_with(SUFFIX))
-        .filter_map(|e| {
-            let bytes = std::fs::read(e.path()).ok()?;
-            let file: WalletFile = serde_json::from_slice(&bytes).ok()?;
-            (file.version == FORMAT_VERSION).then_some(file.info)
-        })
-        .collect();
-    wallets.sort_by_key(|w| std::cmp::Reverse(w.created_at));
-    wallets
-}
-
-fn read_file(dir: &Path, address: &WalletAddress) -> Result<WalletFile, TssError> {
-    let path = wallet_path(dir, address);
-    if !path.exists() {
-        return Err(TssError::WalletNotFound);
-    }
-    let bytes =
-        std::fs::read(&path).map_err(|e| TssError::Store(format!("reading {path:?}: {e}")))?;
-    let file: WalletFile = serde_json::from_slice(&bytes)
-        .map_err(|e| TssError::Store(format!("parsing {path:?}: {e}")))?;
-    if file.version != FORMAT_VERSION {
+) -> Result<Vec<ShareFile>, TssError> {
+    if shares.len() != usize::from(parties) {
         return Err(TssError::Store(format!(
-            "unsupported wallet format version {} in {path:?}",
-            file.version
+            "expected {parties} shares to seal, got {}",
+            shares.len()
         )));
     }
-    Ok(file)
+    let salt = pocketskynet_core::random::bytes::<16>().map_err(|_| TssError::Entropy)?;
+    let (enc_key, mac_key) = derive_keys(passphrase, &salt, KDF_ITERATIONS);
+    let created_at = now_secs();
+
+    let mut files = Vec::with_capacity(shares.len());
+    for (i, share) in shares.iter().enumerate() {
+        let secrets = ShareSecrets {
+            share: share.clone(),
+            enc_priv_hex: enc_priv_hex.to_owned(),
+            binding_sig: binding_sig.to_owned(),
+        };
+        let plaintext = serde_json::to_vec(&secrets)
+            .map_err(|e| TssError::Store(format!("encoding share {i}: {e}")))?;
+        let iv = pocketskynet_core::random::bytes::<16>().map_err(|_| TssError::Entropy)?;
+        let ct = cbc::Encryptor::<aes::Aes256>::new(&enc_key.into(), &iv.into())
+            .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+        let mac = seal_mac(&mac_key, &iv, &ct);
+        files.push(ShareFile {
+            file_type: FILE_TYPE.to_owned(),
+            version: FORMAT_VERSION,
+            address: address.as_str().to_owned(),
+            threshold,
+            parties,
+            party_index: i as u16,
+            created_at,
+            kdf_salt: hex::encode(salt),
+            kdf_iterations: KDF_ITERATIONS,
+            iv: hex::encode(iv),
+            ciphertext: base64::engine::general_purpose::STANDARD.encode(&ct),
+            mac: hex::encode(mac),
+        });
+    }
+    Ok(files)
 }
 
-/// Unseal a wallet with its passphrase. The MAC is verified (constant-time)
-/// before any decryption is attempted, and every failure mode from there —
-/// bad MAC, bad padding, bad JSON — collapses into [`TssError::BadPassphrase`]
-/// on purpose: distinguishing them helps only an attacker with a corrupted
-/// file oracle.
-pub fn open_wallet(
-    dir: &Path,
-    address: &WalletAddress,
-    passphrase: &str,
-) -> Result<(WalletInfo, WalletSecrets), TssError> {
-    let file = read_file(dir, address)?;
+/// Open a quorum of share files with the wallet passphrase.
+///
+/// Accepts any number of files **at or above** the threshold — presenting a
+/// spare costs nothing, and "bring what you have" is friendlier than "bring
+/// exactly t". Duplicated party indexes collapse to one; the lowest `t`
+/// distinct parties sign. Every file must belong to the same wallet.
+///
+/// The MAC is verified (constant-time) before decryption, and bad MAC / bad
+/// padding / bad JSON all collapse into [`TssError::BadPassphrase`] —
+/// distinguishing them helps only an attacker with a corruption oracle.
+pub fn open_shares(files: &[ShareFile], passphrase: &str) -> Result<OpenedWallet, TssError> {
+    let first = files
+        .first()
+        .ok_or_else(|| TssError::InvalidSigners("no share files provided".into()))?;
+    if first.file_type != FILE_TYPE || first.version != FORMAT_VERSION {
+        return Err(TssError::Store(format!(
+            "not a version-{FORMAT_VERSION} {FILE_TYPE} file"
+        )));
+    }
+    let address = WalletAddress::new(&first.address)
+        .map_err(|e| TssError::Store(format!("bad address in share file: {e}")))?;
+    crate::validate_params(first.threshold, first.parties)?;
 
-    let salt = hex::decode(&file.kdf_salt).map_err(|_| TssError::BadPassphrase)?;
-    let iv_bytes = hex::decode(&file.iv).map_err(|_| TssError::BadPassphrase)?;
-    let iv: [u8; 16] = iv_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| TssError::BadPassphrase)?;
-    let ct = base64::engine::general_purpose::STANDARD
-        .decode(&file.ciphertext)
-        .map_err(|_| TssError::BadPassphrase)?;
-    let mac = hex::decode(&file.mac).map_err(|_| TssError::BadPassphrase)?;
+    // One wallet, one seal family: any header disagreement is two different
+    // wallets' files mixed together, named before any passphrase work.
+    for f in files {
+        if f.file_type != FILE_TYPE || f.version != FORMAT_VERSION {
+            return Err(TssError::Store(
+                "mixed or unsupported share-file versions".into(),
+            ));
+        }
+        if f.address != first.address
+            || f.threshold != first.threshold
+            || f.parties != first.parties
+            || f.kdf_salt != first.kdf_salt
+            || f.kdf_iterations != first.kdf_iterations
+        {
+            return Err(TssError::InvalidSigners(
+                "these share files belong to different wallets".into(),
+            ));
+        }
+        if f.party_index >= f.parties {
+            return Err(TssError::Store(
+                "share file names an impossible party".into(),
+            ));
+        }
+    }
 
-    let (enc_key, mac_key) = derive_keys(passphrase, &salt, file.kdf_iterations);
+    // Distinct parties, lowest first; a duplicate file is harmless.
+    let mut chosen: Vec<&ShareFile> = Vec::new();
+    let mut sorted: Vec<&ShareFile> = files.iter().collect();
+    sorted.sort_by_key(|f| f.party_index);
+    for f in sorted {
+        if chosen.last().map(|c| c.party_index) != Some(f.party_index) {
+            chosen.push(f);
+        }
+    }
+    if chosen.len() < usize::from(first.threshold) {
+        return Err(TssError::InvalidSigners(format!(
+            "this wallet needs {} distinct shares to sign, got {}",
+            first.threshold,
+            chosen.len()
+        )));
+    }
+    chosen.truncate(usize::from(first.threshold));
 
-    let mut verifier = <Hmac<Sha256> as Mac>::new_from_slice(&mac_key).expect("any key length");
-    verifier.update(&iv);
-    verifier.update(&ct);
-    verifier
-        .verify_slice(&mac)
-        .map_err(|_| TssError::BadPassphrase)?;
+    let salt = hex::decode(&first.kdf_salt).map_err(|_| TssError::BadPassphrase)?;
+    let (enc_key, mac_key) = derive_keys(passphrase, &salt, first.kdf_iterations);
 
-    let plaintext = cbc::Decryptor::<aes::Aes256>::new(&enc_key.into(), &iv.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(&ct)
-        .map_err(|_| TssError::BadPassphrase)?;
-    let secrets: WalletSecrets =
-        serde_json::from_slice(&plaintext).map_err(|_| TssError::BadPassphrase)?;
-    Ok((file.info, secrets))
-}
+    let mut signers = Vec::with_capacity(chosen.len());
+    let mut identity: Option<(String, String)> = None;
+    for f in chosen {
+        let iv_bytes = hex::decode(&f.iv).map_err(|_| TssError::BadPassphrase)?;
+        let iv: [u8; 16] = iv_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| TssError::BadPassphrase)?;
+        let ct = base64::engine::general_purpose::STANDARD
+            .decode(&f.ciphertext)
+            .map_err(|_| TssError::BadPassphrase)?;
+        let mac = hex::decode(&f.mac).map_err(|_| TssError::BadPassphrase)?;
 
-/// Delete a wallet — but only for a caller who can open it. Deletion without
-/// the passphrase would let anyone who can reach the API destroy a wallet
-/// they cannot use.
-pub fn delete_wallet(
-    dir: &Path,
-    address: &WalletAddress,
-    passphrase: &str,
-) -> Result<(), TssError> {
-    open_wallet(dir, address, passphrase)?;
-    let path = wallet_path(dir, address);
-    std::fs::remove_file(&path).map_err(|e| TssError::Store(format!("removing {path:?}: {e}")))
+        let mut verifier = <Hmac<Sha256> as Mac>::new_from_slice(&mac_key).expect("any key length");
+        verifier.update(&iv);
+        verifier.update(&ct);
+        verifier
+            .verify_slice(&mac)
+            .map_err(|_| TssError::BadPassphrase)?;
+
+        let plaintext = cbc::Decryptor::<aes::Aes256>::new(&enc_key.into(), &iv.into())
+            .decrypt_padded_vec_mut::<Pkcs7>(&ct)
+            .map_err(|_| TssError::BadPassphrase)?;
+        let secrets: ShareSecrets =
+            serde_json::from_slice(&plaintext).map_err(|_| TssError::BadPassphrase)?;
+        identity.get_or_insert((secrets.enc_priv_hex, secrets.binding_sig));
+        signers.push((f.party_index, secrets.share));
+    }
+    let (enc_priv_hex, binding_sig) = identity.expect("threshold ≥ 2 files opened");
+
+    Ok(OpenedWallet {
+        address,
+        threshold: first.threshold,
+        parties: first.parties,
+        signers,
+        enc_priv_hex,
+        binding_sig,
+    })
 }
 
 fn derive_keys(passphrase: &str, salt: &[u8], iterations: u32) -> ([u8; 32], [u8; 32]) {
@@ -249,38 +277,6 @@ fn seal_mac(mac_key: &[u8; 32], iv: &[u8; 16], ct: &[u8]) -> [u8; 32] {
     mac.finalize().into_bytes().into()
 }
 
-/// Writes `bytes` with the file created 0600 from the start — a
-/// chmod-after-write would leave a window where the seal is world-readable.
-fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(path)?;
-    // `mode` only applies on creation; tighten a pre-existing file too.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
-    f.write_all(bytes)?;
-    f.sync_all()
-}
-
-/// Owner-only on the directory as well, so a later file created by any path
-/// is not exposed by a permissive parent. Best-effort — the files themselves
-/// are 0600 regardless.
-fn restrict_dir(dir: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-    }
-}
-
 /// Unix seconds now — the `created_at` stamp.
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -293,128 +289,134 @@ pub fn now_secs() -> u64 {
 mod tests {
     use super::*;
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ps-tss-store-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
-    fn info(addr: &str) -> WalletInfo {
-        WalletInfo {
-            address: addr.into(),
-            threshold: 2,
-            parties: 3,
-            created_at: 1_755_000_000,
-        }
-    }
-
-    /// Secrets with no shares: the seal is over JSON and does not care, and
-    /// a real `Share` only exists after a multi-minute DKG — that round-trip
-    /// is the integration test's job.
-    fn secrets() -> WalletSecrets {
-        WalletSecrets {
-            shares: Vec::new(),
-            enc_priv_hex: format!("0x{}", "ab".repeat(32)),
-            binding_sig: format!("0x{}", "cd".repeat(65)),
-        }
-    }
-
     const ADDR: &str = "0x00112233445566778899aabbccddeeff00112233";
 
+    fn address() -> WalletAddress {
+        WalletAddress::new(ADDR).unwrap()
+    }
+
+    /// Dummy share payloads: the seal is over JSON and does not care — a
+    /// real `cggmp21` share only exists after a multi-minute DKG, and that
+    /// round-trip is the integration test's job.
+    fn dummy_shares(n: usize) -> Vec<serde_json::Value> {
+        (0..n)
+            .map(|i| serde_json::json!({ "core": { "i": i }, "aux": {} }))
+            .collect()
+    }
+
+    fn sealed(t: u16, n: u16, passphrase: &str) -> Vec<ShareFile> {
+        seal_shares(
+            &address(),
+            t,
+            n,
+            &dummy_shares(usize::from(n)),
+            &format!("0x{}", "ab".repeat(32)),
+            &format!("0x{}", "cd".repeat(65)),
+            passphrase,
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn a_wallet_round_trips_through_its_passphrase() {
-        let dir = tempdir("roundtrip");
-        let address = WalletAddress::new(ADDR).unwrap();
-        save_wallet(&dir, &info(ADDR), &secrets(), "correct horse", false).unwrap();
+    fn any_quorum_of_files_opens_the_wallet() {
+        let files = sealed(2, 3, "correct horse");
 
-        let (got_info, got_secrets) = open_wallet(&dir, &address, "correct horse").unwrap();
-        assert_eq!(got_info, info(ADDR));
-        assert_eq!(got_secrets.enc_priv_hex, secrets().enc_priv_hex);
-        assert_eq!(got_secrets.binding_sig, secrets().binding_sig);
+        // The full set works, a strict subset works, and — the lost-share
+        // case — a *different* strict subset works too.
+        for subset in [vec![0usize, 1, 2], vec![0, 1], vec![1, 2], vec![0, 2]] {
+            let quorum: Vec<ShareFile> = subset.iter().map(|&i| files[i].clone()).collect();
+            let opened = open_shares(&quorum, "correct horse").unwrap();
+            assert_eq!(opened.address, address());
+            assert_eq!(opened.signers.len(), 2, "exactly t sign");
+            // Chosen indexes are the two lowest distinct parties presented.
+            let idx: Vec<u16> = opened.signers.iter().map(|(i, _)| *i).collect();
+            assert_eq!(
+                idx,
+                subset[..2].iter().map(|&i| i as u16).collect::<Vec<_>>()
+            );
+            assert_eq!(opened.enc_priv_hex, format!("0x{}", "ab".repeat(32)));
+            assert_eq!(opened.binding_sig, format!("0x{}", "cd".repeat(65)));
+        }
+    }
 
-        // And the header is listable without any passphrase.
-        let listed = list_wallets(&dir);
-        assert_eq!(listed, vec![info(ADDR)]);
+    #[test]
+    fn below_the_threshold_nothing_opens() {
+        let files = sealed(2, 3, "pass pass pass");
+        // One file — and one file presented twice, which must not count as
+        // two shares.
+        for quorum in [
+            vec![files[1].clone()],
+            vec![files[1].clone(), files[1].clone()],
+        ] {
+            assert!(matches!(
+                open_shares(&quorum, "pass pass pass"),
+                Err(TssError::InvalidSigners(_))
+            ));
+        }
     }
 
     #[test]
     fn the_wrong_passphrase_is_one_indistinguishable_error() {
-        let dir = tempdir("wrongpass");
-        let address = WalletAddress::new(ADDR).unwrap();
-        save_wallet(&dir, &info(ADDR), &secrets(), "right", false).unwrap();
+        let files = sealed(2, 2, "right");
         assert!(matches!(
-            open_wallet(&dir, &address, "wrong"),
+            open_shares(&files, "wrong"),
             Err(TssError::BadPassphrase)
         ));
     }
 
     #[test]
     fn a_tampered_ciphertext_fails_the_mac_not_the_padding() {
-        // Encrypt-then-MAC: flipping a ciphertext bit must land on the same
-        // BadPassphrase as a wrong passphrase, never a padding oracle.
-        let dir = tempdir("tamper");
-        let address = WalletAddress::new(ADDR).unwrap();
-        let path = save_wallet(&dir, &info(ADDR), &secrets(), "pass", false).unwrap();
-
-        let mut file: WalletFile = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut files = sealed(2, 2, "pass pass");
         let mut ct = base64::engine::general_purpose::STANDARD
-            .decode(&file.ciphertext)
+            .decode(&files[0].ciphertext)
             .unwrap();
         ct[0] ^= 0x01;
-        file.ciphertext = base64::engine::general_purpose::STANDARD.encode(&ct);
-        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
-
+        files[0].ciphertext = base64::engine::general_purpose::STANDARD.encode(&ct);
         assert!(matches!(
-            open_wallet(&dir, &address, "pass"),
+            open_shares(&files, "pass pass"),
             Err(TssError::BadPassphrase)
         ));
     }
 
     #[test]
-    fn overwriting_requires_force_and_deleting_requires_the_passphrase() {
-        let dir = tempdir("guards");
-        let address = WalletAddress::new(ADDR).unwrap();
-        save_wallet(&dir, &info(ADDR), &secrets(), "pass", false).unwrap();
-
+    fn files_from_two_wallets_never_mix() {
+        let a = sealed(2, 2, "same passphrase");
+        let b = sealed(2, 2, "same passphrase");
+        // Same shape, same passphrase — but different wallets (fresh salt),
+        // and the header check names it before any KDF work.
+        let mixed = vec![a[0].clone(), b[1].clone()];
         assert!(matches!(
-            save_wallet(&dir, &info(ADDR), &secrets(), "pass", false),
-            Err(TssError::WalletExists)
-        ));
-        save_wallet(&dir, &info(ADDR), &secrets(), "pass2", true).unwrap();
-
-        assert!(matches!(
-            delete_wallet(&dir, &address, "pass"),
-            Err(TssError::BadPassphrase)
-        ));
-        delete_wallet(&dir, &address, "pass2").unwrap();
-        assert!(matches!(
-            open_wallet(&dir, &address, "pass2"),
-            Err(TssError::WalletNotFound)
-        ));
-        assert!(list_wallets(&dir).is_empty());
-    }
-
-    #[test]
-    fn a_missing_wallet_is_not_found_not_a_passphrase_failure() {
-        let dir = tempdir("missing");
-        let address = WalletAddress::new(ADDR).unwrap();
-        // The wallet's existence is public (it is listed); only the seal is
-        // secret. So this error is allowed to be specific.
-        assert!(matches!(
-            open_wallet(&dir, &address, "anything"),
-            Err(TssError::WalletNotFound)
+            open_shares(&mixed, "same passphrase"),
+            Err(TssError::InvalidSigners(_))
         ));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn the_wallet_file_is_owner_only() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempdir("perms");
-        let path = save_wallet(&dir, &info(ADDR), &secrets(), "pass", false).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "share file must be 0600");
-        let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode();
-        assert_eq!(dir_mode & 0o777, 0o700, "share dir must be 0700");
+    fn the_cleartext_header_is_exactly_the_public_facts() {
+        let files = sealed(2, 3, "a passphrase");
+        let json = serde_json::to_value(&files[0]).unwrap();
+        let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(|s| &**s).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "address",
+                "ciphertext",
+                "createdAt",
+                "iv",
+                "kdfIterations",
+                "kdfSalt",
+                "mac",
+                "parties",
+                "partyIndex",
+                "threshold",
+                "type",
+                "version",
+            ]
+        );
+        assert_eq!(json["type"], FILE_TYPE);
+        // And the round trip is lossless.
+        let back: ShareFile = serde_json::from_value(json).unwrap();
+        assert_eq!(back, files[0]);
     }
 }

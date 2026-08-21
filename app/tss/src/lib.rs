@@ -3,10 +3,11 @@
 //!
 //! The design record is `docs/CRYPTO.md §15`; the port derives from the
 //! reviewed reference wallet built on the audited `cggmp21` crate. Every
-//! ceremony runs in this process over `round_based`'s simulated network —
-//! all `n` shares are held by the user's own self-hosted server, sealed under
-//! a passphrase (§15.4). What production distribution adds later is a real
-//! transport between share holders, not a different share format.
+//! ceremony runs in this process over `round_based`'s simulated network,
+//! but custody is the **user's**: keygen hands back `n` passphrase-sealed
+//! share files (`store`), the server persists nothing, and each request
+//! that signs presents any `t` of the files (§15.4). Losing up to `n − t`
+//! files loses nothing.
 //!
 //! Native-only: this crate cannot build for wasm32 (§15.3) and must never be
 //! a dependency of the web workspace.

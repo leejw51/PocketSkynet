@@ -48,7 +48,7 @@ pub mod search;
 pub mod shout;
 /// Public for the [`sites::Site`] type the Publish page renders.
 pub mod sites;
-/// Public for the [`tss::TssWalletInfo`] and session-key types the login
+/// Public for the [`tss::TssShareHeader`] and sign-bundle types the login
 /// screen and the transaction signers render and consume.
 pub mod tss;
 /// Public for [`uploads::Progress`] and [`uploads::Target`], which the actions

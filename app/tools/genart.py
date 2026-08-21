@@ -735,6 +735,24 @@ MANIFEST: list[dict[str, str]] = [
         ),
     },
     {
+        # The TSS wallet's "movie moment" (login create wizard and its
+        # backup step). Base-skin only: the wizard is one panel, and the
+        # cinematic vault language already reads correctly under every skin
+        # — same economy as any other fallback asset.
+        "name": "tss-forge",
+        "themeless": True,
+        "cinematic": True,
+        "prompt": (
+            "Ultra realistic macro shot of a glowing cyan energy key "
+            "fracturing into three floating crystalline shards above a "
+            "brushed titanium ring, each shard trailing soft light, thin "
+            "energy filaments still connecting them, dark black background "
+            "with faint hexagonal circuit patterns, sci-fi multi-party "
+            "vault, cinematic rim lighting, photorealistic, square "
+            "composition, no text, no logos."
+        ),
+    },
+    {
         "name": "skynet-grid",
         "themeless": True,
         "cinematic": True,

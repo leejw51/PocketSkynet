@@ -1195,10 +1195,10 @@ pub async fn sign_transaction(
             .borrow()
             .sign_transaction(tx)
             .map_err(|e| e.to_string()),
-        Some((address, passphrase)) => {
+        Some((passphrase, shares)) => {
             let client = Client::new(&crate::session::server_base());
             let sig = client
-                .tss_sign_hash(&address, &passphrase, &tx.sighash())
+                .tss_sign_hash(&shares, &passphrase, &tx.sighash())
                 .await
                 .map_err(|e| e.user_message())?;
             if sig.v > 1 {
@@ -1212,48 +1212,51 @@ pub async fn sign_transaction(
 
 /// The [`sign_in`] round trip for a TSS (m-of-n threshold) wallet.
 ///
-/// The wallet lives on the server (docs/CRYPTO.md §15): its shares never
-/// leave it, and the passphrase entered on the login screen is what
-/// authorizes each ceremony. The order differs from [`sign_in`] in one
-/// deliberate way — the session keys are fetched **first**, so a wrong
-/// passphrase fails immediately and cheaply, before a challenge is consumed
-/// or a multi-second signing ceremony is spent discovering it.
+/// The credential is a **quorum of share files** (docs/CRYPTO.md §15): any
+/// `t` of the `n` files minted at creation, plus the passphrase that seals
+/// them. The wallet address is read from the files' cleartext headers; the
+/// challenge is then ceremony-signed by presenting the files to the user's
+/// own server, which holds nothing between requests.
 ///
 /// There is no derivation step and no salt: a TSS wallet's E2EE keypair is
-/// stored, not derived, because a ceremony signature is different on every
-/// run and `keccak256(signature)` would mint a new identity per login
-/// (§15.2 — the issue #85 blocker).
+/// sealed inside every share file, not derived, because a ceremony
+/// signature is different on every run and `keccak256(signature)` would
+/// mint a new identity per login (§15.2 — the issue #85 blocker).
 pub async fn sign_in_with_tss(
     client: Client,
-    address: WalletAddress,
+    shares: Vec<serde_json::Value>,
     passphrase: String,
     username: &str,
 ) -> Result<Session, String> {
-    // Passphrase check + E2EE identity, one call.
-    let session_keys = client
-        .tss_session_keys(&address, &passphrase)
-        .await
-        .map_err(|e| e.user_message())?;
+    let address = shares
+        .first()
+        .and_then(crate::api::tss::TssShareHeader::of)
+        .and_then(|h| WalletAddress::new(&h.address).ok())
+        .ok_or_else(|| "Not a TSS share file".to_owned())?;
 
     let challenge = client
         .auth_challenge(&address)
         .await
         .map_err(|e| e.user_message())?;
 
-    // The server's bytes, verbatim, signed by ceremony.
-    let signature = client
-        .tss_sign(&address, &passphrase, &challenge.message)
+    // The server's bytes, verbatim, signed by ceremony — which also unseals
+    // and returns the E2EE identity, so one wrong passphrase fails one call.
+    let bundle = client
+        .tss_sign(&shares, &passphrase, &challenge.message)
         .await
         .map_err(|e| e.user_message())?;
+    if bundle.address != address.as_str() {
+        return Err("The server signed for a different wallet".into());
+    }
 
     let login = client
         .auth_login(
             &address,
             username,
             &challenge.challenge_id,
-            &signature,
-            Some(&session_keys.public_key),
-            Some(&session_keys.binding_sig),
+            &bundle.signature,
+            Some(&bundle.public_key),
+            Some(&bundle.binding_sig),
         )
         .await
         .map_err(|e| e.user_message())?;
@@ -1263,8 +1266,9 @@ pub async fn sign_in_with_tss(
     let keys = SessionKeys::from_tss(
         address,
         passphrase,
-        &session_keys.encryption_key,
-        session_keys.binding_sig,
+        shares,
+        &bundle.encryption_key,
+        bundle.binding_sig,
     )
     .map_err(|e| format!("Couldn't load your encryption key: {e}"))?;
 

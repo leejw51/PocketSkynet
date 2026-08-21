@@ -1353,9 +1353,9 @@ For a TSS wallet:
    signing ceremony, at creation time. Binding verification only needs *a*
    valid signature, not a deterministic one, so ceremony randomness is
    harmless here.
-3. Both are stored inside the encrypted TSS wallet file (§15.4), under the
-   same custody as the key shares, and released to a client only on
-   presentation of the wallet passphrase.
+3. Both are sealed inside **every** share file (§15.4), so any quorum of
+   files also recovers the messaging identity, and they are released to a
+   client only against the wallet passphrase.
 
 Consequences, stated plainly:
 
@@ -1363,9 +1363,11 @@ Consequences, stated plainly:
   A TSS session ignores `encryptionSalt`. This also closes, for TSS wallets,
   the §3 capability problem ("anyone who can get the user to sign the
   derivation message owns their E2EE key") — there is no such message.
-- The E2EE keypair's lifetime equals the wallet file's. Losing the file (or
-  its passphrase) loses message history even if the key shares are
-  recoverable elsewhere; back up the wallet file, not just shares.
+- Because each share file carries the whole (sealed) E2EE keypair, a single
+  stolen file plus the passphrase reads messages even though it cannot
+  sign. The passphrase is what stands in the way; the issue's non-goal
+  ("MPC for the E2EE keys themselves") is why the keypair is not itself
+  split.
 - Rejected alternatives: threshold PRF/VRF derivation (no audited
   implementation to hand) and deterministic threshold ECDSA (research-grade;
   the issue itself rules it out for v1).
@@ -1388,37 +1390,48 @@ workspace member; the web workspace never links it.
 
 ### 15.4 Share custody, stated
 
-v1 custody model: **all `n` shares live on the user's own self-hosted server**
-in a single wallet file `<data_dir>/tss/<address>.wallet.json`, mode 0600,
-encrypted under a user-chosen passphrase:
+Custody is the **user's**. Key generation ends with the server handing back
+`n` sealed **share files** — one per party, `pocketskynet-tss-share` JSON —
+which the user downloads and stores separately. **The server persists
+nothing**: the finished ceremony's files wait in memory for exactly one
+`collect` call (gated by a random `keygenId` only the creator holds), and
+every later signing request presents any `t` of the files in its body.
+
+Losing up to `n − t` files loses nothing: any `t` of them are the wallet,
+for signing and (via the sealed E2EE keypair each carries, §15.2) for
+messages. Fewer than `t` can do nothing but leak the E2EE key *if* the
+passphrase also falls. Losing more than `n − t` loses the wallet — there is
+no recovery and nobody to ask, and the UI says so at creation time.
+
+Each file is individually sealed under one user-chosen passphrase:
 
 ```
 kdf   = PBKDF2-HMAC-SHA256, 600_000 iterations, random 16-byte salt
+        (one salt per wallet, shared by its n files — one derivation
+        opens a quorum; a fresh IV per file)
 okm   = kdf(passphrase) → 64 bytes; encKey = okm[0..32], macKey = okm[32..64]
-seal  = AES-256-CBC(encKey, random IV) over the secrets JSON,
+seal  = AES-256-CBC(encKey, iv) over the secrets JSON,
         then HMAC-SHA256(macKey, iv ‖ ciphertext)  (encrypt-then-MAC;
         MAC is verified before any decryption is attempted)
 ```
 
-The plaintext under that seal is `{ shares[n], encPriv, bindingSig }`.
-The file's *header* (version, address, `t`, `n`, KDF parameters, creation
-time) is cleartext so the login screen can list wallets without a passphrase.
+The plaintext under a file's seal is `{ share, encPrivHex, bindingSig }`;
+its cleartext header is `type`, `version`, `address`, `threshold`,
+`parties`, `partyIndex`, `createdAt` and the KDF parameters — the public
+facts a login screen needs to name a file before any passphrase work.
 
 What this means, without euphemism:
 
-- PocketSkynet is self-hosted, so the operator and the user are the same
-  person; "the operator holds enough shares" is the *user* holding their own
-  wallet. On someone else's server this custody model is **not acceptable**
-  — the file gives its holder `n ≥ t` shares, gated only by the passphrase.
-- The passphrase is the second factor: a stolen file alone costs an attacker
-  a PBKDF2 search. It is required for **every** ceremony (each request
-  re-derives the KEK; nothing decrypted is cached between requests).
-- The per-party structure inside the file (each share is tagged with its
-  keygen party index) is deliberately future-proof: distributing shares
-  across devices with a real authenticated transport changes the *transport*,
-  not the format. That distribution — and share refresh/rotation
-  (`cggmp21`'s key-refresh protocol) — is the stated v2 path, tracked in
-  issue #85; v1 does not pretend to provide it.
+- The user's own server still *sees* the presented shares and passphrase
+  for the duration of each request (it must — it runs the ceremony and
+  cannot build for the browser, §15.3). It holds neither at rest. On
+  someone else's server that transient trust is still real; this design is
+  for self-hosting, where the operator and the user are the same person.
+- The passphrase is the second factor on every file: a found share costs an
+  attacker a PBKDF2 search before it is anything at all.
+- Share refresh/rotation (`cggmp21`'s key-refresh protocol) — reissuing all
+  `n` files at the same address so found *old* shares expire — is the
+  stated v2 path, tracked in issue #85; v1 does not pretend to provide it.
 
 ### 15.5 Signing UX and failure modes
 
@@ -1437,11 +1450,14 @@ the UI shows its phases.
 Identical to §2.5 from the server's perspective — the address is the
 identity and the server's auth stack does not know the wallet is TSS:
 
-1. client → `POST /api/auth/challenge` (address);
-2. client → `POST /api/tss/sign` (address, passphrase, challenge message) —
-   the server-side ceremony returns a standard 65-byte `r‖s‖v` signature;
-3. client → `POST /api/auth/login` with that signature, plus the stored
-   `publicKey`/`publicKeySig` released by `POST /api/tss/session-keys`;
-4. the session's E2EE identity is the stored keypair (§15.2), not a derived
-   one; `SessionKeys` carries a TSS signer variant that signs transactions
-   through `/api/tss/sign-hash`.
+1. the client reads the wallet address off the picked share files'
+   cleartext headers and asks `POST /api/auth/challenge`;
+2. client → `POST /api/tss/sign` (any `t` share files, passphrase,
+   challenge message) — the server-side ceremony returns a standard 65-byte
+   `r‖s‖v` signature **and** the E2EE identity the same quorum unsealed
+   (`encryptionKey`, `publicKey`, `bindingSig`) in one round trip;
+3. client → `POST /api/auth/login` with that signature plus the
+   `publicKey`/`publicKeySig` pair;
+4. the session's E2EE identity is the sealed keypair (§15.2), not a derived
+   one; `SessionKeys` keeps the share files in memory and signs
+   transactions through `/api/tss/sign-hash` by presenting them again.

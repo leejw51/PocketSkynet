@@ -1,38 +1,49 @@
 //! TSS (m-of-n threshold) wallet endpoints — `/api/tss/*`.
 //!
 //! Every ceremony runs on the server (docs/CRYPTO.md §15.3: the audited
-//! CGGMP21 stack cannot build for wasm32); the browser drives it and carries
-//! the passphrase that authorizes it. None of these calls exist in local
-//! mode — there is no server to hold a share.
+//! CGGMP21 stack cannot build for wasm32), but custody is the user's: the
+//! browser holds the passphrase-sealed **share files**, presents any `t` of
+//! them per signing request, and the server persists nothing. None of these
+//! calls exist in local mode — there is no server to run a ceremony.
 
 use gloo_net::http::Method;
-use pocketskynet_core::WalletAddress;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde_json::Value;
 
 use super::{ApiResult, Client};
 
-/// One wallet's public header, listable without a passphrase.
+/// A share file's cleartext header, read locally to name a picked file and
+/// to validate a quorum before anything is sent. The file itself stays an
+/// opaque [`Value`] — the browser never needs to understand the seal.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TssWalletInfo {
+pub struct TssShareHeader {
+    #[serde(rename = "type")]
+    pub file_type: String,
+    pub version: u32,
     pub address: String,
     /// `t`: shares a signing ceremony needs.
     pub threshold: u16,
     /// `n`: shares that exist.
     pub parties: u16,
-    pub created_at: u64,
+    /// This file's party index, `0..n`.
+    pub party_index: u16,
 }
 
-impl TssWalletInfo {
+impl TssShareHeader {
+    /// Parse a candidate file's header, `None` if it is not a share file.
+    pub fn of(file: &Value) -> Option<Self> {
+        let header: Self = serde_json::from_value(file.clone()).ok()?;
+        (header.file_type == "pocketskynet-tss-share"
+            && header.version == 1
+            && header.party_index < header.parties)
+            .then_some(header)
+    }
+
     /// "2-of-3" — the shape, as the UI names it.
     pub fn shape(&self) -> String {
         format!("{}-of-{}", self.threshold, self.parties)
     }
-}
-
-#[derive(Deserialize)]
-struct WalletList {
-    wallets: Vec<TssWalletInfo>,
 }
 
 /// `GET /api/tss/keygen/status` — a tagged progress record.
@@ -45,10 +56,26 @@ pub struct TssKeygenStatus {
     pub error: Option<String>,
 }
 
-/// `POST /api/tss/session-keys` — the stored E2EE identity (§15.2).
+/// `POST /api/tss/keygen/collect` — the one-shot handover of the sealed
+/// share files.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TssSessionKeys {
+pub struct TssCollected {
+    pub address: String,
+    pub threshold: u16,
+    pub parties: u16,
+    /// The `n` sealed share files, opaque, ready to download verbatim.
+    pub shares: Vec<Value>,
+}
+
+/// `POST /api/tss/sign` — a ceremony signature plus the E2EE identity the
+/// same quorum unseals; everything a login needs in one round trip.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TssSignBundle {
+    pub address: String,
+    /// EIP-191 wire form, `0x` + 130 hex.
+    pub signature: String,
     /// E2EE private key, `0x` + 64 hex. Held in memory only, like a pasted
     /// private key would be.
     pub encryption_key: String,
@@ -84,139 +111,86 @@ impl TssHashSignature {
     }
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct KeygenReq<'a> {
-    threshold: u16,
-    parties: u16,
-    passphrase: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WalletReq<'a> {
-    address: &'a str,
-    passphrase: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SignReq<'a> {
-    address: &'a str,
-    passphrase: &'a str,
-    message: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SignHashReq<'a> {
-    address: &'a str,
-    passphrase: &'a str,
-    hash: String,
-}
-
 #[derive(Deserialize)]
-struct SignResp {
-    signature: String,
+#[serde(rename_all = "camelCase")]
+struct KeygenStarted {
+    keygen_id: String,
 }
 
 impl Client {
-    /// The wallets this server holds — address and shape only.
-    pub async fn tss_wallets(&self) -> ApiResult<Vec<TssWalletInfo>> {
-        let list: WalletList = self.send(Method::GET, "/api/tss/wallets").await?;
-        Ok(list.wallets)
-    }
-
-    /// Start a t-of-n DKG; poll [`Client::tss_keygen_status`] until `done`
-    /// (carrying the new address) or `error`.
+    /// Start a t-of-n DKG; returns the `keygenId` capability that will
+    /// collect its output. Poll [`Client::tss_keygen_status`] until `done`,
+    /// then call [`Client::tss_keygen_collect`].
     pub async fn tss_keygen(
         &self,
         threshold: u16,
         parties: u16,
         passphrase: &str,
-    ) -> ApiResult<()> {
-        self.send_ok(
-            Method::POST,
-            "/api/tss/keygen",
-            &KeygenReq {
-                threshold,
-                parties,
-                passphrase,
-            },
-        )
-        .await
+    ) -> ApiResult<String> {
+        let started: KeygenStarted = self
+            .send_json(
+                Method::POST,
+                "/api/tss/keygen",
+                &serde_json::json!({
+                    "threshold": threshold,
+                    "parties": parties,
+                    "passphrase": passphrase,
+                }),
+            )
+            .await?;
+        Ok(started.keygen_id)
     }
 
     pub async fn tss_keygen_status(&self) -> ApiResult<TssKeygenStatus> {
         self.send(Method::GET, "/api/tss/keygen/status").await
     }
 
-    /// EIP-191 `personal_sign` by ceremony — the login-challenge signer.
+    /// Collect the finished ceremony's sealed share files — exactly once;
+    /// a second call finds nothing.
+    pub async fn tss_keygen_collect(&self, keygen_id: &str) -> ApiResult<TssCollected> {
+        self.send_json(
+            Method::POST,
+            "/api/tss/keygen/collect",
+            &serde_json::json!({ "keygenId": keygen_id }),
+        )
+        .await
+    }
+
+    /// EIP-191 `personal_sign` by ceremony over any `t` share files, plus
+    /// the E2EE identity — the login call.
     pub async fn tss_sign(
         &self,
-        address: &WalletAddress,
+        shares: &[Value],
         passphrase: &str,
         message: &str,
-    ) -> ApiResult<String> {
-        let resp: SignResp = self
-            .send_json(
-                Method::POST,
-                "/api/tss/sign",
-                &SignReq {
-                    address: address.as_str(),
-                    passphrase,
-                    message,
-                },
-            )
-            .await?;
-        Ok(resp.signature)
+    ) -> ApiResult<TssSignBundle> {
+        self.send_json(
+            Method::POST,
+            "/api/tss/sign",
+            &serde_json::json!({
+                "shares": shares,
+                "passphrase": passphrase,
+                "message": message,
+            }),
+        )
+        .await
     }
 
     /// Threshold-sign a 32-byte digest — the transaction signer.
     pub async fn tss_sign_hash(
         &self,
-        address: &WalletAddress,
+        shares: &[Value],
         passphrase: &str,
         hash: &[u8; 32],
     ) -> ApiResult<TssHashSignature> {
         self.send_json(
             Method::POST,
             "/api/tss/sign-hash",
-            &SignHashReq {
-                address: address.as_str(),
-                passphrase,
-                hash: format!("0x{}", hex::encode(hash)),
-            },
-        )
-        .await
-    }
-
-    /// Release the stored E2EE identity against the passphrase.
-    pub async fn tss_session_keys(
-        &self,
-        address: &WalletAddress,
-        passphrase: &str,
-    ) -> ApiResult<TssSessionKeys> {
-        self.send_json(
-            Method::POST,
-            "/api/tss/session-keys",
-            &WalletReq {
-                address: address.as_str(),
-                passphrase,
-            },
-        )
-        .await
-    }
-
-    /// Destroy a wallet. Gated on the passphrase like every other touch.
-    pub async fn tss_delete(&self, address: &WalletAddress, passphrase: &str) -> ApiResult<()> {
-        self.send_ok(
-            Method::POST,
-            "/api/tss/delete",
-            &WalletReq {
-                address: address.as_str(),
-                passphrase,
-            },
+            &serde_json::json!({
+                "shares": shares,
+                "passphrase": passphrase,
+                "hash": format!("0x{}", hex::encode(hash)),
+            }),
         )
         .await
     }

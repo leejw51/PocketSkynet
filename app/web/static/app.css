@@ -11381,3 +11381,235 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
     transform: none;
   }
 }
+
+/* ==========================================================================
+   TSS WALLET — the m-of-n create wizard and quorum login
+   (docs/CRYPTO.md §15, components/login.rs Method::Tss)
+
+   Three pieces on one login tab: the hero (the Grok-drawn key-into-shards
+   artwork, which pulses while a ceremony runs), the animated act checklist
+   that narrates a minute of Paillier arithmetic, and the backup panel's
+   share cards. Everything animated here is decoration over states the DOM
+   already carries in data attributes, so reduced-motion can kill the
+   movement without touching the meaning.
+   ========================================================================== */
+
+.fn-tss-hero {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0 8px;
+}
+
+.fn-tss-hero img {
+  width: min(180px, 50%);
+  border-radius: 14px;
+  filter: drop-shadow(0 0 18px rgba(64, 200, 224, 0.25));
+}
+
+/* The ceremony is running: the artwork breathes so the wait reads as work. */
+.fn-tss-hero[data-busy="true"] img {
+  animation: fn-tss-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes fn-tss-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 14px rgba(64, 200, 224, 0.2));
+  }
+  50% {
+    transform: scale(1.03);
+    filter: drop-shadow(0 0 26px rgba(64, 200, 224, 0.45));
+  }
+}
+
+/* ---- the act checklist -------------------------------------------------- */
+
+.fn-tss-steps {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fn-tss-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: opacity 0.3s ease;
+}
+
+.fn-tss-step[data-state="pending"] {
+  opacity: 0.45;
+}
+
+.fn-tss-step__dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--fn-border, rgba(128, 128, 128, 0.4));
+}
+
+.fn-tss-step[data-state="active"] .fn-tss-step__dot {
+  border-color: var(--fn-accent, #40c8e0);
+  animation: fn-tss-pulse 1.2s ease-in-out infinite;
+}
+
+.fn-tss-step[data-state="done"] .fn-tss-step__dot {
+  border-color: var(--fn-accent, #40c8e0);
+  color: var(--fn-accent, #40c8e0);
+}
+
+@keyframes fn-tss-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(64, 200, 224, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(64, 200, 224, 0);
+  }
+}
+
+/* ---- the quorum login: picker and file list ----------------------------- */
+
+/* The real input is visually retired; the styled label is the control.
+   `display: none` would also remove it from the accessibility tree, and the
+   label's `for` still needs a target. */
+.fn-tss-drop__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.fn-tss-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  border: 2px dashed var(--fn-border, rgba(128, 128, 128, 0.4));
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.fn-tss-drop:hover,
+.fn-tss-drop:focus-visible {
+  border-color: var(--fn-accent, #40c8e0);
+  background: rgba(64, 200, 224, 0.06);
+}
+
+.fn-tss-filelist {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fn-tss-filelist li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9em;
+}
+
+.fn-tss-filelist li[data-ok="true"] {
+  color: inherit;
+}
+
+.fn-tss-filelist li[data-ok="true"] svg {
+  color: var(--fn-accent, #40c8e0);
+}
+
+.fn-tss-filelist li[data-ok="false"] {
+  color: var(--fn-danger, #e0405a);
+}
+
+.fn-tss-quorum-ok {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--fn-accent, #40c8e0);
+  font-size: 0.9em;
+}
+
+/* ---- the backup panel's share cards ------------------------------------- */
+
+.fn-tss-shares {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The warn panel decorates its list items with markers; these are cards,
+   not bullet points. */
+.fn-tss-shares li::before,
+.fn-tss-shares li::marker {
+  content: none;
+}
+
+.fn-tss-share {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--fn-border, rgba(128, 128, 128, 0.4));
+  border-radius: 10px;
+  transition: border-color 0.25s ease;
+}
+
+.fn-tss-share[data-saved="true"] {
+  border-color: var(--fn-accent, #40c8e0);
+}
+
+.fn-tss-share__badge {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85em;
+  border: 2px solid var(--fn-accent, #40c8e0);
+}
+
+.fn-tss-share__saved {
+  color: var(--fn-accent, #40c8e0);
+  animation: fn-tss-saved-pop 0.3s ease;
+}
+
+@keyframes fn-tss-saved-pop {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fn-tss-hero[data-busy="true"] img,
+  .fn-tss-step[data-state="active"] .fn-tss-step__dot,
+  .fn-tss-share__saved {
+    animation: none;
+  }
+}

@@ -36,7 +36,6 @@ use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
 
 use crate::actions;
-use crate::api::tss::TssWalletInfo;
 use crate::api::Client;
 use crate::i18n::{t, Key, Lang};
 use crate::route::Route;
@@ -115,6 +114,36 @@ impl Method {
             Self::Mnemonic => t(lang, Key::recovery_phrase),
             Self::PrivateKey => t(lang, Key::private_key),
             Self::Tss => t(lang, Key::tss_wallet_tab),
+        }
+    }
+}
+
+/// One share file picked on the TSS login side: its file name for display,
+/// its raw JSON (sent verbatim to the ceremony), and — when it really is a
+/// share file — its parsed cleartext header.
+#[derive(Clone, PartialEq)]
+struct TssLoadedFile {
+    name: String,
+    value: serde_json::Value,
+    header: Option<crate::api::tss::TssShareHeader>,
+}
+
+/// The creation ceremony's three visible acts, for the animated checklist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TssStep {
+    Primes,
+    Protocol,
+    Sealing,
+}
+
+impl TssStep {
+    const ALL: [TssStep; 3] = [TssStep::Primes, TssStep::Protocol, TssStep::Sealing];
+
+    fn label(self) -> Key {
+        match self {
+            TssStep::Primes => Key::tss_phase_primes,
+            TssStep::Protocol => Key::tss_phase_protocol,
+            TssStep::Sealing => Key::tss_phase_binding,
         }
     }
 }
@@ -279,20 +308,26 @@ pub fn login(p: &LoginProps) -> Html {
     // auto-reverted; a person's click is theirs until they change it.
     let auto_picked = use_state(|| false);
     // --- the TSS tab's state (docs/CRYPTO.md §15) ---
-    // The server's wallet listing, the chosen address, and the passphrase
-    // that authorizes ceremonies. The passphrase lives in this component's
-    // memory only — it is sent to the user's own server per request, never
-    // persisted anywhere.
-    let tss_wallets = use_state(Vec::<TssWalletInfo>::new);
-    let tss_selected = use_state(|| Option::<String>::None);
+    // The credential is a quorum of user-held share files plus the
+    // passphrase that seals them. Both live in this component's memory
+    // only; nothing is persisted, and the files go nowhere but the user's
+    // own server, per signing request.
+    let tss_files = use_state(Vec::<TssLoadedFile>::new);
     let tss_passphrase = use_state(String::new);
-    // The create form: shape, a passphrase typed twice, and keygen progress.
+    // The create wizard: shape, a passphrase typed twice, the animated
+    // step now running (None = not running), and — once collected — the
+    // freshly minted wallet whose share files await download.
     let tss_parties = use_state(|| 3u16);
     let tss_threshold = use_state(|| 2u16);
     let tss_new_pass = use_state(String::new);
     let tss_new_pass2 = use_state(String::new);
     let tss_keygen_busy = use_state(|| false);
-    let tss_phase = use_state(|| Option::<Key>::None);
+    let tss_step = use_state(|| Option::<TssStep>::None);
+    let tss_created = use_state(|| Option::<crate::api::tss::TssCollected>::None);
+    // One flag per share file: has this one been downloaded yet? The same
+    // gate as the mnemonic backup — signing in unlocks only when every
+    // share has left this page.
+    let tss_downloaded = use_state(Vec::<bool>::new);
 
     let is_unlock = p.locked_as.is_some();
     let local_mode = *conn_choice == ConnChoice::Local;
@@ -430,10 +465,10 @@ pub fn login(p: &LoginProps) -> Html {
 
     // --- the TSS tab (docs/CRYPTO.md §15) ----------------------------------
 
-    // The client the TSS calls go through. Listing and keygen must work
-    // *before* a sign-in is submitted, so this follows the picker without
-    // committing it — nothing is persisted by merely looking at the tab.
-    // `None` in local mode: there is no server to hold a share.
+    // The client the TSS calls go through. Keygen must work *before* a
+    // sign-in is submitted, so this follows the picker without committing
+    // it — nothing is persisted by merely looking at the tab. `None` in
+    // local mode: there is no server to run a ceremony.
     let tss_client = {
         let conn_choice = conn_choice.clone();
         let server_url = server_url.clone();
@@ -448,51 +483,68 @@ pub fn login(p: &LoginProps) -> Html {
         }
     };
 
-    // Fetch the wallet list when the tab is opened (and when the server
-    // choice changes underneath it). Auto-selects the locked account when
-    // unlocking, else the newest wallet — the dropdown must never sit on a
-    // blank row while a wallet exists.
-    {
-        let tss_wallets = tss_wallets.clone();
-        let tss_selected = tss_selected.clone();
-        let tss_client = tss_client.clone();
-        let locked_address = p.locked_as.as_ref().map(|(a, _)| a.as_str().to_owned());
-        use_effect_with(
-            (*method, *conn_choice, (*server_url).clone()),
-            move |(method, _, _)| {
-                if *method == Method::Tss {
-                    if let Some(client) = tss_client() {
-                        wasm_bindgen_futures::spawn_local(async move {
-                            let Ok(list) = client.tss_wallets().await else {
-                                return;
-                            };
-                            let already = tss_selected
-                                .as_ref()
-                                .is_some_and(|a| list.iter().any(|w| &w.address == a));
-                            if !already {
-                                let pick = locked_address
-                                    .filter(|a| list.iter().any(|w| &w.address == a))
-                                    .or_else(|| list.first().map(|w| w.address.clone()));
-                                tss_selected.set(pick);
-                            }
-                            tss_wallets.set(list);
-                        });
-                    }
-                }
-                || ()
-            },
-        );
-    }
-
-    let on_tss_select = {
-        let tss_selected = tss_selected.clone();
+    // Read the picked share files. Reading is async (FileReader under the
+    // hood) and each file lands as it parses; files that are not share
+    // files are kept and *named* rather than dropped — a silently shrinking
+    // selection reads as the picker losing files.
+    let on_tss_files = {
+        let tss_files = tss_files.clone();
         let error = error.clone();
         Callback::from(move |e: Event| {
-            if let Some(el) = e.target_dyn_into::<HtmlSelectElement>() {
-                let value = el.value();
-                tss_selected.set((!value.is_empty()).then_some(value));
-                error.set(None);
-            }
+            let Some(input) = e.target_dyn_into::<HtmlInputElement>() else {
+                return;
+            };
+            let Some(list) = input.files() else {
+                return;
+            };
+            error.set(None);
+            let picked: Vec<web_sys::File> =
+                (0..list.length()).filter_map(|i| list.get(i)).collect();
+            // One task for the whole batch, one state write at the end. A
+            // task per file raced: each captured the same pre-pick list and
+            // the last writer erased every other file in the selection.
+            let tss_files = tss_files.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut files = (*tss_files).clone();
+                for file in picked {
+                    let name = file.name();
+                    let Ok(text) = wasm_bindgen_futures::JsFuture::from(file.text()).await else {
+                        continue;
+                    };
+                    let value: serde_json::Value = text
+                        .as_string()
+                        .and_then(|t| serde_json::from_str(&t).ok())
+                        .unwrap_or(serde_json::Value::Null);
+                    let header = crate::api::tss::TssShareHeader::of(&value);
+                    // Re-picking the same share replaces it, so a person
+                    // can correct a wrong pick without hunting for Clear.
+                    if let Some(h) = &header {
+                        files.retain(|f| {
+                            f.header
+                                .as_ref()
+                                .map(|o| (o.address.clone(), o.party_index))
+                                != Some((h.address.clone(), h.party_index))
+                        });
+                    }
+                    files.push(TssLoadedFile {
+                        name,
+                        value,
+                        header,
+                    });
+                }
+                tss_files.set(files);
+            });
+            // Allow re-selecting the same file next time.
+            input.set_value("");
+        })
+    };
+
+    let on_tss_clear = {
+        let tss_files = tss_files.clone();
+        let error = error.clone();
+        Callback::from(move |_: MouseEvent| {
+            tss_files.set(Vec::new());
+            error.set(None);
         })
     };
 
@@ -507,22 +559,21 @@ pub fn login(p: &LoginProps) -> Html {
         })
     };
 
-    // Create: run the DKG on the server and poll its status until the new
-    // address appears. The ceremony keeps running server-side even if this
-    // page is closed — polling is observation, not participation.
+    // Create: run the DKG on the server, narrate its acts, then collect
+    // the sealed share files for the backup step. The ceremony keeps
+    // running server-side even if this page closes — polling is
+    // observation, not participation.
     let on_tss_create = {
         let tss_client = tss_client.clone();
-        let tss_wallets = tss_wallets.clone();
-        let tss_selected = tss_selected.clone();
-        let tss_passphrase = tss_passphrase.clone();
         let tss_parties = tss_parties.clone();
         let tss_threshold = tss_threshold.clone();
         let tss_new_pass = tss_new_pass.clone();
         let tss_new_pass2 = tss_new_pass2.clone();
         let tss_keygen_busy = tss_keygen_busy.clone();
-        let tss_phase = tss_phase.clone();
+        let tss_step = tss_step.clone();
+        let tss_created = tss_created.clone();
+        let tss_downloaded = tss_downloaded.clone();
         let set_error = set_error.clone();
-        let store = store.clone();
         Callback::from(move |_: MouseEvent| {
             if *tss_keygen_busy {
                 return;
@@ -543,27 +594,27 @@ pub fn login(p: &LoginProps) -> Html {
             let (t_needed, n_total) = (*tss_threshold, *tss_parties);
 
             tss_keygen_busy.set(true);
-            tss_phase.set(Some(Key::tss_phase_primes));
+            tss_step.set(Some(TssStep::Primes));
+            tss_created.set(None);
             set_error.emit(None);
 
-            let tss_wallets = tss_wallets.clone();
-            let tss_selected = tss_selected.clone();
-            let tss_passphrase = tss_passphrase.clone();
             let tss_new_pass = tss_new_pass.clone();
             let tss_new_pass2 = tss_new_pass2.clone();
             let tss_keygen_busy = tss_keygen_busy.clone();
-            let tss_phase = tss_phase.clone();
+            let tss_step = tss_step.clone();
+            let tss_created = tss_created.clone();
+            let tss_downloaded = tss_downloaded.clone();
             let set_error = set_error.clone();
-            let store = store.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let fail = |e: String| {
                     set_error.emit(Some(t(lang, Key::tss_keygen_failed).replace("{error}", &e)));
-                    tss_phase.set(None);
+                    tss_step.set(None);
                     tss_keygen_busy.set(false);
                 };
-                if let Err(e) = client.tss_keygen(t_needed, n_total, &pass).await {
-                    return fail(e.user_message());
-                }
+                let keygen_id = match client.tss_keygen(t_needed, n_total, &pass).await {
+                    Ok(id) => id,
+                    Err(e) => return fail(e.user_message()),
+                };
                 loop {
                     gloo_timers::future::TimeoutFuture::new(1_500).await;
                     let status = match client.tss_keygen_status().await {
@@ -573,24 +624,22 @@ pub fn login(p: &LoginProps) -> Html {
                         Err(_) => continue,
                     };
                     match status.state.as_str() {
-                        "generating_primes" => tss_phase.set(Some(Key::tss_phase_primes)),
-                        "running_protocol" => tss_phase.set(Some(Key::tss_phase_protocol)),
-                        "binding" => tss_phase.set(Some(Key::tss_phase_binding)),
+                        "generating_primes" => tss_step.set(Some(TssStep::Primes)),
+                        "running_protocol" => tss_step.set(Some(TssStep::Protocol)),
+                        "binding" => tss_step.set(Some(TssStep::Sealing)),
                         "done" => {
-                            let address = status.address.unwrap_or_default();
-                            if let Ok(list) = client.tss_wallets().await {
-                                tss_wallets.set(list);
-                            }
-                            tss_selected.set(Some(address));
-                            // The passphrase just proven right becomes the
-                            // sign-in passphrase, so creating flows straight
-                            // into signing in without retyping it.
-                            tss_passphrase.set(pass.clone());
-                            tss_new_pass.set(String::new());
+                            let collected = match client.tss_keygen_collect(&keygen_id).await {
+                                Ok(c) => c,
+                                Err(e) => return fail(e.user_message()),
+                            };
+                            tss_downloaded.set(vec![false; collected.shares.len()]);
+                            tss_created.set(Some(collected));
                             tss_new_pass2.set(String::new());
-                            tss_phase.set(None);
+                            tss_step.set(None);
                             tss_keygen_busy.set(false);
-                            toast::success(&store, t(lang, Key::tss_created));
+                            // The passphrase stays in `tss_new_pass`: the
+                            // backup panel signs in with it directly.
+                            let _ = &tss_new_pass;
                             return;
                         }
                         "error" => {
@@ -602,59 +651,6 @@ pub fn login(p: &LoginProps) -> Html {
             });
         })
     };
-
-    // Delete the selected wallet. Passphrase-gated server-side; confirmed
-    // here because the shares are gone for good.
-    let on_tss_delete = {
-        let tss_client = tss_client.clone();
-        let tss_wallets = tss_wallets.clone();
-        let tss_selected = tss_selected.clone();
-        let tss_passphrase = tss_passphrase.clone();
-        let set_error = set_error.clone();
-        let store = store.clone();
-        Callback::from(move |_: MouseEvent| {
-            let Some(address) = (*tss_selected).clone() else {
-                set_error.emit(Some(t(lang, Key::tss_select_first).into()));
-                return;
-            };
-            if tss_passphrase.trim().is_empty() {
-                set_error.emit(Some(t(lang, Key::tss_enter_passphrase).into()));
-                return;
-            }
-            let confirmed = web_sys::window()
-                .and_then(|w| {
-                    w.confirm_with_message(t(lang, Key::tss_delete_confirm))
-                        .ok()
-                })
-                .unwrap_or(false);
-            if !confirmed {
-                return;
-            }
-            let Some(client) = tss_client() else {
-                return;
-            };
-            let Ok(wallet_address) = WalletAddress::new(&address) else {
-                return;
-            };
-            let pass = (*tss_passphrase).clone();
-            let tss_wallets = tss_wallets.clone();
-            let tss_selected = tss_selected.clone();
-            let set_error = set_error.clone();
-            let store = store.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                match client.tss_delete(&wallet_address, &pass).await {
-                    Ok(()) => {
-                        let list = client.tss_wallets().await.unwrap_or_default();
-                        tss_selected.set(list.first().map(|w| w.address.clone()));
-                        tss_wallets.set(list);
-                        toast::success(&store, t(lang, Key::tss_deleted));
-                    }
-                    Err(e) => set_error.emit(Some(e.user_message())),
-                }
-            });
-        })
-    };
-
     let on_index = {
         let wallet_index = wallet_index.clone();
         Callback::from(move |e: InputEvent| {
@@ -827,7 +823,7 @@ pub fn login(p: &LoginProps) -> Html {
         let locked_as = p.locked_as.clone();
         let conn_choice = conn_choice.clone();
         let server_url = server_url.clone();
-        let tss_selected = tss_selected.clone();
+        let tss_files = tss_files.clone();
         let tss_passphrase = tss_passphrase.clone();
 
         Callback::from(move |_: ()| {
@@ -835,18 +831,16 @@ pub fn login(p: &LoginProps) -> Html {
                 return;
             }
 
-            // The TSS path: no wallet is derived here — the server signs by
-            // ceremony, and this screen only collected which wallet and the
-            // passphrase that authorizes it (`actions::sign_in_with_tss`).
+            // The TSS path: no wallet is derived here — the credential is a
+            // quorum of share files plus the passphrase that seals them,
+            // and the server signs by ceremony
+            // (`actions::sign_in_with_tss`).
             if *method == Method::Tss {
                 if *conn_choice == ConnChoice::Local {
                     set_error.emit(Some(t(lang, Key::tss_local_unavailable).into()));
                     return;
                 }
-                let Some(address) = (*tss_selected)
-                    .clone()
-                    .and_then(|a| WalletAddress::new(&a).ok())
-                else {
+                let Some((address, files)) = tss_quorum(&tss_files) else {
                     set_error.emit(Some(t(lang, Key::tss_select_first).into()));
                     return;
                 };
@@ -854,8 +848,8 @@ pub fn login(p: &LoginProps) -> Html {
                     set_error.emit(Some(t(lang, Key::tss_enter_passphrase).into()));
                     return;
                 }
-                // Unlock path: same rule as the key tabs — the chosen wallet
-                // must be the account this device is locked as.
+                // Unlock path: same rule as the key tabs — the presented
+                // files must belong to the account this device is locked as.
                 if let Some((expected, _)) = &locked_as {
                     if &address != expected {
                         set_error.emit(Some(
@@ -880,12 +874,12 @@ pub fn login(p: &LoginProps) -> Html {
                 let set_error = set_error.clone();
                 let booting = booting.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    match actions::sign_in_with_tss(client, address, passphrase, &username).await {
+                    match actions::sign_in_with_tss(client, files, passphrase, &username).await {
                         Ok(session) => {
                             session.persist();
-                            // Nothing goes into the device vault: there is no
-                            // credential this browser could keep — the
-                            // passphrase is deliberately not remembered.
+                            // Nothing goes into the device vault: the share
+                            // files and the passphrase are deliberately not
+                            // remembered by this browser.
                             booting.set(Some(session));
                         }
                         Err(e) => {
@@ -1075,6 +1069,59 @@ pub fn login(p: &LoginProps) -> Html {
         Callback::from(move |_: MouseEvent| on_submit.emit(()))
     };
 
+    // Sign in with the wallet the create wizard just minted. Separate from
+    // `on_submit` because the freshly collected files and passphrase live in
+    // the wizard's state, not the login fields — and because this is the one
+    // path where nothing needs re-uploading: the files are still in memory.
+    let on_tss_signin_now = {
+        let store = store.clone();
+        let busy = busy.clone();
+        let set_error = set_error.clone();
+        let booting = booting.clone();
+        let username = username.clone();
+        let conn_choice = conn_choice.clone();
+        let server_url = server_url.clone();
+        let tss_created = tss_created.clone();
+        let tss_new_pass = tss_new_pass.clone();
+        Callback::from(move |_: MouseEvent| {
+            if *busy {
+                return;
+            }
+            let Some(created) = (*tss_created).clone() else {
+                return;
+            };
+            let Ok(address) = WalletAddress::new(&created.address) else {
+                return;
+            };
+            busy.set(true);
+            set_error.emit(None);
+            let username = match username.trim() {
+                "" => deterministic_username(&address),
+                chosen => chosen.to_owned(),
+            };
+            let passphrase = (*tss_new_pass).clone();
+            let client = commit_choice(&store, *conn_choice, &server_url);
+            let store = store.clone();
+            let busy = busy.clone();
+            let set_error = set_error.clone();
+            let booting = booting.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match actions::sign_in_with_tss(client, created.shares, passphrase, &username).await
+                {
+                    Ok(session) => {
+                        session.persist();
+                        booting.set(Some(session));
+                    }
+                    Err(e) => {
+                        set_error.emit(Some(e.clone()));
+                        toast::error(&store, t(lang, Key::couldnt_sign_in), Some(e));
+                        busy.set(false);
+                    }
+                }
+            });
+        })
+    };
+
     let on_keydown = {
         let on_submit = on_submit.clone();
         Callback::from(move |e: KeyboardEvent| {
@@ -1157,7 +1204,7 @@ pub fn login(p: &LoginProps) -> Html {
     let credential_empty = match *method {
         Method::Mnemonic => mnemonic.trim().is_empty(),
         Method::PrivateKey => private_key.trim().is_empty(),
-        Method::Tss => tss_selected.is_none() || tss_passphrase.trim().is_empty(),
+        Method::Tss => tss_quorum(&tss_files).is_none() || tss_passphrase.trim().is_empty(),
     };
     let submit_disabled = *busy || credential_empty || must_back_up || offline;
 
@@ -1769,48 +1816,103 @@ pub fn login(p: &LoginProps) -> Html {
                     if *method == Method::Tss {
                         if local_mode {
                             // Not an error — a statement of fact about the
-                            // mode: local mode has no server to hold shares.
+                            // mode: local mode has no server to run a
+                            // ceremony.
                             <p class="fn-field__help">{ t(lang, Key::tss_local_unavailable) }</p>
+                        } else if let Some(created) = &*tss_created {
+                            // ---- the backup step: store every share ----
+                            { tss_backup_panel(
+                                lang,
+                                created,
+                                &tss_downloaded,
+                                {
+                                    let tss_downloaded = tss_downloaded.clone();
+                                    let created = created.clone();
+                                    Callback::from(move |i: usize| {
+                                        let file = &created.shares[i];
+                                        download_json(
+                                            &format!(
+                                                "pocketskynet-tss-{}-share-{}-of-{}.json",
+                                                created.address.chars().take(10).collect::<String>(),
+                                                i + 1,
+                                                created.parties,
+                                            ),
+                                            &serde_json::to_string_pretty(file)
+                                                .unwrap_or_default(),
+                                        );
+                                        let mut done = (*tss_downloaded).clone();
+                                        if let Some(flag) = done.get_mut(i) {
+                                            *flag = true;
+                                        }
+                                        tss_downloaded.set(done);
+                                    })
+                                },
+                                on_tss_signin_now.clone(),
+                                *busy,
+                            ) }
                         } else {
+                            <div class="fn-tss-hero" aria-hidden="true" data-busy={tss_keygen_busy.to_string()}>
+                                <img src={crate::asset::img(store.skin, "tss-forge")} alt="" loading="lazy" />
+                            </div>
                             <p class="fn-field__help">{ t(lang, Key::tss_intro) }</p>
 
-                            if tss_wallets.is_empty() {
-                                if !is_unlock {
-                                    <p class="fn-field__help">{ t(lang, Key::tss_no_wallets) }</p>
-                                }
-                            } else {
-                                <div class="fn-field">
-                                    <div class="fn-row">
-                                        <label class="fn-field__label fn-grow" for="login-tss-wallet">
-                                            { t(lang, Key::tss_select_wallet) }
-                                        </label>
+                            // ---- sign in with a quorum of share files ----
+                            <div class="fn-field">
+                                <div class="fn-row">
+                                    <label class="fn-field__label fn-grow" for="login-tss-files">
+                                        { t(lang, Key::tss_files_label) }
+                                    </label>
+                                    if !tss_files.is_empty() {
                                         <button
                                             type="button"
                                             class="topcoat-icon-button--quiet"
-                                            aria-label={t(lang, Key::delete)}
-                                            onclick={on_tss_delete}
+                                            aria-label={t(lang, Key::tss_clear_files)}
+                                            onclick={on_tss_clear}
                                         >
-                                            { icons::trash(16) }
+                                            { icons::close(16) }
                                         </button>
-                                    </div>
-                                    <select
-                                        id="login-tss-wallet"
-                                        class="topcoat-text-input"
-                                        onchange={on_tss_select}
-                                    >
-                                        { for tss_wallets.iter().map(|w| {
-                                            let selected = (*tss_selected).as_deref() == Some(w.address.as_str());
-                                            html! {
-                                                <option value={w.address.clone()} selected={selected}>
-                                                    { format!("{} · {}", w.shape(), abbreviate_hex(&w.address)) }
-                                                </option>
-                                            }
-                                        }) }
-                                    </select>
+                                    }
                                 </div>
-                            }
+                                <label class="fn-tss-drop" for="login-tss-files">
+                                    { icons::download(18) }
+                                    <span>{ t(lang, Key::tss_add_files) }</span>
+                                </label>
+                                <input
+                                    id="login-tss-files"
+                                    class="fn-tss-drop__input"
+                                    type="file"
+                                    accept="application/json,.json"
+                                    multiple=true
+                                    onchange={on_tss_files}
+                                />
+                                if tss_files.is_empty() {
+                                    <p class="fn-field__help">{ t(lang, Key::tss_files_hint) }</p>
+                                } else {
+                                    <ul class="fn-tss-filelist">
+                                        { for tss_files.iter().map(|f| html! {
+                                            <li data-ok={f.header.is_some().to_string()}>
+                                                if let Some(h) = &f.header {
+                                                    { icons::check(14) }
+                                                    <span class="fn-mono">
+                                                        { t(lang, Key::tss_share_n)
+                                                            .replace("{i}", &(h.party_index + 1).to_string())
+                                                            .replace("{n}", &h.parties.to_string()) }
+                                                    </span>
+                                                    <span class="fn-muted">
+                                                        { format!("{} · {}", h.shape(), abbreviate_hex(&h.address)) }
+                                                    </span>
+                                                } else {
+                                                    { icons::close(14) }
+                                                    <span>{ t(lang, Key::tss_files_invalid).replace("{name}", &f.name) }</span>
+                                                }
+                                            </li>
+                                        }) }
+                                    </ul>
+                                    { tss_quorum_status(lang, &tss_files) }
+                                }
+                            </div>
 
-                            if !tss_wallets.is_empty() {
+                            if !tss_files.is_empty() {
                                 <div class="fn-field">
                                     <label class="fn-field__label" for="login-tss-passphrase">
                                         { t(lang, Key::tss_passphrase) }
@@ -1830,111 +1932,113 @@ pub fn login(p: &LoginProps) -> Html {
                                 </div>
                             }
 
+                            // ---- create a new m-of-n wallet ----
                             if !is_unlock {
                                 <div class="fn-rule">{ t(lang, Key::tss_create_title) }</div>
-                                <div class="fn-row">
-                                    <div class="fn-field fn-grow">
-                                        <label class="fn-field__label" for="login-tss-parties">
-                                            { t(lang, Key::tss_parties) }
-                                        </label>
-                                        <select
-                                            id="login-tss-parties"
-                                            class="topcoat-text-input"
-                                            disabled={*tss_keygen_busy}
-                                            onchange={{
-                                                let tss_parties = tss_parties.clone();
-                                                let tss_threshold = tss_threshold.clone();
-                                                Callback::from(move |e: Event| {
-                                                    if let Some(el) = e.target_dyn_into::<HtmlSelectElement>() {
-                                                        let n = el.value().parse().unwrap_or(3);
-                                                        tss_parties.set(n);
-                                                        // t must stay ≤ n when n shrinks.
-                                                        if *tss_threshold > n {
-                                                            tss_threshold.set(n);
-                                                        }
-                                                    }
-                                                })
-                                            }}
-                                        >
-                                            { for (2u16..=5).map(|n| html! {
-                                                <option value={n.to_string()} selected={*tss_parties == n}>{ n }</option>
-                                            }) }
-                                        </select>
-                                    </div>
-                                    <div class="fn-field fn-grow">
-                                        <label class="fn-field__label" for="login-tss-threshold">
-                                            { t(lang, Key::tss_threshold) }
-                                        </label>
-                                        <select
-                                            id="login-tss-threshold"
-                                            class="topcoat-text-input"
-                                            disabled={*tss_keygen_busy}
-                                            onchange={{
-                                                let tss_threshold = tss_threshold.clone();
-                                                Callback::from(move |e: Event| {
-                                                    if let Some(el) = e.target_dyn_into::<HtmlSelectElement>() {
-                                                        tss_threshold.set(el.value().parse().unwrap_or(2));
-                                                    }
-                                                })
-                                            }}
-                                        >
-                                            { for (2u16..=*tss_parties).map(|m| html! {
-                                                <option value={m.to_string()} selected={*tss_threshold == m}>{ m }</option>
-                                            }) }
-                                        </select>
-                                    </div>
-                                </div>
-                                <div class="fn-field">
-                                    <label class="fn-field__label" for="login-tss-newpass">
-                                        { t(lang, Key::tss_passphrase) }
-                                    </label>
-                                    <input
-                                        id="login-tss-newpass"
-                                        class="topcoat-text-input"
-                                        type="password"
-                                        autocomplete="new-password"
-                                        spellcheck="false"
-                                        disabled={*tss_keygen_busy}
-                                        value={(*tss_new_pass).clone()}
-                                        oninput={{
-                                            let tss_new_pass = tss_new_pass.clone();
-                                            Callback::from(move |e: InputEvent| {
-                                                if let Some(el) = e.target_dyn_into::<HtmlInputElement>() {
-                                                    tss_new_pass.set(el.value());
-                                                }
-                                            })
-                                        }}
-                                    />
-                                </div>
-                                <div class="fn-field">
-                                    <label class="fn-field__label" for="login-tss-newpass2">
-                                        { t(lang, Key::tss_confirm_passphrase) }
-                                    </label>
-                                    <input
-                                        id="login-tss-newpass2"
-                                        class="topcoat-text-input"
-                                        type="password"
-                                        autocomplete="new-password"
-                                        spellcheck="false"
-                                        disabled={*tss_keygen_busy}
-                                        value={(*tss_new_pass2).clone()}
-                                        oninput={{
-                                            let tss_new_pass2 = tss_new_pass2.clone();
-                                            Callback::from(move |e: InputEvent| {
-                                                if let Some(el) = e.target_dyn_into::<HtmlInputElement>() {
-                                                    tss_new_pass2.set(el.value());
-                                                }
-                                            })
-                                        }}
-                                    />
-                                </div>
                                 if *tss_keygen_busy {
-                                    <p class="fn-muted">
-                                        <Spinner />
-                                        { " " }
-                                        { (*tss_phase).map(|k| t(lang, k)).unwrap_or_default() }
-                                    </p>
+                                    { tss_step_list(lang, *tss_step) }
+                                    <p class="fn-field__help">{ t(lang, Key::tss_creating_hint) }</p>
                                 } else {
+                                    <div class="fn-row">
+                                        <div class="fn-field fn-grow">
+                                            <label class="fn-field__label" for="login-tss-parties">
+                                                { t(lang, Key::tss_parties) }
+                                            </label>
+                                            <select
+                                                id="login-tss-parties"
+                                                class="topcoat-text-input"
+                                                onchange={{
+                                                    let tss_parties = tss_parties.clone();
+                                                    let tss_threshold = tss_threshold.clone();
+                                                    Callback::from(move |e: Event| {
+                                                        if let Some(el) = e.target_dyn_into::<HtmlSelectElement>() {
+                                                            let n = el.value().parse().unwrap_or(3);
+                                                            tss_parties.set(n);
+                                                            // t must stay ≤ n when n shrinks.
+                                                            if *tss_threshold > n {
+                                                                tss_threshold.set(n);
+                                                            }
+                                                        }
+                                                    })
+                                                }}
+                                            >
+                                                { for (2u16..=5).map(|n| html! {
+                                                    <option value={n.to_string()} selected={*tss_parties == n}>{ n }</option>
+                                                }) }
+                                            </select>
+                                        </div>
+                                        <div class="fn-field fn-grow">
+                                            <label class="fn-field__label" for="login-tss-threshold">
+                                                { t(lang, Key::tss_threshold) }
+                                            </label>
+                                            <select
+                                                id="login-tss-threshold"
+                                                class="topcoat-text-input"
+                                                onchange={{
+                                                    let tss_threshold = tss_threshold.clone();
+                                                    Callback::from(move |e: Event| {
+                                                        if let Some(el) = e.target_dyn_into::<HtmlSelectElement>() {
+                                                            tss_threshold.set(el.value().parse().unwrap_or(2));
+                                                        }
+                                                    })
+                                                }}
+                                            >
+                                                { for (2u16..=*tss_parties).map(|m| html! {
+                                                    <option value={m.to_string()} selected={*tss_threshold == m}>{ m }</option>
+                                                }) }
+                                            </select>
+                                        </div>
+                                    </div>
+                                    // What the chosen shape means, in one line,
+                                    // before a minute of ceremony is spent on it.
+                                    <p class="fn-field__help">
+                                        { t(lang, Key::tss_shape_hint)
+                                            .replace("{m}", &tss_threshold.to_string())
+                                            .replace("{n}", &tss_parties.to_string())
+                                            .replace("{spare}", &(*tss_parties - *tss_threshold).to_string()) }
+                                    </p>
+                                    <div class="fn-field">
+                                        <label class="fn-field__label" for="login-tss-newpass">
+                                            { t(lang, Key::tss_passphrase) }
+                                        </label>
+                                        <input
+                                            id="login-tss-newpass"
+                                            class="topcoat-text-input"
+                                            type="password"
+                                            autocomplete="new-password"
+                                            spellcheck="false"
+                                            value={(*tss_new_pass).clone()}
+                                            oninput={{
+                                                let tss_new_pass = tss_new_pass.clone();
+                                                Callback::from(move |e: InputEvent| {
+                                                    if let Some(el) = e.target_dyn_into::<HtmlInputElement>() {
+                                                        tss_new_pass.set(el.value());
+                                                    }
+                                                })
+                                            }}
+                                        />
+                                    </div>
+                                    <div class="fn-field">
+                                        <label class="fn-field__label" for="login-tss-newpass2">
+                                            { t(lang, Key::tss_confirm_passphrase) }
+                                        </label>
+                                        <input
+                                            id="login-tss-newpass2"
+                                            class="topcoat-text-input"
+                                            type="password"
+                                            autocomplete="new-password"
+                                            spellcheck="false"
+                                            value={(*tss_new_pass2).clone()}
+                                            oninput={{
+                                                let tss_new_pass2 = tss_new_pass2.clone();
+                                                Callback::from(move |e: InputEvent| {
+                                                    if let Some(el) = e.target_dyn_into::<HtmlInputElement>() {
+                                                        tss_new_pass2.set(el.value());
+                                                    }
+                                                })
+                                            }}
+                                        />
+                                    </div>
                                     <button type="button" class="topcoat-button" onclick={on_tss_create}>
                                         { t(lang, Key::tss_create_button) }
                                     </button>
@@ -1942,7 +2046,6 @@ pub fn login(p: &LoginProps) -> Html {
                             }
                         }
                     }
-
                     if let (Some(_), Some(address)) = ((*generated).clone(), new_address.clone()) {
                         <div class="fn-warnpanel" role="note">
                             <p class="fn-warnpanel__title">{ t(lang, Key::save_phrase_now) }</p>
@@ -2134,7 +2237,167 @@ fn download_json(_filename: &str, _contents: &str) {}
 /// along with the phrase — the same words at index 1 are a different account,
 /// so a phrase stored without its index would silently sign the user in as
 /// somebody else.
-/// `0x1234…abcd` for the TSS wallet dropdown — the shape is the interesting
+/// The create ceremony's animated act list: every act with its state —
+/// done (✓), active (pulsing), or still ahead — so a minute of Paillier
+/// arithmetic reads as progress rather than a stuck spinner.
+fn tss_step_list(lang: Lang, current: Option<TssStep>) -> Html {
+    let current = current.unwrap_or(TssStep::Primes);
+    html! {
+        <ol class="fn-tss-steps" aria-live="polite">
+            { for TssStep::ALL.into_iter().map(|step| {
+                let state = match step.cmp(&current) {
+                    std::cmp::Ordering::Less => "done",
+                    std::cmp::Ordering::Equal => "active",
+                    std::cmp::Ordering::Greater => "pending",
+                };
+                html! {
+                    <li class="fn-tss-step" data-state={state}>
+                        <span class="fn-tss-step__dot">
+                            if state == "done" {
+                                { icons::check(12) }
+                            }
+                        </span>
+                        <span>{ t(lang, step.label()) }</span>
+                    </li>
+                }
+            }) }
+        </ol>
+    }
+}
+
+/// The one-line verdict under the picked-file list: enough shares, or what
+/// is still missing, or why these files cannot go together.
+fn tss_quorum_status(lang: Lang, files: &[TssLoadedFile]) -> Html {
+    let headers: Vec<&crate::api::tss::TssShareHeader> =
+        files.iter().filter_map(|f| f.header.as_ref()).collect();
+    let Some(first) = headers.first() else {
+        return html! { <p class="fn-field__help">{ t(lang, Key::tss_files_hint) }</p> };
+    };
+    if headers.iter().any(|h| {
+        h.address != first.address || h.threshold != first.threshold || h.parties != first.parties
+    }) {
+        return html! {
+            <p class="fn-login__error" role="alert">{ t(lang, Key::tss_files_mismatch) }</p>
+        };
+    }
+    let mut parties: Vec<u16> = headers.iter().map(|h| h.party_index).collect();
+    parties.sort_unstable();
+    parties.dedup();
+    let have = parties.len();
+    let need = usize::from(first.threshold);
+    if have < need {
+        html! {
+            <p class="fn-field__help">
+                { t(lang, Key::tss_need_more).replace("{more}", &(need - have).to_string()) }
+            </p>
+        }
+    } else {
+        html! {
+            <p class="fn-tss-quorum-ok">
+                { icons::check(14) }
+                { t(lang, Key::tss_files_loaded)
+                    .replace("{have}", &have.to_string())
+                    .replace("{need}", &need.to_string()) }
+            </p>
+        }
+    }
+}
+
+/// The backup step after a successful creation: the wallet's address, one
+/// card per share file, and a sign-in that unlocks only when **every**
+/// share has been downloaded — the same gate as the mnemonic backup, for
+/// the same reason: there is no recovery and nobody to ask.
+fn tss_backup_panel(
+    lang: Lang,
+    created: &crate::api::tss::TssCollected,
+    downloaded: &[bool],
+    on_download: Callback<usize>,
+    on_signin: Callback<MouseEvent>,
+    busy: bool,
+) -> Html {
+    let all_saved = !downloaded.is_empty() && downloaded.iter().all(|d| *d);
+    let spare = created.parties - created.threshold;
+    html! {
+        <div class="fn-warnpanel fn-tss-backup" role="note">
+            <p class="fn-warnpanel__title">{ t(lang, Key::tss_backup_title) }</p>
+            <p>
+                { t(lang, Key::tss_backup_intro)
+                    .replace("{m}", &created.threshold.to_string())
+                    .replace("{n}", &created.parties.to_string())
+                    .replace("{spare}", &spare.to_string()) }
+            </p>
+            <p><span class="fn-field__label">{ t(lang, Key::tss_wallet_address) }</span></p>
+            <p class="fn-mono">{ created.address.clone() }</p>
+            <ul class="fn-tss-shares">
+                { for created.shares.iter().enumerate().map(|(i, _)| {
+                    let saved = downloaded.get(i).copied().unwrap_or(false);
+                    let on_download = on_download.clone();
+                    html! {
+                        <li class="fn-tss-share" data-saved={saved.to_string()}>
+                            <span class="fn-tss-share__badge">{ (i + 1).to_string() }</span>
+                            <span class="fn-grow">
+                                { t(lang, Key::tss_share_n)
+                                    .replace("{i}", &(i + 1).to_string())
+                                    .replace("{n}", &created.parties.to_string()) }
+                            </span>
+                            if saved {
+                                <span class="fn-tss-share__saved">{ icons::check(16) }</span>
+                            }
+                            <button
+                                type="button"
+                                class="topcoat-button"
+                                onclick={Callback::from(move |_: MouseEvent| on_download.emit(i))}
+                            >
+                                { icons::download(16) }{ " " }{ t(lang, Key::tss_download) }
+                            </button>
+                        </li>
+                    }
+                }) }
+            </ul>
+            if !all_saved {
+                <p class="fn-field__help">{ t(lang, Key::tss_backup_gate) }</p>
+            }
+            <BusyButton
+                label={t(lang, Key::tss_signin_now).to_string()}
+                class="topcoat-button--large--cta"
+                busy={busy}
+                disabled={!all_saved || busy}
+                onclick={on_signin}
+            />
+        </div>
+    }
+}
+
+/// The picked files' consensus: `Some((address, share JSONs))` when every
+/// parsed share belongs to one wallet and at least its threshold of
+/// *distinct* parties is present. Anything else — mixed wallets, too few
+/// shares, no valid share at all — is `None`, and the panel's status line
+/// says which.
+fn tss_quorum(files: &[TssLoadedFile]) -> Option<(WalletAddress, Vec<serde_json::Value>)> {
+    let headers: Vec<&crate::api::tss::TssShareHeader> =
+        files.iter().filter_map(|f| f.header.as_ref()).collect();
+    let first = headers.first()?;
+    if headers.iter().any(|h| {
+        h.address != first.address || h.threshold != first.threshold || h.parties != first.parties
+    }) {
+        return None;
+    }
+    let mut parties: Vec<u16> = headers.iter().map(|h| h.party_index).collect();
+    parties.sort_unstable();
+    parties.dedup();
+    if parties.len() < usize::from(first.threshold) {
+        return None;
+    }
+    let address = WalletAddress::new(&first.address).ok()?;
+    let values = files
+        .iter()
+        .filter(|f| f.header.is_some())
+        .map(|f| f.value.clone())
+        .collect();
+    Some((address, values))
+}
+
+/// `0x1234…abcd` for the TSS share cards — the shape is the interesting
 /// half of the row, so the address only has to be recognisable.
 fn abbreviate_hex(address: &str) -> String {
     if address.len() > 12 {
