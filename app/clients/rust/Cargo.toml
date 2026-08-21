@@ -1,0 +1,49 @@
+[package]
+name = "pocketskynet-client"
+description = "PocketSkynet client library + CLI: wallet login over HTTP/1.1 or HTTP/3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pocketskynet-client"
+path = "src/main.rs"
+
+[dependencies]
+pocketskynet-core.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+clap = { version = "4", features = ["derive", "env"] }
+url = "2"
+
+# HTTP/1.1(+TLS). rustls, not native-tls, so a build needs no system OpenSSL —
+# the same choice the server makes.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+
+# HTTP/3: the same QUIC stack the server serves with (see app/server/Cargo.toml),
+# so the two ends can never drift apart on h3 framing details.
+quinn = { version = "0.11", default-features = false, features = [
+    "runtime-tokio",
+    "rustls",
+    "ring",
+    "log",
+] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+bytes = "1"
+http = "1"
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "logging",
+    "std",
+] }
+webpki-roots = "0.26"
