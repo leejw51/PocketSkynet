@@ -53,12 +53,35 @@ jobs:
       # Pinned versions with published binaries, so binstall never falls back
       # to a from-source build (tauri-cli's CSS dependencies do not compile
       # with a floating registry resolution).
-      - name: Install trunk and tauri-cli
+      - name: Install trunk
         env:
           # Unauthenticated GitHub API calls get rate-limited on shared
           # runners, and binstall then cannot resolve any release artifact.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cargo binstall -y --disable-strategies compile trunk@0.21.14 tauri-cli@2.11.4
+        run: cargo binstall -y --disable-strategies compile trunk@0.21.14
+
+      # Installed straight from the release asset rather than through
+      # binstall: tauri-cli's binstall metadata declares its packages as .tgz
+      # and only overrides that to .zip for x86_64-apple-darwin, while the
+      # actual macOS assets are all zips. binstall therefore misses the
+      # aarch64 zip, silently falls back to the x86_64 build, and Rosetta then
+      # propagates x86_64 into every subprocess of `cargo tauri build` —
+      # gmp-mpfr-sys's ./configure detected an x86 CPU, built GMP/MPFR/MPC for
+      # x86_64, and the arm64 link died with "symbol(s) not found".
+      - name: Install tauri-cli
+        run: |
+          arch=$(uname -m); [ "$arch" = arm64 ] && arch=aarch64
+          curl -sSfL --retry 5 -o "$RUNNER_TEMP/cargo-tauri.zip" \
+            "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.11.4/cargo-tauri-$arch-apple-darwin.zip"
+          unzip -o -q "$RUNNER_TEMP/cargo-tauri.zip" cargo-tauri -d "$RUNNER_TEMP/cargo-tauri-bin"
+          install -m 755 "$RUNNER_TEMP/cargo-tauri-bin/cargo-tauri" "$HOME/.cargo/bin/cargo-tauri"
+          # A wrong-arch cli stays invisible until the final link, so fail
+          # here instead if this binary would run under Rosetta.
+          lipo -archs "$HOME/.cargo/bin/cargo-tauri" | grep -qw "$(uname -m)" || {
+            echo "cargo-tauri is not a $(uname -m) binary:" >&2
+            lipo -archs "$HOME/.cargo/bin/cargo-tauri" >&2
+            exit 1
+          }
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
