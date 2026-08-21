@@ -11423,6 +11423,12 @@ th[aria-sort="descending"] .fn-dash__sort { color: var(--fn-fg); }
   }
 }
 
+/* The protocol/audit credit line: present, honest, and quiet. */
+.fn-tss-credit {
+  font-size: 0.78em;
+  opacity: 0.75;
+}
+
 /* ---- the act checklist -------------------------------------------------- */
 
 .fn-tss-steps {

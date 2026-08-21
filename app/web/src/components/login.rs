@@ -1865,6 +1865,11 @@ pub fn login(p: &LoginProps) -> Html {
                                 />
                             </div>
                             <p class="fn-field__help">{ t(lang, Key::tss_intro) }</p>
+                            // Which cryptography, by name: the user is being
+                            // asked to trust a ceremony with their key, so
+                            // the protocol and its audited implementation
+                            // are stated where the trust is requested.
+                            <p class="fn-field__help fn-tss-credit">{ t(lang, Key::tss_library_note) }</p>
 
                             // ---- sign in with a quorum of share files ----
                             <div class="fn-field">

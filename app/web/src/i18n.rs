@@ -1311,6 +1311,13 @@ strings! {
     (tss_passphrase_short, "Use at least 8 characters.", "8자 이상 입력하세요.", "8文字以上にしてください。", "至少用 8 個字元。", "Použijte alespoň 8 znaků.", "Usa al menos 8 caracteres.", "至少使用 8 个字符。", "Verwende mindestens 8 Zeichen."),
     (tss_passphrase_mismatch, "The passphrases don't match.", "암호 문구가 일치하지 않습니다.", "パスフレーズが一致しません。", "兩次輸入嘅密語唔一致。", "Přístupové fráze se neshodují.", "Las frases de contraseña no coinciden.", "两次输入的口令不一致。", "Die Passphrasen stimmen nicht überein."),
     (tss_select_first, "Add enough share files first.", "먼저 조각 파일을 충분히 추가하세요.", "先にシェアファイルを十分に追加してください。", "首先加入足夠嘅份額檔案。", "Nejprve přidejte dostatek souborů s podíly.", "Añade primero suficientes archivos de partes.", "请先添加足够的份额文件。", "Füge zuerst genügend Anteilsdateien hinzu."),
+    // The protocol and library named in the UI, because "trust me" is not a
+    // custody model: CGGMP21 is the peer-reviewed threshold-ECDSA protocol
+    // (Canetti–Gennaro–Goldfeder–Makriyannis–Peled, 2021), and cggmp21 is
+    // its independently audited implementation maintained under Linux
+    // Foundation Decentralized Trust. Protocol and crate names stay in
+    // Latin script in every language — they are proper names.
+    (tss_library_note, "Powered by the CGGMP21 threshold-ECDSA protocol via the audited cggmp21 library (Linux Foundation Decentralized Trust).", "검증(감사)을 받은 cggmp21 라이브러리(Linux Foundation Decentralized Trust)를 통해 CGGMP21 임계값 ECDSA 프로토콜로 동작합니다.", "監査済みのcggmp21ライブラリ（Linux Foundation Decentralized Trust）によるCGGMP21しきい値ECDSAプロトコルを使用しています。", "採用 CGGMP21 門檻 ECDSA 協議，經由已審計嘅 cggmp21 程式庫（Linux Foundation Decentralized Trust）。", "Běží na protokolu CGGMP21 pro prahové ECDSA prostřednictvím auditované knihovny cggmp21 (Linux Foundation Decentralized Trust).", "Funciona con el protocolo CGGMP21 de ECDSA de umbral mediante la biblioteca auditada cggmp21 (Linux Foundation Decentralized Trust).", "基于 CGGMP21 门限 ECDSA 协议，采用经审计的 cggmp21 库（Linux Foundation Decentralized Trust）。", "Basiert auf dem CGGMP21-Schwellwert-ECDSA-Protokoll über die auditierte cggmp21-Bibliothek (Linux Foundation Decentralized Trust)."),
     (tss_files_label, "Share files", "조각 파일", "シェアファイル", "份額檔案", "Soubory s podíly", "Archivos de partes", "份额文件", "Anteilsdateien"),
     (tss_add_files, "Add share files", "조각 파일 추가", "シェアファイルを追加", "加入份額檔案", "Přidat soubory s podíly", "Añadir archivos de partes", "添加份额文件", "Anteilsdateien hinzufügen"),
     (tss_clear_files, "Clear the picked files", "선택한 파일 지우기", "選択したファイルをクリア", "清除已揀嘅檔案", "Vymazat vybrané soubory", "Quitar los archivos elegidos", "清除已选文件", "Ausgewählte Dateien entfernen"),
