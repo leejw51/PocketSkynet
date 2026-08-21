@@ -4,7 +4,7 @@ Notable changes to Pocket Skynet, newest first. Versions are the workspace
 version in [`app/Cargo.toml`](app/Cargo.toml); a `v*` tag matching it builds and
 publishes the macOS installer.
 
-## 1.0.2 — unreleased
+## 1.0.2 — 2026-08-21
 
 ### m-of-n TSS (MPC) wallets
 
