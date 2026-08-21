@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "pocketskynet-core"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "aes",
  "base64",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "pocketskynet-web"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "base64",
  "futures",
