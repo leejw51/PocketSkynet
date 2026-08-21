@@ -16,6 +16,14 @@ pocketskynet-core.workspace = true
 # wallet this port derives from.
 cggmp21 = { version = "0.6", features = ["curve-secp256k1"] }
 round-based = { version = "0.4", features = ["derive", "sim", "sim-async"] }
+
+# Not used directly: `rug` (via fast-paillier/paillier-zk) pulls this in, and
+# naming it here only to add `c-no-tests` is what turns the feature on for the
+# whole graph — cargo unifies features, and a transitive dependency has no other
+# way to be told. Without it the build runs GMP's own C test suite, where Apple
+# clang 21 segfaults linking `t-get_si` and takes the release build with it.
+# Those are upstream GMP's tests of a released GMP tarball, not ours.
+gmp-mpfr-sys = { version = "1.7", features = ["c-no-tests"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 
 k256.workspace = true

@@ -3638,6 +3638,7 @@ dependencies = [
  "base64 0.22.1",
  "cbc",
  "cggmp21",
+ "gmp-mpfr-sys",
  "hex",
  "hmac",
  "k256",
