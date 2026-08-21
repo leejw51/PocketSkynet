@@ -1,5 +1,5 @@
 [workspace]
-members = ["clients/rust", "core", "gui", "server"]
+members = ["cli/rust", "core", "gui", "server"]
 resolver = "2"
 
 # `web/` is deliberately NOT a member: it only ever builds for
