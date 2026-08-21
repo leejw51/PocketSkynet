@@ -8,6 +8,30 @@ use pocketskynet_client::ClientError;
 use crate::common::{self, TestServer};
 
 #[tokio::test]
+async fn a_room_id_with_a_path_separator_is_refused_before_any_request() {
+    // Defence in depth: even authenticated, a `/` or `?` in room_id must not
+    // retarget the request at another endpoint — the client refuses locally.
+    let server = TestServer::start().await;
+    let (client, _wallet) = common::login_new_user(&server, "escaper").await;
+
+    for bad in [
+        "room/../../auth/profile",
+        "room?limit=1",
+        "room_1/messages#x",
+        "..%2Fadmin",
+    ] {
+        match client.send_message(bad, "hi").await {
+            Err(ClientError::InvalidArgument { kind, .. }) => assert_eq!(kind, "room id"),
+            other => panic!("{bad:?} must be refused locally, got {other:?}"),
+        }
+        match client.messages(bad, 10).await {
+            Err(ClientError::InvalidArgument { .. }) => {}
+            other => panic!("{bad:?} must be refused locally, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn sent_messages_read_back_in_order_with_their_hashes() {
     let server = TestServer::start().await;
     let (client, wallet) = common::login_new_user(&server, "chatter").await;

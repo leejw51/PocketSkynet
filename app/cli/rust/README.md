@@ -27,12 +27,24 @@ The binary lands at `target/debug/pocketskynet-client`.
 ## Usage
 
 A secp256k1 private key is required for everything except `health` — pass it
-with `--key 0x…` or the `POCKETSKYNET_KEY` environment variable. On a wallet's
-first login the server requires a username; pass `--username`, or let the
-client fall back to the protocol's deterministic username for the address.
+with `--key 0x…` or the `POCKETSKYNET_KEY` environment variable. **Prefer
+`POCKETSKYNET_KEY`**: a `--key` argument is visible to anyone who can run `ps`
+and lingers in your shell history, while the environment variable is not passed
+around on the command line.
+
+On a wallet's first login the server requires a username; pass `--username`, or
+let the client fall back to the protocol's deterministic username for the
+address.
+
+For scripted use, log in once and reuse the JWT with `--token <jwt>` or
+`POCKETSKYNET_TOKEN` instead of re-signing on every command — the production
+server caps logins at 5 requests/minute/IP, so a script that logs in per
+command trips a `429`.
 
 Global flags: `--server <url>`, `--http3`, `--http3-port <port>`, `--insecure`,
-`--key <hex>`, `--username <name>`.
+`--key <hex>`, `--token <jwt>`, `--username <name>`. Every request carries a
+30-second timeout (10 seconds to connect) so a server that accepts the
+connection but never answers fails rather than hanging.
 
 ### HTTP/1.1
 
@@ -47,6 +59,15 @@ pocketskynet-client --server http://127.0.0.1:9099 create-room lounge
 pocketskynet-client --server http://127.0.0.1:9099 rooms
 pocketskynet-client --server http://127.0.0.1:9099 send <roomId> "hello over TCP"
 pocketskynet-client --server http://127.0.0.1:9099 messages <roomId> --limit 20
+```
+
+Scripting many commands? Log in once, capture the JWT, and reuse it so you
+sign in only that one time:
+
+```sh
+export POCKETSKYNET_TOKEN=$(pocketskynet-client --server http://127.0.0.1:9099 login | awk '/^jwt:/{print $2}')
+pocketskynet-client --server http://127.0.0.1:9099 rooms          # no re-login
+pocketskynet-client --server http://127.0.0.1:9099 send <roomId> "hi"
 ```
 
 Against HTTPS (`make start` / `make https`) the certificate is self-signed
@@ -83,7 +104,11 @@ your own development server.
 use pocketskynet_client::{Client, Transport, TransportOptions, Wallet};
 
 # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
-let options = TransportOptions { insecure: true };
+// Timeouts default to 30s per request / 10s connect; override as needed.
+let options = TransportOptions {
+    insecure: true,
+    ..TransportOptions::default()
+};
 
 // Pick a transport once; the API layer is identical for both.
 let transport = Transport::http1("https://127.0.0.1:9099", &options)?;
@@ -108,7 +133,19 @@ ciphertext and are shown as `(encrypted)` by the CLI.
 
 ## Tests
 
-`tests/vectors.rs` replays every `eip191[]` entry of the canonical vector file
-`app/core/tests/vectors/protocol-v1.json` through the same signing path
-`Client::login` uses (key import → `personal_sign` → recovery), and pins the
-camelCase wire names of the request bodies.
+`cargo test -p pocketskynet-client` runs three suites:
+
+- **In-crate unit tests** — wire-type deserialization (nulls, omitted fields,
+  unknown-field tolerance), error-envelope shapes, `h3_target` port
+  resolution, `TransportOptions` defaults, and room-id path-injection
+  rejection.
+- **`tests/vectors.rs`** — replays every `eip191[]` and `wallet` entry of the
+  canonical vector file `app/core/tests/vectors/protocol-v1.json` through the
+  same signing path `Client::login` uses (key import → `personal_sign` →
+  recovery), plus `msgHash` and camelCase serialization pinning.
+- **`tests/live/`** — a ~25-test integration suite. **It builds the server**
+  (`cargo build -p pocketskynet-server`, unless a binary is already present or
+  `POCKETSKYNET_SERVER_BIN` points at one) **and boots roughly 25 real
+  `pocketskynet` processes**, one per test, each on an ephemeral port with a
+  temporary data directory torn down in `Drop`. Set
+  `CARGO_TARGET_DIR=…/app/target` to reuse the workspace's dependency cache.

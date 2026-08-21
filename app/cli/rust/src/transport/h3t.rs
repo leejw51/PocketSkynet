@@ -7,12 +7,30 @@
 //! streams on it, so a slow response never queues behind another request.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::{Buf, Bytes};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
 use crate::error::ClientError;
-use crate::transport::{RawResponse, TransportOptions};
+use crate::transport::{RawResponse, TransportOptions, MAX_RESPONSE_BYTES};
+
+/// Run `fut` under `budget`, turning a timeout into a transport error naming
+/// the `what` that stalled. QUIC has no built-in per-request deadline, so
+/// every await that a silent peer could park on is wrapped in this.
+async fn within<T, E: std::fmt::Display>(
+    budget: Duration,
+    what: &str,
+    fut: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, ClientError> {
+    match tokio::time::timeout(budget, fut).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => Err(ClientError::Transport(format!("{what}: {e}"))),
+        Err(_) => Err(ClientError::Transport(format!(
+            "{what}: timed out after {budget:?}"
+        ))),
+    }
+}
 
 /// The registered ALPN token for HTTP/3. Draft tokens (`h3-29`, …) negotiate
 /// with nothing current; the server rejects anything but `h3` during the
@@ -32,6 +50,9 @@ pub struct H3Transport {
     /// `host:port` for the `:authority` pseudo-header — HTTP/3 has no `Host`
     /// header, the authority travels in the URI.
     authority: String,
+    /// End-to-end budget for a single request; QUIC provides no per-request
+    /// deadline of its own, so this bounds every await in [`Self::request`].
+    request_timeout: Duration,
 }
 
 impl H3Transport {
@@ -66,13 +87,14 @@ impl H3Transport {
         let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
             .map_err(|e| ClientError::Transport(format!("QUIC TLS config: {e}")))?;
 
-        let addr = tokio::net::lookup_host((host.as_str(), port))
-            .await
-            .map_err(|e| ClientError::Transport(format!("resolving {host}:{port}: {e}")))?
-            .next()
-            .ok_or_else(|| {
-                ClientError::Transport(format!("{host}:{port} resolved to no addresses"))
-            })?;
+        let addr = within(
+            options.connect_timeout,
+            &format!("resolving {host}:{port}"),
+            tokio::net::lookup_host((host.as_str(), port)),
+        )
+        .await?
+        .next()
+        .ok_or_else(|| ClientError::Transport(format!("{host}:{port} resolved to no addresses")))?;
 
         let bind = if addr.is_ipv6() {
             "[::]:0"
@@ -84,15 +106,22 @@ impl H3Transport {
                 .map_err(|e| ClientError::Transport(format!("binding a client UDP socket: {e}")))?;
         endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(quic_tls)));
 
-        let connection = endpoint
+        let connecting = endpoint
             .connect(addr, &host)
-            .map_err(|e| ClientError::Transport(format!("starting the QUIC handshake: {e}")))?
-            .await
-            .map_err(|e| ClientError::Transport(format!("QUIC handshake with {addr}: {e}")))?;
+            .map_err(|e| ClientError::Transport(format!("starting the QUIC handshake: {e}")))?;
+        let connection = within(
+            options.connect_timeout,
+            &format!("QUIC handshake with {addr}"),
+            connecting,
+        )
+        .await?;
 
-        let (mut driver, send) = h3::client::new(h3_quinn::Connection::new(connection))
-            .await
-            .map_err(|e| ClientError::Transport(format!("opening the HTTP/3 session: {e}")))?;
+        let (mut driver, send) = within(
+            options.connect_timeout,
+            "opening the HTTP/3 session",
+            h3::client::new(h3_quinn::Connection::new(connection)),
+        )
+        .await?;
 
         // h3 splits the connection into a driver and a request handle; the
         // driver has to be polled for anything to move.
@@ -105,6 +134,7 @@ impl H3Transport {
             _driver: driver,
             _endpoint: endpoint,
             authority: format!("{host}:{port}"),
+            request_timeout: options.request_timeout,
         })
     }
 
@@ -131,44 +161,59 @@ impl H3Transport {
             .body(())
             .map_err(|e| ClientError::Transport(format!("building the request: {e}")))?;
 
-        let mut stream = {
-            let mut send = self.send.lock().await;
-            send.send_request(request)
-                .await
-                .map_err(|e| ClientError::Transport(format!("sending request headers: {e}")))?
-        };
+        // One budget over the whole exchange — send, finish, headers, and the
+        // body loop. QUIC parks silently on any of them if the peer stalls, so
+        // the deadline has to span all of them rather than each in turn.
+        let exchange =
+            async {
+                let mut stream = {
+                    let mut send = self.send.lock().await;
+                    send.send_request(request).await.map_err(|e| {
+                        ClientError::Transport(format!("sending request headers: {e}"))
+                    })?
+                };
 
-        if let Some(payload) = payload {
-            stream
-                .send_data(payload)
-                .await
-                .map_err(|e| ClientError::Transport(format!("sending the body: {e}")))?;
+                if let Some(payload) = payload {
+                    stream
+                        .send_data(payload)
+                        .await
+                        .map_err(|e| ClientError::Transport(format!("sending the body: {e}")))?;
+                }
+                stream.finish().await.map_err(|e| {
+                    ClientError::Transport(format!("finishing the request stream: {e}"))
+                })?;
+
+                let response = stream.recv_response().await.map_err(|e| {
+                    ClientError::Transport(format!("receiving response headers: {e}"))
+                })?;
+                let status = response.status().as_u16();
+
+                let mut body = Vec::new();
+                while let Some(mut chunk) = stream.recv_data().await.map_err(|e| {
+                    ClientError::Transport(format!("receiving the response body: {e}"))
+                })? {
+                    if body.len() + chunk.remaining() > MAX_RESPONSE_BYTES {
+                        return Err(ClientError::Transport(format!(
+                            "response body exceeded the {MAX_RESPONSE_BYTES}-byte cap"
+                        )));
+                    }
+                    while chunk.has_remaining() {
+                        let piece = chunk.chunk().to_vec();
+                        chunk.advance(piece.len());
+                        body.extend_from_slice(&piece);
+                    }
+                }
+
+                Ok(RawResponse { status, body })
+            };
+
+        match tokio::time::timeout(self.request_timeout, exchange).await {
+            Ok(result) => result,
+            Err(_) => Err(ClientError::Transport(format!(
+                "http/3 request timed out after {:?}",
+                self.request_timeout
+            ))),
         }
-        stream
-            .finish()
-            .await
-            .map_err(|e| ClientError::Transport(format!("finishing the request stream: {e}")))?;
-
-        let response = stream
-            .recv_response()
-            .await
-            .map_err(|e| ClientError::Transport(format!("receiving response headers: {e}")))?;
-        let status = response.status().as_u16();
-
-        let mut body = Vec::new();
-        while let Some(mut chunk) = stream
-            .recv_data()
-            .await
-            .map_err(|e| ClientError::Transport(format!("receiving the response body: {e}")))?
-        {
-            while chunk.has_remaining() {
-                let piece = chunk.chunk().to_vec();
-                chunk.advance(piece.len());
-                body.extend_from_slice(&piece);
-            }
-        }
-
-        Ok(RawResponse { status, body })
     }
 }
 

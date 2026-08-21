@@ -1,9 +1,48 @@
 //! Transport parity: the same API over HTTP/1.1+TLS and HTTP/3, the
 //! `--insecure` trust decision on both, and cross-transport consistency.
 
+use std::time::{Duration, Instant};
+
 use pocketskynet_client::{Client, ClientError, Transport, TransportOptions, Wallet};
 
 use crate::common::{self, TestServer};
+
+#[tokio::test]
+async fn a_server_that_never_answers_times_out_instead_of_hanging() {
+    // A stub that completes the TCP accept and then goes silent — the exact
+    // shape a request timeout exists to bound. Without one the client would
+    // wait forever.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    // Hold every accepted connection open, reading nothing and writing
+    // nothing, for the lifetime of the test.
+    let _accepter = tokio::spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            if let Ok((sock, _)) = listener.accept().await {
+                held.push(sock); // keep it open, never respond
+            }
+        }
+    });
+
+    let options = TransportOptions {
+        request_timeout: Duration::from_secs(2),
+        connect_timeout: Duration::from_secs(2),
+        ..TransportOptions::default()
+    };
+    let client = Client::new(Transport::http1(&format!("http://{addr}"), &options).unwrap());
+
+    let started = Instant::now();
+    match client.health().await {
+        Err(ClientError::Transport(_)) => {}
+        other => panic!("a silent server must time out to a transport error, got {other:?}"),
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(20),
+        "the timeout must fire promptly, took {elapsed:?}"
+    );
+}
 
 #[tokio::test]
 async fn health_answers_unauthenticated_over_plain_http() {
@@ -41,7 +80,7 @@ async fn a_self_signed_certificate_is_refused_without_insecure() {
     // accepted it would accept anybody's.
     let server = TestServer::start_tls().await;
 
-    let strict = TransportOptions { insecure: false };
+    let strict = TransportOptions::default(); // verification on
     let client = Client::new(Transport::http1(&server.base_url, &strict).unwrap());
     match client.health().await {
         Err(ClientError::Transport(_)) => {}
@@ -74,7 +113,7 @@ async fn http3_without_insecure_fails_the_handshake() {
     // QUIC's TLS is verified for real by default; the self-signed listener
     // must not complete a handshake against the webpki roots.
     let server = TestServer::start_http3().await;
-    let strict = TransportOptions { insecure: false };
+    let strict = TransportOptions::default(); // verification on
 
     match Transport::http3(&server.base_url, &strict, server.http3_port).await {
         Err(ClientError::Transport(_)) => {}

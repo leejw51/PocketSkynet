@@ -336,7 +336,10 @@ fn unique_dir() -> PathBuf {
 // --- client-side conveniences ----------------------------------------------
 
 pub fn insecure() -> TransportOptions {
-    TransportOptions { insecure: true }
+    TransportOptions {
+        insecure: true,
+        ..TransportOptions::default()
+    }
 }
 
 /// An HTTP/1.1 client for this server, trusting its self-signed certificate

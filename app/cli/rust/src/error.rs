@@ -34,6 +34,12 @@ pub enum ClientError {
     /// A method that needs a JWT was called before [`crate::Client::login`].
     #[error("not logged in — call login() first")]
     NotLoggedIn,
+
+    /// An identifier a caller passed does not match the protocol's charset,
+    /// so it is refused locally rather than interpolated into a request path
+    /// where a `/`, `?`, or `#` could retarget the request.
+    #[error("invalid {kind}: {value:?}")]
+    InvalidArgument { kind: &'static str, value: String },
 }
 
 impl From<pocketskynet_core::CryptoError> for ClientError {

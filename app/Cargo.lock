@@ -3224,6 +3224,7 @@ version = "1.0.1"
 dependencies = [
  "bytes",
  "clap",
+ "futures-util",
  "h3",
  "h3-quinn",
  "hex",

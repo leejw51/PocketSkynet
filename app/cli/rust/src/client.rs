@@ -11,6 +11,26 @@ use crate::types::{
     LoginRequest, LoginResponse, Message, Room, SendMessageRequest,
 };
 
+/// The protocol's room-id charset (API.md §3.1). Validating a room id before
+/// it is interpolated into a request path is what stops a `/`, `..`, `?`, or
+/// `#` inside it from retargeting the request at another authenticated
+/// endpoint. The server enforces the same set; this refuses locally so the
+/// malformed request is never sent.
+fn valid_room_id(room_id: &str) -> Result<(), ClientError> {
+    let ok = !room_id.is_empty()
+        && room_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(ClientError::InvalidArgument {
+            kind: "room id",
+            value: room_id.to_owned(),
+        })
+    }
+}
+
 /// A PocketSkynet API client over one [`Transport`].
 ///
 /// Construct a transport first ([`Transport::http1`] / [`Transport::http3`]),
@@ -176,6 +196,7 @@ impl Client {
     /// trims `content` before storing, so it is trimmed here first and
     /// `msgHash` is the SHA-256 of exactly what is sent (protocol §13).
     pub async fn send_message(&self, room_id: &str, text: &str) -> Result<Message, ClientError> {
+        valid_room_id(room_id)?;
         let content = text.trim().to_owned();
         let msg_hash = pocketskynet_core::msg_hash_plaintext(&content);
         let body = serde_json::to_value(SendMessageRequest {
@@ -195,6 +216,7 @@ impl Client {
     /// `GET /api/rooms/{roomId}/messages` — newest `limit` messages,
     /// returned chronologically ascending.
     pub async fn messages(&self, room_id: &str, limit: u32) -> Result<Vec<Message>, ClientError> {
+        valid_room_id(room_id)?;
         self.call(
             Method::GET,
             &format!("/api/rooms/{room_id}/messages?limit={limit}"),
@@ -202,5 +224,42 @@ impl Client {
             None,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn well_formed_room_ids_pass() {
+        // The real server IDs, which mix `_`, `-`, and `.` (API.md §4.1).
+        for id in [
+            "room_1749652739650_304e0eaf-bcf9-4682-a6a0-69bee8e40b97",
+            "room_note_0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "a.b-c_D9",
+        ] {
+            assert!(valid_room_id(id).is_ok(), "{id} should be accepted");
+        }
+    }
+
+    #[test]
+    fn path_injection_attempts_are_refused_locally() {
+        // A `/`, `..`, `?`, or `#` in the id would otherwise retarget the
+        // request path at another authenticated endpoint.
+        for id in [
+            "",
+            "room/../auth/profile",
+            "room_1/messages?admin=1",
+            "room#frag",
+            "room 1",
+            "room%2Fadmin",
+            "../../secret",
+        ] {
+            match valid_room_id(id) {
+                Err(ClientError::InvalidArgument { kind, .. }) => assert_eq!(kind, "room id"),
+                other => panic!("{id:?} should be refused, got {other:?}"),
+            }
+        }
     }
 }

@@ -15,14 +15,45 @@ mod h3t;
 pub use h1::H1Transport;
 pub use h3t::H3Transport;
 
+use std::time::Duration;
+
 use crate::error::ClientError;
 
+/// Default cap on how long a single request may take end to end, before the
+/// transport gives up and returns an error rather than hanging.
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default cap on establishing the connection (TCP/TLS or the QUIC
+/// handshake). Shorter than the request timeout so an unreachable host fails
+/// fast instead of burning the whole request budget on connect.
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Largest response body the client will accumulate, matching the server's
+/// own `MAX_BODY` (`app/server/src/http3.rs`). A peer that streams past this
+/// is refused rather than allowed to exhaust memory.
+pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
 /// Options shared by both transports.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TransportOptions {
     /// Skip server-certificate verification. For the server's self-signed
     /// development certificates only; never use it against a real deployment.
     pub insecure: bool,
+    /// End-to-end timeout for a single request. A server that accepts the
+    /// connection but never answers must not hang the client forever.
+    pub request_timeout: Duration,
+    /// Timeout for establishing the connection (TCP/TLS or QUIC handshake).
+    pub connect_timeout: Duration,
+}
+
+impl Default for TransportOptions {
+    fn default() -> Self {
+        Self {
+            insecure: false,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+        }
+    }
 }
 
 /// A raw response: status plus body bytes. The API layer does the JSON.
@@ -108,6 +139,20 @@ pub fn h3_target(base_url: &str, port_override: Option<u16>) -> Result<(String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defaults_carry_finite_timeouts_and_verification_on() {
+        let options = TransportOptions::default();
+        assert!(!options.insecure, "verification is on by default");
+        assert_eq!(options.request_timeout, DEFAULT_REQUEST_TIMEOUT);
+        assert_eq!(options.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
+        assert!(
+            options.connect_timeout < options.request_timeout,
+            "connect fails faster than the whole-request budget"
+        );
+        // Neither is the accidental zero that would time out instantly.
+        assert!(options.request_timeout.as_secs() > 0);
+    }
 
     #[test]
     fn the_urls_own_port_is_the_default_quic_port() {

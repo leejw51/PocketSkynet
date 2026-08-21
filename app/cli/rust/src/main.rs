@@ -39,6 +39,18 @@ struct Cli {
     #[arg(long, global = true, env = "POCKETSKYNET_KEY", hide_env_values = true)]
     key: Option<String>,
 
+    /// A JWT from an earlier `login`, reused instead of signing in again.
+    /// Prefer this for scripted use: each `login` consumes a challenge and
+    /// the production server caps logins at 5/min/IP, so re-logging in on
+    /// every command trips a 429.
+    #[arg(
+        long,
+        global = true,
+        env = "POCKETSKYNET_TOKEN",
+        hide_env_values = true
+    )]
+    token: Option<String>,
+
     /// Username for first-time login (defaults to the protocol's
     /// deterministic username for the address).
     #[arg(long, global = true)]
@@ -81,6 +93,7 @@ async fn main() {
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let options = TransportOptions {
         insecure: cli.insecure,
+        ..TransportOptions::default()
     };
     let transport = if cli.http3 {
         Transport::http3(&cli.server, &options, cli.http3_port).await?
@@ -100,17 +113,23 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let key = cli
-        .key
-        .as_deref()
-        .ok_or("a private key is required: pass --key 0x… or set POCKETSKYNET_KEY")?;
-    let wallet =
-        Wallet::from_private_key_hex(key).map_err(|e| format!("invalid private key: {e:?}"))?;
-    let login = client.login(&wallet, cli.username.as_deref()).await?;
+    // `login` always signs in with the key (its whole job is to mint a JWT).
+    // Every other authenticated command reuses a supplied token when there is
+    // one — the scripted path that avoids the 5/min login limiter — and falls
+    // back to signing in with the key otherwise.
+    let signed_in = if let Command::Login = cli.command {
+        Some(sign_in(&mut client, cli.key.as_deref(), cli.username.as_deref()).await?)
+    } else if let Some(token) = cli.token.as_deref() {
+        client.set_token(token.to_owned());
+        None
+    } else {
+        Some(sign_in(&mut client, cli.key.as_deref(), cli.username.as_deref()).await?)
+    };
 
     match cli.command {
         Command::Health => unreachable!("handled above"),
         Command::Login => {
+            let login = signed_in.expect("login always signs in");
             println!("address:   {}", login.user.wallet_address);
             println!("username:  {}", login.user.username);
             println!("transport: {}", client.transport_name());
@@ -169,4 +188,20 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Sign in with the private key: challenge → EIP-191 sign → JWT, stored on
+/// `client`. Fails with a clear message when no key was supplied.
+async fn sign_in(
+    client: &mut Client,
+    key: Option<&str>,
+    username: Option<&str>,
+) -> Result<pocketskynet_client::types::LoginResponse, Box<dyn std::error::Error>> {
+    let key = key.ok_or(
+        "a private key is required: pass --key 0x… or set POCKETSKYNET_KEY \
+         (or reuse a JWT with --token / POCKETSKYNET_TOKEN)",
+    )?;
+    let wallet =
+        Wallet::from_private_key_hex(key).map_err(|e| format!("invalid private key: {e:?}"))?;
+    Ok(client.login(&wallet, username).await?)
 }

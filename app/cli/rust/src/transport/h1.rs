@@ -1,7 +1,9 @@
 //! HTTP/1.1(+TLS) via `reqwest`.
 
+use futures_util::StreamExt;
+
 use crate::error::ClientError;
-use crate::transport::{RawResponse, TransportOptions};
+use crate::transport::{RawResponse, TransportOptions, MAX_RESPONSE_BYTES};
 
 pub struct H1Transport {
     client: reqwest::Client,
@@ -16,6 +18,10 @@ impl H1Transport {
         }
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(options.insecure)
+            // A server that accepts the connection but never answers must not
+            // hang the client forever; connect fails faster still.
+            .timeout(options.request_timeout)
+            .connect_timeout(options.connect_timeout)
             .build()?;
         Ok(Self { client, base })
     }
@@ -40,7 +46,23 @@ impl H1Transport {
         }
         let response = request.send().await?;
         let status = response.status().as_u16();
-        let body = response.bytes().await?.to_vec();
-        Ok(RawResponse { status, body })
+
+        // Stream the body so an oversized response is refused mid-transfer
+        // rather than fully buffered first — `bytes()` would honour no cap.
+        let mut collected = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if collected.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                return Err(ClientError::Transport(format!(
+                    "response body exceeded the {MAX_RESPONSE_BYTES}-byte cap"
+                )));
+            }
+            collected.extend_from_slice(&chunk);
+        }
+        Ok(RawResponse {
+            status,
+            body: collected,
+        })
     }
 }

@@ -8,6 +8,28 @@ use serde_json::json;
 use crate::common::{self, TestServer, JWT_SECRET};
 
 #[tokio::test]
+async fn a_jwt_from_one_login_is_reusable_on_a_fresh_client() {
+    // What --token / POCKETSKYNET_TOKEN buys: a scripted command reuses an
+    // earlier JWT via set_token, so it never re-runs the login flow (which
+    // the production server caps at 5/min/IP).
+    let server = TestServer::start().await;
+    let wallet = Wallet::random().unwrap();
+
+    let mut first = common::h1(&server);
+    let token = first.login(&wallet, Some("scripter")).await.unwrap().token;
+
+    // A brand-new client that never logs in, only adopts the token.
+    let mut reused = common::h1(&server);
+    reused.set_token(token);
+    let rooms = reused
+        .rooms()
+        .await
+        .expect("the reused JWT must be accepted");
+    // The account has its built-in rooms, proving the identity carried over.
+    assert!(!rooms.is_empty());
+}
+
+#[tokio::test]
 async fn login_returns_a_usable_jwt_and_the_wallet_identity() {
     let server = TestServer::start().await;
     let wallet = Wallet::random().unwrap();
