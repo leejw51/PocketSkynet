@@ -204,20 +204,24 @@ async fn keygen(
         }
         // A freshly finished ceremony keeps the slot while its requester's
         // poll loop collects it; past the grace they have walked away, and
-        // the new ceremony evicts the abandoned shares below.
-        if let Ok(pending) = state.tss.pending.lock() {
-            if let Some(p) = pending.as_ref() {
-                if p.parked_at.elapsed() < COLLECT_GRACE {
-                    return Err(ApiError::conflict(
-                        "The previous key generation is still being collected — try again shortly",
-                    ));
-                }
+        // the new ceremony evicts the abandoned shares. Check *and* evict
+        // under one hold of the mutex, before the claim — a poisoned lock
+        // is an error like the keygen lock above, never a silent skip that
+        // would bypass the grace check or leave stale shares collectable.
+        let mut pending = state
+            .tss
+            .pending
+            .lock()
+            .map_err(|_| ApiError::Internal(anyhow::anyhow!("tss pending lock poisoned")))?;
+        if let Some(p) = pending.as_ref() {
+            if p.parked_at.elapsed() < COLLECT_GRACE {
+                return Err(ApiError::conflict(
+                    "The previous key generation is still being collected — try again shortly",
+                ));
             }
         }
-        *keygen = KeygenStatus::GeneratingPrimes;
-    }
-    if let Ok(mut pending) = state.tss.pending.lock() {
         *pending = None;
+        *keygen = KeygenStatus::GeneratingPrimes;
     }
 
     let app = state.clone();

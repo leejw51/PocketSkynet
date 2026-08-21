@@ -508,11 +508,14 @@ pub fn login(p: &LoginProps) -> Html {
                 let mut files = (*tss_files).clone();
                 for file in picked {
                     let name = file.name();
-                    let Ok(text) = wasm_bindgen_futures::JsFuture::from(file.text()).await else {
-                        continue;
-                    };
+                    // A file whose bytes cannot even be read still lands in
+                    // the list (header `None`, so it is named as not-a-share)
+                    // — the same promise the parse path keeps.
+                    let text = wasm_bindgen_futures::JsFuture::from(file.text())
+                        .await
+                        .ok()
+                        .and_then(|t| t.as_string());
                     let value: serde_json::Value = text
-                        .as_string()
                         .and_then(|t| serde_json::from_str(&t).ok())
                         .unwrap_or(serde_json::Value::Null);
                     let header = crate::api::tss::TssShareHeader::of(&value);

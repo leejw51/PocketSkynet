@@ -31,11 +31,25 @@ pub struct TssShareHeader {
 }
 
 impl TssShareHeader {
+    /// The largest `n` a share file may claim — mirrors
+    /// `pocketskynet_tss::MAX_PARTIES` (the tss crate is native-only, so the
+    /// constant cannot be imported here).
+    pub const MAX_PARTIES: u16 = 5;
+
     /// Parse a candidate file's header, `None` if it is not a share file.
+    ///
+    /// The header drives client-side quorum gating and slot rendering, so a
+    /// garbled or hand-edited file must not pass: `2 ≤ threshold ≤ parties ≤
+    /// MAX_PARTIES` is enforced here, the same bounds the server holds a
+    /// keygen to — a threshold of 0 would show "ready" instantly, and an
+    /// absurd `parties` would render that many shard slots.
     pub fn of(file: &Value) -> Option<Self> {
         let header: Self = serde_json::from_value(file.clone()).ok()?;
         (header.file_type == "pocketskynet-tss-share"
             && header.version == 1
+            && header.threshold >= 2
+            && header.threshold <= header.parties
+            && header.parties <= Self::MAX_PARTIES
             && header.party_index < header.parties)
             .then_some(header)
     }
@@ -193,5 +207,56 @@ impl Client {
             }),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn share(threshold: u16, parties: u16, party_index: u16) -> Value {
+        json!({
+            "type": "pocketskynet-tss-share",
+            "version": 1,
+            "address": "0x00112233445566778899aabbccddeeff00112233",
+            "threshold": threshold,
+            "parties": parties,
+            "partyIndex": party_index,
+        })
+    }
+
+    #[test]
+    fn a_well_formed_header_parses() {
+        let h = TssShareHeader::of(&share(2, 3, 2)).unwrap();
+        assert_eq!((h.threshold, h.parties, h.party_index), (2, 3, 2));
+        assert_eq!(h.shape(), "2-of-3");
+    }
+
+    #[test]
+    fn out_of_bounds_headers_are_not_share_files() {
+        // The header gates the client-side quorum: a threshold of 0 or 1
+        // would show "ready" with too few files, a threshold above `parties`
+        // could never be met, and a huge `parties` would render that many
+        // shard slots. All are refused here, mirroring the server's
+        // `2 ≤ t ≤ n ≤ MAX_PARTIES`.
+        assert!(TssShareHeader::of(&share(0, 3, 0)).is_none());
+        assert!(TssShareHeader::of(&share(1, 3, 0)).is_none());
+        assert!(TssShareHeader::of(&share(4, 3, 0)).is_none());
+        assert!(TssShareHeader::of(&share(2, TssShareHeader::MAX_PARTIES + 1, 0)).is_none());
+        assert!(TssShareHeader::of(&share(2, u16::MAX, 0)).is_none());
+        // The party index names one of the `n` files, `0..n`.
+        assert!(TssShareHeader::of(&share(2, 3, 3)).is_none());
+        // And the widest legal shape still parses.
+        assert!(TssShareHeader::of(&share(2, TssShareHeader::MAX_PARTIES, 4)).is_some());
+    }
+
+    #[test]
+    fn foreign_json_is_not_a_share_file() {
+        assert!(TssShareHeader::of(&Value::Null).is_none());
+        assert!(TssShareHeader::of(&json!({"type": "something-else"})).is_none());
+        let mut wrong_version = share(2, 3, 0);
+        wrong_version["version"] = json!(2);
+        assert!(TssShareHeader::of(&wrong_version).is_none());
     }
 }
