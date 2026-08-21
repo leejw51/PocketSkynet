@@ -48,7 +48,9 @@ pskynet-swift messages <roomId> --limit 20 --server … --key …
 ```
 
 The key can also come from the environment: `export POCKETSKYNET_KEY=0x…`.
-Against a server with a self-signed certificate (`--tls` dev servers), add
+Prefer the environment variable over `--key`, which is visible to anyone who
+can run `ps` while the command is in flight. Against a server with a
+self-signed certificate (`--tls` dev servers), add
 `--insecure`; without it the certificate is refused, deliberately.
 
 First-time logins need a username. Pass `--username`, or the client retries
@@ -85,13 +87,15 @@ Both transports go through the same `Transport` abstraction
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 ```
 
-- **Unit** (`PocketSkynetClientTests`, 33 tests, no server): every `eip191[]`
+- **Unit** (`PocketSkynetClientTests`, 39 tests, no server): every `eip191[]`
   vector (digest, byte-exact signature, address recovery), key→address for
   `wallet.privateKeyImports` and `wallet.accounts`, `msgHash` vectors
   (trimming, unicode), EIP-191 UTF-8 byte-length semantics, low-S and
   v ∈ {27, 28} enforcement, malformed-key rejection, camelCase request bodies
   (optionals omitted, never null), tolerant response decoding, all three
-  error-envelope shapes.
+  error-envelope shapes, hex-decode sign/space rejection, base-URL
+  trailing-slash normalization, and URL path-segment encoding (a caller
+  cannot retarget a request through a crafted roomId).
 - **Integration** (`IntegrationTests`, 36 tests): each suite boots a real
   `pocketskynet` process (modeled on `app/server/tests/common/harness.rs` —
   ephemeral TCP/UDP ports, serialized boots with bind-race detection, temp

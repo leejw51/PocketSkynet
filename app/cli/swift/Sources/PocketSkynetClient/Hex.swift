@@ -18,6 +18,10 @@ public enum Hex {
             s = s.dropFirst(2)
         }
         guard s.count % 2 == 0 else { return nil }
+        // `UInt8(_, radix:)` tolerates a leading `+`/`-`, which would let "+f"
+        // slip past; require every character to be a literal ASCII hex digit
+        // first, matching the doc comment.
+        guard s.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return nil }
         var bytes = [UInt8]()
         bytes.reserveCapacity(s.count / 2)
         var index = s.startIndex

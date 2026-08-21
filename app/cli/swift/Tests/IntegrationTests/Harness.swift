@@ -145,6 +145,11 @@ final class TestServer {
     }
 
     /// `nil` when healthy; otherwise a description of what went wrong.
+    /// One transport for the whole boot's health polling. A fresh one per
+    /// 20ms poll would leak hundreds of URLSessions per boot — the session
+    /// retains its delegate, so nothing frees them until `invalidate()`.
+    private lazy var pollTransport = URLSessionTransport(insecure: tls, http3: false, timeout: 2)
+
     private func awaitHealth() -> String? {
         let deadline = Date().addingTimeInterval(Self.bootTimeout)
         let url = "\(baseURL)/api/health"
@@ -152,7 +157,7 @@ final class TestServer {
             if !process.isRunning {
                 return "server exited during boot with status \(process.terminationStatus)"
             }
-            if Self.syncGET(url, insecure: tls) == 200 {
+            if syncGET(url) == 200 {
                 // Somebody answered — make sure it was us. If our child lost
                 // the bind race it has already exited.
                 if process.isRunning {
@@ -165,11 +170,12 @@ final class TestServer {
         return "/api/health never became ready on port \(port)"
     }
 
-    /// Blocking GET so the harness can run inside synchronous XCTest setUp.
-    static func syncGET(_ url: String, insecure: Bool) -> Int? {
-        let transport = URLSessionTransport(insecure: insecure, http3: false, timeout: 2)
+    /// Blocking GET over the shared poll transport, so the harness can run
+    /// inside synchronous XCTest setUp.
+    private func syncGET(_ url: String) -> Int? {
         let semaphore = DispatchSemaphore(value: 0)
         var status: Int?
+        let transport = pollTransport
         Task.detached {
             defer { semaphore.signal() }
             guard let target = URL(string: url) else { return }
@@ -182,6 +188,7 @@ final class TestServer {
     // MARK: Teardown
 
     func stop() {
+        pollTransport.invalidate()
         if process.isRunning {
             kill(process.processIdentifier, SIGKILL)
             process.waitUntilExit()

@@ -62,12 +62,27 @@ public final class SkynetClient {
     public var token: String?
 
     public init(baseURL: URL, transport: Transport = URLSessionTransport()) {
-        self.baseURL = baseURL
+        self.baseURL = Self.normalize(baseURL)
         self.transport = transport
     }
 
     public convenience init(baseURL: URL, insecure: Bool, http3: Bool) {
         self.init(baseURL: baseURL, transport: URLSessionTransport(insecure: insecure, http3: http3))
+    }
+
+    /// Drop a trailing slash so a `--server` of `http://host:9099/` does not
+    /// produce `//api/...` once a path is appended.
+    private static func normalize(_ url: URL) -> URL {
+        var text = url.absoluteString
+        while text.hasSuffix("/") { text.removeLast() }
+        return URL(string: text) ?? url
+    }
+
+    /// Release the underlying transport's resources. The URLSession transport
+    /// holds a session that will not be reclaimed otherwise (see
+    /// `URLSessionTransport.invalidate`). The client must not be used after.
+    public func close() {
+        transport.invalidate()
     }
 
     // MARK: Raw request plumbing
@@ -167,7 +182,7 @@ public final class SkynetClient {
     }
 
     public func room(id: String) async throws -> Room {
-        try await call("GET", "/api/rooms/\(id)")
+        try await call("GET", "/api/rooms/\(try Self.pathSegment(id))")
     }
 
     public func createRoom(name: String, description: String? = nil) async throws -> Room {
@@ -177,18 +192,37 @@ public final class SkynetClient {
     /// Send a plaintext message; `msgHash` is computed here.
     @discardableResult
     public func sendMessage(roomId: String, content: String) async throws -> Message {
-        try await call("POST", "/api/rooms/\(roomId)/messages",
+        try await call("POST", "/api/rooms/\(try Self.pathSegment(roomId))/messages",
                        body: SendMessageRequest(content: content, msgHash: msgHashPlaintext(content)))
     }
 
     /// List messages, ascending by `(messageTimestamp, msgSerial)`.
     public func messages(roomId: String, limit: Int? = nil, before: Int64? = nil, since: Int64? = nil) async throws -> [Message] {
+        let segment = try Self.pathSegment(roomId)
         var query: [String] = []
         if let limit { query.append("limit=\(limit)") }
         if let before { query.append("before=\(before)") }
         if let since { query.append("since=\(since)") }
         let suffix = query.isEmpty ? "" : "?" + query.joined(separator: "&")
-        return try await call("GET", "/api/rooms/\(roomId)/messages\(suffix)")
+        return try await call("GET", "/api/rooms/\(segment)/messages\(suffix)")
+    }
+
+    /// Percent-encode a caller-supplied value for use as a single URL path
+    /// segment. As a shipped library, an attacker-influenced roomId must not be
+    /// able to retarget the request — e.g. `x/../../auth/profile?` would walk
+    /// out of `/api/rooms/` and carry the caller's bearer token to another
+    /// endpoint. The server's own ids are `[a-zA-Z0-9_.-]`, all of which pass
+    /// through unchanged; anything containing `/ ? #` or other reserved
+    /// characters is encoded so it stays one segment.
+    static func pathSegment(_ raw: String) throws -> String {
+        // `urlPathAllowed` still permits `/`; strip it (plus the query/fragment
+        // delimiters, for defense in depth) so the segment cannot break out.
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#")
+        guard let encoded = raw.addingPercentEncoding(withAllowedCharacters: allowed) else {
+            throw APIError.decoding("could not encode path segment: \(raw)")
+        }
+        return encoded
     }
 
     public func profile() async throws -> User {

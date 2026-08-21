@@ -22,6 +22,13 @@ public struct TransportResponse {
 
 public protocol Transport {
     func send(method: String, url: URL, headers: [String: String], body: Data?) async throws -> TransportResponse
+    /// Release any long-lived resources. Default no-op; transports that hold a
+    /// session (see `URLSessionTransport`) override it.
+    func invalidate()
+}
+
+public extension Transport {
+    func invalidate() {}
 }
 
 public enum TransportError: Error, CustomStringConvertible {
@@ -47,15 +54,29 @@ public final class URLSessionTransport: NSObject, Transport {
     ///   - insecure: accept any server certificate (self-signed dev servers).
     ///   - http3: mark every request `assumesHTTP3Capable`, so URLSession
     ///     attempts QUIC on the URL's port. Requires an `https` URL.
-    public init(insecure: Bool = false, http3: Bool = false, timeout: TimeInterval = 30) {
+    public init(insecure: Bool = false, http3: Bool = false,
+                timeout: TimeInterval = 30, resourceTimeout: TimeInterval = 120) {
         self.insecure = insecure
         self.http3 = http3
         super.init()
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
+        // A hard ceiling on the whole transfer. `timeoutIntervalForRequest`
+        // only measures idle gaps, so a server dripping one byte per interval
+        // would otherwise stall the caller for the 7-day default.
+        config.timeoutIntervalForResource = resourceTimeout
         // A CLI must see the server's answer, not a stale intermediary's.
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }
+
+    /// Tear the session down. A URLSession retains its delegate — this class is
+    /// its own delegate, so the two form a cycle and `deinit` never fires;
+    /// nothing is released until this is called. Call it once the transport is
+    /// done (after a CLI command, in test teardown). The instance must not be
+    /// used afterwards.
+    public func invalidate() {
+        session.invalidateAndCancel()
     }
 
     public func send(method: String, url: URL, headers: [String: String], body: Data?) async throws -> TransportResponse {

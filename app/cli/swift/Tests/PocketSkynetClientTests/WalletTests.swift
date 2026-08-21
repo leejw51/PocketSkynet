@@ -79,4 +79,16 @@ final class WalletTests: XCTestCase {
         XCTAssertNil(Hex.decode("zz"))      // not hex
         XCTAssertEqual(Hex.decode(""), [])  // empty is fine
     }
+
+    func testHexRejectsSignsAndSpace() {
+        // `UInt8(_, radix:)` would otherwise accept a leading sign; the decoder
+        // must reject anything outside [0-9a-fA-F].
+        XCTAssertNil(Hex.decode("+f"))
+        XCTAssertNil(Hex.decode("-f"))
+        XCTAssertNil(Hex.decode("+fff"))   // odd length caught first, but also a sign
+        XCTAssertNil(Hex.decode("ff+f"))
+        XCTAssertNil(Hex.decode(" f"))
+        XCTAssertNil(Hex.decode("f "))
+        XCTAssertNil(Hex.decode("0x+f"))
+    }
 }

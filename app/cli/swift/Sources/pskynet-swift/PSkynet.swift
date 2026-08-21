@@ -41,11 +41,21 @@ struct GlobalOptions: ParsableArguments {
         return try EthereumWallet(privateKeyHex: hex)
     }
 
-    /// Log in and return the authenticated client.
-    func authenticated() async throws -> SkynetClient {
+    /// Run `body` with a client, closing its transport afterwards so the
+    /// underlying URLSession is released (the session retains its delegate, so
+    /// nothing frees it otherwise).
+    func withClient<T>(_ body: (SkynetClient) async throws -> T) async throws -> T {
         let client = try makeClient()
-        try await client.login(wallet: try wallet(), username: username)
-        return client
+        defer { client.close() }
+        return try await body(client)
+    }
+
+    /// [`withClient`](withClient), after logging in first.
+    func withAuthenticatedClient<T>(_ body: (SkynetClient) async throws -> T) async throws -> T {
+        try await withClient { client in
+            try await client.login(wallet: try wallet(), username: username)
+            return try await body(client)
+        }
     }
 }
 
@@ -79,11 +89,12 @@ struct Health: AsyncParsableCommand {
 
     func run() async {
         await CLIRunner.run {
-            let client = try options.makeClient()
-            let health = try await client.health()
-            print("status: \(health.status)  uptime: \(health.uptime ?? 0)s")
-            let info = try await client.serverInfo()
-            print("transport: \(info.protocolName)")
+            try await options.withClient { client in
+                let health = try await client.health()
+                print("status: \(health.status)  uptime: \(health.uptime ?? 0)s")
+                let info = try await client.serverInfo()
+                print("transport: \(info.protocolName)")
+            }
         }
     }
 }
@@ -94,11 +105,12 @@ struct Login: AsyncParsableCommand {
 
     func run() async {
         await CLIRunner.run {
-            let client = try options.makeClient()
-            let response = try await client.login(wallet: try options.wallet(), username: options.username)
-            print("address:  \(response.user.walletAddress)")
-            print("username: \(response.user.username)")
-            print("token:    \(response.token)")
+            try await options.withClient { client in
+                let response = try await client.login(wallet: try options.wallet(), username: options.username)
+                print("address:  \(response.user.walletAddress)")
+                print("username: \(response.user.username)")
+                print("token:    \(response.token)")
+            }
         }
     }
 }
@@ -109,10 +121,11 @@ struct Rooms: AsyncParsableCommand {
 
     func run() async {
         await CLIRunner.run {
-            let client = try await options.authenticated()
-            for room in try await client.rooms() {
-                let kind = room.kind.map { " [\($0)]" } ?? ""
-                print("\(room.id)  \(room.name)\(kind)")
+            try await options.withAuthenticatedClient { client in
+                for room in try await client.rooms() {
+                    let kind = room.kind.map { " [\($0)]" } ?? ""
+                    print("\(room.id)  \(room.name)\(kind)")
+                }
             }
         }
     }
@@ -126,9 +139,10 @@ struct CreateRoom: AsyncParsableCommand {
 
     func run() async {
         await CLIRunner.run {
-            let client = try await options.authenticated()
-            let room = try await client.createRoom(name: name)
-            print(room.id)
+            try await options.withAuthenticatedClient { client in
+                let room = try await client.createRoom(name: name)
+                print(room.id)
+            }
         }
     }
 }
@@ -141,9 +155,10 @@ struct Send: AsyncParsableCommand {
 
     func run() async {
         await CLIRunner.run {
-            let client = try await options.authenticated()
-            let message = try await client.sendMessage(roomId: roomId, content: text)
-            print("\(message.id)  serial=\(message.msgSerial)")
+            try await options.withAuthenticatedClient { client in
+                let message = try await client.sendMessage(roomId: roomId, content: text)
+                print("\(message.id)  serial=\(message.msgSerial)")
+            }
         }
     }
 }
@@ -156,10 +171,11 @@ struct Messages: AsyncParsableCommand {
 
     func run() async {
         await CLIRunner.run {
-            let client = try await options.authenticated()
-            for message in try await client.messages(roomId: roomId, limit: limit) {
-                let who = message.sender?.username ?? message.senderAddress
-                print("[\(message.msgSerial)] \(who): \(message.content)")
+            try await options.withAuthenticatedClient { client in
+                for message in try await client.messages(roomId: roomId, limit: limit) {
+                    let who = message.sender?.username ?? message.senderAddress
+                    print("[\(message.msgSerial)] \(who): \(message.content)")
+                }
             }
         }
     }
