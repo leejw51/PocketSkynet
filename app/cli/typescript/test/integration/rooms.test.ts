@@ -30,7 +30,10 @@ test("a fresh account is a member of the three built-in rooms", async () => {
     const names = rooms.map((r) => r.name);
     // Assert membership, never counts — deployments may add rooms.
     for (const expected of ["My Note", "My Jarvis", "My Lobby"]) {
-      assert.ok(names.includes(expected), `expected built-in room ${expected} in ${names}`);
+      assert.ok(
+        names.includes(expected),
+        `expected built-in room ${expected} in ${names}`,
+      );
     }
     const kinds = new Set(rooms.map((r) => r.kind));
     for (const kind of ["note", "jarvis", "lobby"]) {
@@ -105,7 +108,9 @@ test("a foreign room is 403 Access denied", async () => {
     await assert.rejects(
       () => stranger.room(room.id),
       (err: unknown) =>
-        err instanceof ApiError && err.status === 403 && err.message === "Access denied",
+        err instanceof ApiError &&
+        err.status === 403 &&
+        err.message === "Access denied",
     );
   } finally {
     await owner.close();
@@ -119,7 +124,9 @@ test("a NONEXISTENT room is also 403, not 404 (no existence oracle)", async () =
     await assert.rejects(
       () => client.room("room_does_not_exist_123456"),
       (err: unknown) =>
-        err instanceof ApiError && err.status === 403 && err.message === "Access denied",
+        err instanceof ApiError &&
+        err.status === 403 &&
+        err.message === "Access denied",
     );
   } finally {
     await client.close();

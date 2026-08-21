@@ -13,7 +13,8 @@ import { addressFromPublicKey } from "./wallet.js";
 import { bytesToHex, concatBytes, hexToBytes, utf8Bytes } from "./hex.js";
 
 // noble-secp256k1 v2 needs a synchronous HMAC-SHA256 wired in for RFC 6979.
-secp.etc.hmacSha256Sync = (key, ...msgs) => hmac(sha256, key, secp.etc.concatBytes(...msgs));
+secp.etc.hmacSha256Sync = (key, ...msgs) =>
+  hmac(sha256, key, secp.etc.concatBytes(...msgs));
 
 const HALF_N = secp.CURVE.n >> 1n;
 
@@ -36,7 +37,10 @@ export function eip191Digest(message: string): Uint8Array {
  */
 export function personalSign(message: string, privateKey: Uint8Array): string {
   const digest = eip191Digest(message);
-  const sig = secp.sign(digest, privateKey, { lowS: true, extraEntropy: false });
+  const sig = secp.sign(digest, privateKey, {
+    lowS: true,
+    extraEntropy: false,
+  });
   if (sig.recovery !== 0 && sig.recovery !== 1) {
     throw new Error(`unexpected recovery id ${sig.recovery}`);
   }
@@ -67,7 +71,10 @@ export function parseSignature(signature: string): ParsedSignature {
   let recovery: number;
   if (v === 27 || v === 28) recovery = v - 27;
   else if (v === 0 || v === 1) recovery = v;
-  else throw new Error(`invalid recovery byte ${v} (expected 27/28, tolerating 0/1)`);
+  else
+    throw new Error(
+      `invalid recovery byte ${v} (expected 27/28, tolerating 0/1)`,
+    );
   if (r <= 0n || r >= secp.CURVE.n) throw new Error("signature r out of range");
   if (s <= 0n || s >= secp.CURVE.n) throw new Error("signature s out of range");
   if (s > HALF_N) throw new Error("high-S signature rejected (malleable)");

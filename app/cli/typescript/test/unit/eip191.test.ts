@@ -20,21 +20,41 @@ test("eip191 vectors: digest, signature and recovery are byte-exact", () => {
     const priv = normalizePrivateKey(vector.privateKeyHex);
 
     const digest = bytesToHex(eip191Digest(vector.message));
-    assert.equal(digest, vector.digestHex, `digest mismatch for ${vector.name}`);
+    assert.equal(
+      digest,
+      vector.digestHex,
+      `digest mismatch for ${vector.name}`,
+    );
 
     const signature = personalSign(vector.message, priv);
-    assert.equal(signature, vector.signatureHex, `signature mismatch for ${vector.name}`);
+    assert.equal(
+      signature,
+      vector.signatureHex,
+      `signature mismatch for ${vector.name}`,
+    );
 
     const recovered = recoverAddress(vector.message, vector.signatureHex);
-    assert.equal(recovered, vector.address, `recovered address mismatch for ${vector.name}`);
+    assert.equal(
+      recovered,
+      vector.address,
+      `recovered address mismatch for ${vector.name}`,
+    );
 
     assert.ok(verifyPersonalSign(vector.message, signature, vector.address));
-    assert.ok(verifyPersonalSign(vector.message, signature, vector.address.toUpperCase().replace("0X", "0x")));
+    assert.ok(
+      verifyPersonalSign(
+        vector.message,
+        signature,
+        vector.address.toUpperCase().replace("0X", "0x"),
+      ),
+    );
   }
 });
 
 test("eip191 length prefix counts UTF-8 bytes, not characters", () => {
-  const vector = vectors.eip191.find((v) => v.name === "unicode-length-is-bytes");
+  const vector = vectors.eip191.find(
+    (v) => v.name === "unicode-length-is-bytes",
+  );
   assert.ok(vector, "unicode vector present");
   const bytes = utf8Bytes(vector.message);
   assert.equal(bytes.length, vector.messageUtf8Len);
@@ -47,7 +67,11 @@ test("signatures are always low-S with v in {27, 28}", () => {
   for (const vector of vectors.eip191) {
     const priv = normalizePrivateKey(vector.privateKeyHex);
     const signature = personalSign(vector.message, priv);
-    assert.match(signature, /^0x[0-9a-f]{130}$/, "wire form is 0x + 130 lowercase hex");
+    assert.match(
+      signature,
+      /^0x[0-9a-f]{130}$/,
+      "wire form is 0x + 130 lowercase hex",
+    );
     const parsed = parseSignature(signature);
     assert.ok(parsed.s <= halfN, `s must be low for ${vector.name}`);
     const v = parseInt(signature.slice(-2), 16);
@@ -76,7 +100,10 @@ test("high-S signatures are rejected", () => {
     bytesToHex(secp.etc.numberToBytesBE(highS)).padStart(64, "0") +
     flippedV.toString(16);
   assert.throws(() => parseSignature(forged), /high-S/);
-  assert.equal(verifyPersonalSign(vector.message, forged, vector.address), false);
+  assert.equal(
+    verifyPersonalSign(vector.message, forged, vector.address),
+    false,
+  );
 });
 
 test("v outside 27/28 (tolerating 0/1) is rejected", () => {
@@ -107,8 +134,22 @@ test("malformed signatures are rejected", () => {
 
 test("a tampered message no longer verifies", () => {
   const vector = vectors.eip191[0]!;
-  assert.equal(verifyPersonalSign(vector.message + "!", vector.signatureHex, vector.address), false);
-  assert.equal(verifyPersonalSign(vector.message, vector.signatureHex, "0x" + "11".repeat(20)), false);
+  assert.equal(
+    verifyPersonalSign(
+      vector.message + "!",
+      vector.signatureHex,
+      vector.address,
+    ),
+    false,
+  );
+  assert.equal(
+    verifyPersonalSign(
+      vector.message,
+      vector.signatureHex,
+      "0x" + "11".repeat(20),
+    ),
+    false,
+  );
 });
 
 test("login-challenge vector matches the challenge template flow", () => {

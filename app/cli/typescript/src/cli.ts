@@ -50,7 +50,10 @@ interface ParsedCli {
 export class UsageError extends Error {}
 
 /** Parse argv (no `node script` prefix). Pure, for unit testing. */
-export function parseCli(argv: string[], env: NodeJS.ProcessEnv = process.env): ParsedCli {
+export function parseCli(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): ParsedCli {
   let values, positionals;
   try {
     ({ values, positionals } = parseArgs({
@@ -75,7 +78,8 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv = process.env): 
 
   const [command = "", ...rest] = positionals;
   const clientOptions: ClientOptions = {
-    baseUrl: values.server ?? env["POCKETSKYNET_SERVER"] ?? "http://127.0.0.1:9099",
+    baseUrl:
+      values.server ?? env["POCKETSKYNET_SERVER"] ?? "http://127.0.0.1:9099",
     http3: values.http3,
     insecure: values.insecure,
   };
@@ -116,7 +120,11 @@ async function run(cli: ParsedCli, out: (line: string) => void): Promise<void> {
     switch (cli.command) {
       case "health": {
         const health = await client.health();
-        out(cli.json ? JSON.stringify(health) : `status: ${health.status} (uptime ${health.uptime ?? "?"}s)`);
+        out(
+          cli.json
+            ? JSON.stringify(health)
+            : `status: ${health.status} (uptime ${health.uptime ?? "?"}s)`,
+        );
         break;
       }
       case "login": {
@@ -151,7 +159,11 @@ async function run(cli: ParsedCli, out: (line: string) => void): Promise<void> {
         requireArgs(cli, 2, "<roomId> <text>");
         const [roomId, ...words] = cli.positionals;
         const message = await client.sendMessage(roomId!, words.join(" "));
-        out(cli.json ? JSON.stringify(message) : `${message.id}\tserial=${message.msgSerial}`);
+        out(
+          cli.json
+            ? JSON.stringify(message)
+            : `${message.id}\tserial=${message.msgSerial}`,
+        );
         break;
       }
       case "messages": {
@@ -163,7 +175,9 @@ async function run(cli: ParsedCli, out: (line: string) => void): Promise<void> {
         } else {
           for (const message of messages) {
             const sender = message.sender?.username ?? message.senderAddress;
-            out(`[${new Date(message.messageTimestamp).toISOString()}] ${sender}: ${message.content}`);
+            out(
+              `[${new Date(message.messageTimestamp).toISOString()}] ${sender}: ${message.content}`,
+            );
           }
         }
         break;
@@ -202,9 +216,12 @@ export async function main(argv: string[]): Promise<number> {
       return 2;
     }
     if (err instanceof ApiError) {
-      const details = err.errors !== undefined ? ` [${err.errors.join("; ")}]` : "";
+      const details =
+        err.errors !== undefined ? ` [${err.errors.join("; ")}]` : "";
       const code = err.code !== undefined ? ` (${err.code})` : "";
-      process.stderr.write(`error: HTTP ${err.status}${code}: ${err.message}${details}\n`);
+      process.stderr.write(
+        `error: HTTP ${err.status}${code}: ${err.message}${details}\n`,
+      );
       return 1;
     }
     if (err instanceof TransportError || err instanceof Error) {
@@ -218,7 +235,8 @@ export async function main(argv: string[]): Promise<number> {
 
 // Run only when invoked as a program, not when imported by tests.
 const invokedDirectly =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
   main(process.argv.slice(2))
     .then((code) => {
@@ -228,7 +246,9 @@ if (invokedDirectly) {
       // `main` maps known failures to exit codes itself; this catches anything
       // unexpected (e.g. a synchronous throw during teardown) so it becomes a
       // clean `error: … ` + exit 1 rather than an unhandled rejection.
-      process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.stderr.write(
+        `error: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
       process.exitCode = 1;
     });
 }

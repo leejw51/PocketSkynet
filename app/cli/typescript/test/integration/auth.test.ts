@@ -5,8 +5,15 @@ import { personalSign } from "../../src/eip191.js";
 import { ApiError } from "../../src/errors.js";
 import { createTransport, Transport } from "../../src/transport.js";
 import type { ChallengeResponse, LoginResponse } from "../../src/types.js";
-import { accountFromPrivateKey, normalizePrivateKey } from "../../src/wallet.js";
-import { JWT_SECRET, randomPrivateKeyHex, TestServer } from "../helpers/harness.js";
+import {
+  accountFromPrivateKey,
+  normalizePrivateKey,
+} from "../../src/wallet.js";
+import {
+  JWT_SECRET,
+  randomPrivateKeyHex,
+  TestServer,
+} from "../helpers/harness.js";
 import { mintJwt, tamperSignature } from "../helpers/jwt.js";
 
 let server: TestServer;
@@ -46,7 +53,11 @@ test("login happy path with an explicit username", async () => {
   assert.equal(result.usernameSent, "alice_ts");
   assert.equal(result.response.user.username, "alice_ts");
   assert.equal(result.response.user.walletAddress, result.walletAddress);
-  assert.match(result.walletAddress, /^0x[0-9a-f]{40}$/, "wire addresses are lowercase");
+  assert.match(
+    result.walletAddress,
+    /^0x[0-9a-f]{40}$/,
+    "wire addresses are lowercase",
+  );
   assert.ok(result.response.token.split(".").length === 3, "JWT shaped token");
   assert.match(result.response.encryptionSalt ?? "", /^[0-9a-f]{64}$/);
   assert.equal(client.token, result.response.token);
@@ -73,7 +84,10 @@ test("second login of a known account reuses the stored username", async () => {
   await first.close();
 
   // No username this time: server must reuse "returning_user".
-  const second = new PocketSkynetClient({ baseUrl: server.baseUrl, privateKey: key });
+  const second = new PocketSkynetClient({
+    baseUrl: server.baseUrl,
+    privateKey: key,
+  });
   const result = await second.login();
   assert.equal(result.retriedWithGeneratedUsername, false);
   assert.equal(result.usernameSent, undefined);
@@ -106,7 +120,10 @@ test("wrong signature is 401 Invalid signature", async () => {
     }),
   });
   assert.equal(login.status, 401);
-  assert.equal((JSON.parse(login.bodyText) as { message: string }).message, "Invalid signature");
+  assert.equal(
+    (JSON.parse(login.bodyText) as { message: string }).message,
+    "Invalid signature",
+  );
 });
 
 test("a challenge is burned by success: replay is 400", async () => {
@@ -126,10 +143,18 @@ test("a challenge is burned by success: replay is 400", async () => {
     username: "replay_victim",
   });
 
-  const first = await raw.request({ method: "POST", path: "/api/auth/login", body });
+  const first = await raw.request({
+    method: "POST",
+    path: "/api/auth/login",
+    body,
+  });
   assert.equal(first.status, 200, first.bodyText);
 
-  const replay = await raw.request({ method: "POST", path: "/api/auth/login", body });
+  const replay = await raw.request({
+    method: "POST",
+    path: "/api/auth/login",
+    body,
+  });
   assert.equal(replay.status, 400);
   assert.equal(
     (JSON.parse(replay.bodyText) as { message: string }).message,
@@ -148,7 +173,10 @@ test("a challenge is burned by failure too", async () => {
   const challenge = JSON.parse(challengeResponse.bodyText) as ChallengeResponse;
 
   // Fail once with a garbage-but-well-formed signature (wrong key).
-  const wrong = personalSign(challenge.message, normalizePrivateKey(randomPrivateKeyHex()));
+  const wrong = personalSign(
+    challenge.message,
+    normalizePrivateKey(randomPrivateKeyHex()),
+  );
   const failed = await raw.request({
     method: "POST",
     path: "/api/auth/login",
@@ -186,7 +214,11 @@ test("a token minted with the known test secret is accepted", async () => {
   await client.close();
 
   const minted = mintJwt(JWT_SECRET, { walletAddress: login.walletAddress });
-  const rooms = await raw.request({ method: "GET", path: "/api/rooms", token: minted });
+  const rooms = await raw.request({
+    method: "GET",
+    path: "/api/rooms",
+    token: minted,
+  });
   assert.equal(rooms.status, 200, rooms.bodyText);
 });
 
@@ -196,7 +228,11 @@ test("tampered JWT signature is 401", async () => {
   await client.close();
 
   const bad = tamperSignature(login.response.token);
-  const response = await raw.request({ method: "GET", path: "/api/rooms", token: bad });
+  const response = await raw.request({
+    method: "GET",
+    path: "/api/rooms",
+    token: bad,
+  });
   assert.equal(response.status, 401);
 });
 
@@ -211,7 +247,11 @@ test("expired JWT (minted with the real secret) is 401", async () => {
     iat: past - 60,
     exp: past,
   });
-  const response = await raw.request({ method: "GET", path: "/api/rooms", token: expired });
+  const response = await raw.request({
+    method: "GET",
+    path: "/api/rooms",
+    token: expired,
+  });
   assert.equal(response.status, 401);
 });
 
@@ -219,7 +259,11 @@ test("a JWT signed with the wrong secret is 401", async () => {
   const forged = mintJwt("not-the-real-secret-aaaaaaaaaaaaaaaaaaaaaaaa", {
     walletAddress: "0x" + "11".repeat(20),
   });
-  const response = await raw.request({ method: "GET", path: "/api/rooms", token: forged });
+  const response = await raw.request({
+    method: "GET",
+    path: "/api/rooms",
+    token: forged,
+  });
   assert.equal(response.status, 401);
 });
 
@@ -229,7 +273,10 @@ test("no token at all is 401", async () => {
 });
 
 test("client surfaces API errors as ApiError with status and message", async () => {
-  const client = new PocketSkynetClient({ baseUrl: server.baseUrl, token: "garbage.token.here" });
+  const client = new PocketSkynetClient({
+    baseUrl: server.baseUrl,
+    token: "garbage.token.here",
+  });
   await assert.rejects(
     () => client.rooms(),
     (err: unknown) => err instanceof ApiError && err.status === 401,

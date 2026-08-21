@@ -22,15 +22,19 @@ const CURVE_N = secp.CURVE.n;
  * order.
  */
 export function normalizePrivateKey(input: string): Uint8Array {
-  const stripped = input.startsWith("0x") || input.startsWith("0X") ? input.slice(2) : input;
+  const stripped =
+    input.startsWith("0x") || input.startsWith("0X") ? input.slice(2) : input;
   if (stripped.length !== 64 || !isHex(stripped)) {
-    throw new Error("private key must be 64 hex characters (optionally 0x-prefixed)");
+    throw new Error(
+      "private key must be 64 hex characters (optionally 0x-prefixed)",
+    );
   }
   const bytes = hexToBytes(stripped);
   let scalar = 0n;
   for (const b of bytes) scalar = (scalar << 8n) | BigInt(b);
   if (scalar === 0n) throw new Error("private key must not be zero");
-  if (scalar >= CURVE_N) throw new Error("private key must be below the curve order");
+  if (scalar >= CURVE_N)
+    throw new Error("private key must be below the curve order");
   return bytes;
 }
 
@@ -128,7 +132,9 @@ export function accountFromMnemonic(phrase: string, index = 0): DerivedAccount {
 }
 
 /** Import a raw private key (hex, `0x` optional). */
-export function accountFromPrivateKey(privateKeyHex: string): Omit<DerivedAccount, "path" | "index"> {
+export function accountFromPrivateKey(
+  privateKeyHex: string,
+): Omit<DerivedAccount, "path" | "index"> {
   const privateKey = normalizePrivateKey(privateKeyHex);
   const publicKey = publicKeyFromPrivate(privateKey);
   const address = addressFromPublicKey(publicKey);

@@ -20,7 +20,10 @@ test("wallet.privateKeyImports: key -> pubkey -> address, byte-exact", () => {
     const account = accountFromPrivateKey(vector.privateKeyHex);
     assert.equal(account.address, vector.address);
     assert.equal(account.addressChecksummed, vector.addressChecksummed);
-    assert.equal(bytesToHex(account.publicKey), vector.publicKeyUncompressedHex);
+    assert.equal(
+      bytesToHex(account.publicKey),
+      vector.publicKeyUncompressedHex,
+    );
     assert.equal(account.privateKeyHex, vector.privateKeyHex);
   }
 });
@@ -44,7 +47,8 @@ test("malformed private keys are rejected", () => {
   assert.throws(() => normalizePrivateKey("g".repeat(64)), /64 hex/); // non-hex
   assert.throws(() => normalizePrivateKey(""), /64 hex/);
   // n - 1 is the largest valid key:
-  const nMinus1 = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140";
+  const nMinus1 =
+    "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140";
   assert.equal(privateKeyToHex(normalizePrivateKey(nMinus1)), "0x" + nMinus1);
 });
 
@@ -69,9 +73,15 @@ test("wallet.accounts: mnemonic -> m/44'/60'/0'/0/{index}", () => {
 test("mnemonics are trimmed before parsing; invalid ones are rejected", () => {
   const vector = vectors.wallet.accounts[0]!;
   const padded = `  ${vector.phrase}\n`;
-  assert.equal(accountFromMnemonic(padded, vector.index).address, vector.address);
+  assert.equal(
+    accountFromMnemonic(padded, vector.index).address,
+    vector.address,
+  );
   assert.throws(() => mnemonicToSeed("abandon ".repeat(12).trim()), /mnemonic/); // bad checksum
-  assert.throws(() => mnemonicToSeed("definitely not a wordlist phrase"), /mnemonic/);
+  assert.throws(
+    () => mnemonicToSeed("definitely not a wordlist phrase"),
+    /mnemonic/,
+  );
 });
 
 test("wallet.eip55: checksum casing", () => {
@@ -82,7 +92,10 @@ test("wallet.eip55: checksum casing", () => {
     assert.equal(toChecksumAddress(vector.checksummed), vector.checksummed);
   }
   assert.throws(() => toChecksumAddress("0x1234"), /invalid address/);
-  assert.throws(() => toChecksumAddress("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"), /invalid address/);
+  assert.throws(
+    () => toChecksumAddress("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"),
+    /invalid address/,
+  );
 });
 
 test("public keys are uncompressed 65-byte SEC1", () => {

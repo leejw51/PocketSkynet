@@ -17,7 +17,10 @@ interface CliRun {
   stderr: string;
 }
 
-async function runCli(args: string[], env: Record<string, string> = {}): Promise<CliRun> {
+async function runCli(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<CliRun> {
   // Scrub any POCKETSKYNET_* the developer's shell may carry, then apply
   // exactly what this test asked for.
   const base: NodeJS.ProcessEnv = { ...process.env };
@@ -25,10 +28,14 @@ async function runCli(args: string[], env: Record<string, string> = {}): Promise
     if (key.startsWith("POCKETSKYNET_")) delete base[key];
   }
   try {
-    const { stdout, stderr } = await execFileAsync(process.execPath, [cliJs, ...args], {
-      env: { ...base, ...env },
-      timeout: 30_000,
-    });
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      [cliJs, ...args],
+      {
+        env: { ...base, ...env },
+        timeout: 30_000,
+      },
+    );
     return { code: 0, stdout, stderr };
   } catch (err) {
     const failure = err as { code?: number; stdout?: string; stderr?: string };
@@ -68,7 +75,10 @@ test("cli: login prints address, username and token; exits 0", async () => {
   assert.equal(run.code, 0, run.stderr);
   assert.match(run.stdout, /address: {2}0x[0-9a-fA-F]{40}/);
   assert.match(run.stdout, /username: cli_alice/);
-  assert.match(run.stdout, /token: {4}[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+  assert.match(
+    run.stdout,
+    /token: {4}[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
+  );
 });
 
 test("cli: full flow via POCKETSKYNET_KEY env — rooms, create-room, send, messages", async () => {
@@ -86,7 +96,10 @@ test("cli: full flow via POCKETSKYNET_KEY env — rooms, create-room, send, mess
   const roomId = created.stdout.trim().split("\t")[0]!;
   assert.ok(roomId.length >= 10, `room id from stdout: ${created.stdout}`);
 
-  const sent = await runCli(["send", roomId, "hello", "from", "the", "cli"], env);
+  const sent = await runCli(
+    ["send", roomId, "hello", "from", "the", "cli"],
+    env,
+  );
   assert.equal(sent.code, 0, sent.stderr);
   assert.match(sent.stdout, /serial=\d+/);
 

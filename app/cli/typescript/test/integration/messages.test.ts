@@ -28,7 +28,10 @@ async function loggedInClient(): Promise<PocketSkynetClient> {
   return client;
 }
 
-async function clientWithRoom(): Promise<{ client: PocketSkynetClient; roomId: string }> {
+async function clientWithRoom(): Promise<{
+  client: PocketSkynetClient;
+  roomId: string;
+}> {
   const client = await loggedInClient();
   const room = await client.createRoom("msg test room");
   return { client, roomId: room.id };
@@ -73,7 +76,10 @@ test("unicode content survives byte-exactly", async () => {
     const sent = await client.sendMessage(roomId, text);
     assert.equal(sent.content, text);
     // Pinned by the protocol vector for this exact string:
-    assert.equal(sent.msgHash, "90f15b87d2781befd4a1b6a91dea008417ad8b3f2e53d5cdaa82752db72009dd");
+    assert.equal(
+      sent.msgHash,
+      "90f15b87d2781befd4a1b6a91dea008417ad8b3f2e53d5cdaa82752db72009dd",
+    );
     const listed = await client.messages(roomId);
     assert.equal(listed[listed.length - 1]!.content, text);
   } finally {
@@ -94,7 +100,8 @@ test("listing is chronological (messageTimestamp, msgSerial) and respects limit"
       const next = all[i]!;
       const ordered =
         prev.messageTimestamp < next.messageTimestamp ||
-        (prev.messageTimestamp === next.messageTimestamp && prev.msgSerial < next.msgSerial);
+        (prev.messageTimestamp === next.messageTimestamp &&
+          prev.msgSerial < next.msgSerial);
       assert.ok(ordered, "ascending by (messageTimestamp, msgSerial)");
     }
     assert.deepEqual(
@@ -121,7 +128,9 @@ test("a non-member cannot send or list: 403", async () => {
     await assert.rejects(
       () => stranger.sendMessage(roomId, "let me in"),
       (err: unknown) =>
-        err instanceof ApiError && err.status === 403 && err.message === "Access denied",
+        err instanceof ApiError &&
+        err.status === 403 &&
+        err.message === "Access denied",
     );
     await assert.rejects(
       () => stranger.messages(roomId),
@@ -146,7 +155,11 @@ test("msgHash is validated: missing, uppercase and wrong-length are 400", async 
     ];
     for (const body of cases) {
       const response = await raw.request({ method: "POST", path, body, token });
-      assert.equal(response.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+      assert.equal(
+        response.status,
+        400,
+        `expected 400 for ${JSON.stringify(body)}`,
+      );
       const parsed = JSON.parse(response.bodyText) as { message: string };
       assert.equal(parsed.message, "Validation failed");
     }
@@ -207,10 +220,16 @@ test("concurrency: parallel sends all land with distinct msgSerials", async () =
   const { client, roomId } = await clientWithRoom();
   try {
     const results = await Promise.all(
-      Array.from({ length: 10 }, (_, i) => client.sendMessage(roomId, `parallel ${i}`)),
+      Array.from({ length: 10 }, (_, i) =>
+        client.sendMessage(roomId, `parallel ${i}`),
+      ),
     );
     const serials = results.map((m) => m.msgSerial);
-    assert.equal(new Set(serials).size, 10, `serials must be distinct: ${serials}`);
+    assert.equal(
+      new Set(serials).size,
+      10,
+      `serials must be distinct: ${serials}`,
+    );
     const listed = await client.messages(roomId, { limit: 100 });
     assert.equal(listed.length, 10);
     const contents = new Set(listed.map((m) => m.content));

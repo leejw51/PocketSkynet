@@ -57,9 +57,21 @@ test("cli parse: POCKETSKYNET_KEY and POCKETSKYNET_SERVER env fallbacks", () => 
 });
 
 test("cli parse: bad flags and bad limits are usage errors", () => {
-  assert.throws(() => parseCli(["health", "--no-such-flag"], noEnv), UsageError);
-  assert.throws(() => parseCli(["messages", "r", "--limit", "0"], noEnv), UsageError);
-  assert.throws(() => parseCli(["messages", "r", "--limit", "101"], noEnv), UsageError);
-  assert.throws(() => parseCli(["messages", "r", "--limit", "many"], noEnv), UsageError);
+  assert.throws(
+    () => parseCli(["health", "--no-such-flag"], noEnv),
+    UsageError,
+  );
+  assert.throws(
+    () => parseCli(["messages", "r", "--limit", "0"], noEnv),
+    UsageError,
+  );
+  assert.throws(
+    () => parseCli(["messages", "r", "--limit", "101"], noEnv),
+    UsageError,
+  );
+  assert.throws(
+    () => parseCli(["messages", "r", "--limit", "many"], noEnv),
+    UsageError,
+  );
   assert.equal(parseCli(["messages", "r", "--limit", "5"], noEnv).limit, 5);
 });

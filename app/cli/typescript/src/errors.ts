@@ -63,13 +63,24 @@ export function apiErrorFromBody(status: number, bodyText: string): ApiError {
       : undefined;
     const code = typeof obj["code"] === "string" ? obj["code"] : undefined;
     const currentKeyVersion =
-      typeof obj["currentKeyVersion"] === "number" ? obj["currentKeyVersion"] : undefined;
-    const opts: { errors?: string[]; code?: string; currentKeyVersion?: number } = {};
+      typeof obj["currentKeyVersion"] === "number"
+        ? obj["currentKeyVersion"]
+        : undefined;
+    const opts: {
+      errors?: string[];
+      code?: string;
+      currentKeyVersion?: number;
+    } = {};
     if (errors !== undefined) opts.errors = errors;
     if (code !== undefined) opts.code = code;
-    if (currentKeyVersion !== undefined) opts.currentKeyVersion = currentKeyVersion;
+    if (currentKeyVersion !== undefined)
+      opts.currentKeyVersion = currentKeyVersion;
     return new ApiError(status, message, opts);
   }
-  const snippet = bodyText.length > 200 ? `${bodyText.slice(0, 200)}…` : bodyText;
-  return new ApiError(status, snippet.trim().length > 0 ? snippet : `HTTP ${status}`);
+  const snippet =
+    bodyText.length > 200 ? `${bodyText.slice(0, 200)}…` : bodyText;
+  return new ApiError(
+    status,
+    snippet.trim().length > 0 ? snippet : `HTTP ${status}`,
+  );
 }

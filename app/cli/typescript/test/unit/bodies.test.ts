@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildLoginBody, parseJsonBody } from "../../src/client.js";
 import { ApiError, apiErrorFromBody } from "../../src/errors.js";
-import type { LoginResponse, MessageWithSender, RoomWithMembers } from "../../src/types.js";
+import type {
+  LoginResponse,
+  MessageWithSender,
+  RoomWithMembers,
+} from "../../src/types.js";
 
 test("login body: username present when given, camelCase keys", () => {
   const body = buildLoginBody({
@@ -28,7 +32,10 @@ test("login body: undefined username is OMITTED from the JSON, never null", () =
   });
   assert.ok(!("username" in body), "key must not exist on the object");
   const wire = JSON.stringify(body);
-  assert.ok(!wire.includes("username"), "serialized body must not mention username");
+  assert.ok(
+    !wire.includes("username"),
+    "serialized body must not mention username",
+  );
   assert.ok(!wire.includes("null"), "no null anywhere in the body");
   assert.deepEqual(JSON.parse(wire), {
     walletAddress: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
@@ -64,7 +71,10 @@ test("response parsing tolerates nulls and unknown fields", () => {
   );
   assert.equal(login.token, "jwt");
   assert.equal(login.user.username, null);
-  assert.equal(login.user["someFutureField" as keyof typeof login.user] !== undefined, true);
+  assert.equal(
+    login.user["someFutureField" as keyof typeof login.user] !== undefined,
+    true,
+  );
 
   const room = parseJsonBody<RoomWithMembers>(
     JSON.stringify({
@@ -99,12 +109,18 @@ test("response parsing tolerates nulls and unknown fields", () => {
 });
 
 test("non-JSON success bodies raise a useful error", () => {
-  assert.throws(() => parseJsonBody("<html>gateway error</html>"), /non-JSON body/);
+  assert.throws(
+    () => parseJsonBody("<html>gateway error</html>"),
+    /non-JSON body/,
+  );
   assert.equal(parseJsonBody<undefined>(""), undefined);
 });
 
 test("error envelope shape 1: message only", () => {
-  const err = apiErrorFromBody(403, JSON.stringify({ message: "Access denied" }));
+  const err = apiErrorFromBody(
+    403,
+    JSON.stringify({ message: "Access denied" }),
+  );
   assert.ok(err instanceof ApiError);
   assert.equal(err.status, 403);
   assert.equal(err.message, "Access denied");
@@ -147,7 +163,10 @@ test("error parsing survives non-JSON and wrong-shaped bodies", () => {
   const empty = apiErrorFromBody(500, "");
   assert.equal(empty.message, "HTTP 500");
 
-  const wrongShape = apiErrorFromBody(500, JSON.stringify({ message: 42, errors: "nope" }));
+  const wrongShape = apiErrorFromBody(
+    500,
+    JSON.stringify({ message: 42, errors: "nope" }),
+  );
   assert.equal(wrongShape.message, "HTTP 500");
   assert.equal(wrongShape.errors, undefined);
 

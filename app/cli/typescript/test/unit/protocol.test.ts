@@ -24,7 +24,9 @@ test("msgHash.plaintext vectors: SHA-256 of the trimmed content", () => {
 test("msgHash trims before hashing (whitespace-wrapped unicode)", () => {
   assert.equal(msgHashPlaintext("  hi \n"), msgHashPlaintext("hi"));
   assert.notEqual(msgHashPlaintext("hi"), msgHashPlaintext("ho"));
-  const unicode = vectors.msgHash.plaintext.find((v) => /[^\x00-\x7f]/.test(v.content));
+  const unicode = vectors.msgHash.plaintext.find((v) =>
+    /[^\x00-\x7f]/.test(v.content),
+  );
   assert.ok(unicode, "unicode plaintext vector present");
   assert.equal(msgHashPlaintext(unicode.content), unicode.msgHashHex);
 });
@@ -55,7 +57,9 @@ test("isLoginChallenge accepts a real challenge, rejects derivation messages", (
     false,
   );
   assert.equal(
-    isLoginChallenge("FruitNation Public Key Binding\n\nAddress: 0x…\nEncryption Public Key: …"),
+    isLoginChallenge(
+      "FruitNation Public Key Binding\n\nAddress: 0x…\nEncryption Public Key: …",
+    ),
     false,
   );
   assert.equal(isLoginChallenge(""), false);
@@ -63,7 +67,9 @@ test("isLoginChallenge accepts a real challenge, rejects derivation messages", (
 
 test("generated usernames satisfy the server's username schema", () => {
   for (let i = 0; i < 50; i++) {
-    const name = generatedUsername("0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+    const name = generatedUsername(
+      "0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    );
     assert.ok(name.length >= 3 && name.length <= 100);
     assert.ok(!/[<>{};"'`\\,]/.test(name), "no forbidden characters");
     // eslint-disable-next-line no-control-regex

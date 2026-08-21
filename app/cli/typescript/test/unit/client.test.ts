@@ -6,10 +6,14 @@ import { PocketSkynetClient } from "../../src/client.js";
 import { TransportError } from "../../src/errors.js";
 
 // A throwaway private key (Hardhat #0) — these tests never reach a real server.
-const KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const KEY =
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 test("ensureToken dedups parallel first logins: one challenge burned", async () => {
-  const client = new PocketSkynetClient({ baseUrl: "http://127.0.0.1:1", privateKey: KEY });
+  const client = new PocketSkynetClient({
+    baseUrl: "http://127.0.0.1:1",
+    privateKey: KEY,
+  });
   let loginCalls = 0;
   // Replace the real login with a slow stub that records how often it runs.
   (client as unknown as { login: () => Promise<unknown> }).login = async () => {
@@ -25,7 +29,11 @@ test("ensureToken dedups parallel first logins: one challenge burned", async () 
     client.ensureToken(),
   ]);
   assert.deepEqual(tokens, ["minted-token", "minted-token", "minted-token"]);
-  assert.equal(loginCalls, 1, "three parallel first calls must share one login");
+  assert.equal(
+    loginCalls,
+    1,
+    "three parallel first calls must share one login",
+  );
 
   // After it resolves the in-flight slot is cleared; a later call with the
   // token already cached does not log in again.
@@ -35,7 +43,10 @@ test("ensureToken dedups parallel first logins: one challenge burned", async () 
 });
 
 test("ensureToken lets a fresh login run after a failed one", async () => {
-  const client = new PocketSkynetClient({ baseUrl: "http://127.0.0.1:1", privateKey: KEY });
+  const client = new PocketSkynetClient({
+    baseUrl: "http://127.0.0.1:1",
+    privateKey: KEY,
+  });
   let loginCalls = 0;
   (client as unknown as { login: () => Promise<unknown> }).login = async () => {
     loginCalls += 1;
@@ -70,11 +81,14 @@ test("fetch transport caps an oversized response body", async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
-  const client = new PocketSkynetClient({ baseUrl: `http://127.0.0.1:${port}` });
+  const client = new PocketSkynetClient({
+    baseUrl: `http://127.0.0.1:${port}`,
+  });
   try {
     await assert.rejects(
       () => client.health(),
-      (err: unknown) => err instanceof TransportError && /exceeded .* bytes/.test(err.message),
+      (err: unknown) =>
+        err instanceof TransportError && /exceeded .* bytes/.test(err.message),
     );
   } finally {
     await client.close();

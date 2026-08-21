@@ -15,7 +15,14 @@
 import { execFileSync, spawn, ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createSocket } from "node:dgram";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -25,7 +32,8 @@ import { normalizePrivateKey } from "../../src/wallet.js";
 import { appRoot } from "./vectors.js";
 
 /** Handed to the server with `--jwt-secret` so tests can mint and tamper. */
-export const JWT_SECRET = "pocketskynet-ts-integration-test-secret-0123456789abcdef";
+export const JWT_SECRET =
+  "pocketskynet-ts-integration-test-secret-0123456789abcdef";
 
 const BOOT_TIMEOUT_MS = 30_000;
 let counter = 0;
@@ -200,7 +208,8 @@ export class TestServer {
   }
 
   http3Url(path: string): string {
-    if (this.http3Port === undefined) throw new Error("server has no HTTP/3 listener");
+    if (this.http3Port === undefined)
+      throw new Error("server has no HTTP/3 listener");
     return `https://127.0.0.1:${this.http3Port}${path}`;
   }
 
@@ -238,7 +247,9 @@ export class TestServer {
         lastErr = err instanceof Error ? err.message : String(err);
       }
     }
-    throw new Error(`could not start pocketskynet after 5 attempts: ${lastErr}`);
+    throw new Error(
+      `could not start pocketskynet after 5 attempts: ${lastErr}`,
+    );
   }
 
   private static async tryStart(opts: StartOptions): Promise<TestServer> {
@@ -306,7 +317,9 @@ export class TestServer {
     try {
       while (Date.now() < deadline) {
         if (this.child.exitCode !== null) {
-          throw new Error(`server exited during boot with code ${this.child.exitCode}`);
+          throw new Error(
+            `server exited during boot with code ${this.child.exitCode}`,
+          );
         }
         try {
           const response = await undiciFetch(this.url("/api/health"), {
@@ -327,7 +340,11 @@ export class TestServer {
           }
           await response.body?.cancel();
         } catch (err) {
-          if (err instanceof Error && /owns port|exited during boot/.test(err.message)) throw err;
+          if (
+            err instanceof Error &&
+            /owns port|exited during boot/.test(err.message)
+          )
+            throw err;
           // Connection refused while booting — keep polling.
         }
         await sleep(25);

@@ -36,45 +36,55 @@ const SKIP_REASON =
 
 test("http3: health over QUIC", { skip: curlPathMissing() }, async () => {
   const transport = h3Transport();
-  const response = await transport.request({ method: "GET", path: "/api/health" });
+  const response = await transport.request({
+    method: "GET",
+    path: "/api/health",
+  });
   assert.equal(response.status, 200);
-  assert.equal((JSON.parse(response.bodyText) as { status: string }).status, "ok");
+  assert.equal(
+    (JSON.parse(response.bodyText) as { status: string }).status,
+    "ok",
+  );
   await transport.close();
 });
 
-test("http3: full auth flow and room create over QUIC", { skip: curlPathMissing() }, async () => {
-  const client = new PocketSkynetClient({
-    baseUrl: server!.http3Url(""),
-    http3: true,
-    curlPath: curlPath!,
-    caPath: server!.caPath(),
-    privateKey: randomPrivateKeyHex(),
-  });
-  try {
-    const login = await client.login();
-    assert.ok(login.response.token.length > 0);
-    const room = await client.createRoom("h3 room");
-
-    // The room created over HTTP/3 must be visible over plain TCP too:
-    const tcp = new PocketSkynetClient({
-      baseUrl: server!.baseUrl,
-      token: login.response.token,
+test(
+  "http3: full auth flow and room create over QUIC",
+  { skip: curlPathMissing() },
+  async () => {
+    const client = new PocketSkynetClient({
+      baseUrl: server!.http3Url(""),
+      http3: true,
+      curlPath: curlPath!,
+      caPath: server!.caPath(),
+      privateKey: randomPrivateKeyHex(),
     });
     try {
-      const rooms = await tcp.rooms();
-      assert.ok(rooms.some((r) => r.id === room.id));
-    } finally {
-      await tcp.close();
-    }
+      const login = await client.login();
+      assert.ok(login.response.token.length > 0);
+      const room = await client.createRoom("h3 room");
 
-    const sent = await client.sendMessage(room.id, "over quic 🛰️");
-    assert.equal(sent.content, "over quic 🛰️");
-    const listed = await client.messages(room.id);
-    assert.equal(listed[listed.length - 1]!.content, "over quic 🛰️");
-  } finally {
-    await client.close();
-  }
-});
+      // The room created over HTTP/3 must be visible over plain TCP too:
+      const tcp = new PocketSkynetClient({
+        baseUrl: server!.baseUrl,
+        token: login.response.token,
+      });
+      try {
+        const rooms = await tcp.rooms();
+        assert.ok(rooms.some((r) => r.id === room.id));
+      } finally {
+        await tcp.close();
+      }
+
+      const sent = await client.sendMessage(room.id, "over quic 🛰️");
+      assert.equal(sent.content, "over quic 🛰️");
+      const listed = await client.messages(room.id);
+      assert.equal(listed[listed.length - 1]!.content, "over quic 🛰️");
+    } finally {
+      await client.close();
+    }
+  },
+);
 
 test("http3 transport fails fast with a clear error when curl is unavailable", async () => {
   // `curlPath: null` means "known unavailable", so this exercises the
@@ -89,7 +99,8 @@ test("http3 transport fails fast with a clear error when curl is unavailable", a
     await assert.rejects(
       () => forced.request({ method: "GET", path: "/api/health" }),
       (err: unknown) =>
-        err instanceof TransportError && /HTTP\/3-capable curl/.test(err.message),
+        err instanceof TransportError &&
+        /HTTP\/3-capable curl/.test(err.message),
     );
   } finally {
     await forced.close();

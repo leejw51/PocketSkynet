@@ -114,7 +114,9 @@ function normalizeBaseUrl(baseUrl: string): string {
     throw new TransportError(`invalid server URL: ${JSON.stringify(baseUrl)}`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new TransportError(`server URL must be http(s), got ${url.protocol}//`);
+    throw new TransportError(
+      `server URL must be http(s), got ${url.protocol}//`,
+    );
   }
   return baseUrl.replace(/\/+$/, "");
 }
@@ -132,7 +134,9 @@ function validatePath(path: string): void {
  */
 export function validateToken(token: string): void {
   if (token.length === 0 || !/^[\x21-\x7e]+$/.test(token)) {
-    throw new TransportError("token contains characters not allowed in an HTTP header");
+    throw new TransportError(
+      "token contains characters not allowed in an HTTP header",
+    );
   }
 }
 
@@ -153,7 +157,8 @@ class FetchTransport implements Transport {
     if (isHttps && (opts.insecure || opts.caPem || opts.caPath)) {
       const connect: { rejectUnauthorized?: boolean; ca?: string } = {};
       if (opts.insecure) connect.rejectUnauthorized = false;
-      const ca = opts.caPem ?? (opts.caPath ? readFileUtf8(opts.caPath) : undefined);
+      const ca =
+        opts.caPem ?? (opts.caPath ? readFileUtf8(opts.caPath) : undefined);
       if (ca !== undefined) connect.ca = ca;
       this.dispatcher = new Agent({ connect });
     }
@@ -163,7 +168,8 @@ class FetchTransport implements Transport {
     validatePath(req.path);
     if (req.token !== undefined) validateToken(req.token);
     const headers: Record<string, string> = { accept: "application/json" };
-    if (req.token !== undefined) headers["authorization"] = `Bearer ${req.token}`;
+    if (req.token !== undefined)
+      headers["authorization"] = `Bearer ${req.token}`;
     let body: string | undefined;
     if (req.body !== undefined) {
       headers["content-type"] = "application/json";
@@ -175,7 +181,9 @@ class FetchTransport implements Transport {
         method: req.method,
         headers,
         ...(body !== undefined ? { body } : {}),
-        ...(this.dispatcher !== undefined ? { dispatcher: this.dispatcher } : {}),
+        ...(this.dispatcher !== undefined
+          ? { dispatcher: this.dispatcher }
+          : {}),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
@@ -184,7 +192,10 @@ class FetchTransport implements Transport {
         err,
       );
     }
-    const bodyText = await readBodyCapped(response, `${this.baseUrl}${req.path}`);
+    const bodyText = await readBodyCapped(
+      response,
+      `${this.baseUrl}${req.path}`,
+    );
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       responseHeaders[key.toLowerCase()] = value;
@@ -239,8 +250,14 @@ function readFileUtf8(path: string): string {
 function describeFetchError(err: unknown): string {
   if (err instanceof Error) {
     const causeMessage =
-      err.cause instanceof Error ? err.cause.message : err.cause ? String(err.cause) : "";
-    return causeMessage.length > 0 ? `${err.message} (${causeMessage})` : err.message;
+      err.cause instanceof Error
+        ? err.cause.message
+        : err.cause
+          ? String(err.cause)
+          : "";
+    return causeMessage.length > 0
+      ? `${err.message} (${causeMessage})`
+      : err.message;
   }
   return String(err);
 }
@@ -265,7 +282,9 @@ export async function findHttp3Curl(
 ): Promise<string | null> {
   for (const candidate of candidates) {
     try {
-      const { stdout } = await execFileAsync(candidate, ["--version"], { timeout: 5_000 });
+      const { stdout } = await execFileAsync(candidate, ["--version"], {
+        timeout: 5_000,
+      });
       if (/^Features:.*\bHTTP3\b/m.test(stdout)) return candidate;
     } catch {
       // Missing binary or a broken one — try the next candidate.
@@ -276,7 +295,9 @@ export async function findHttp3Curl(
 
 function defaultCurlCandidates(): readonly string[] {
   const fromEnv = process.env["PSKYNET_CURL"];
-  return fromEnv ? [fromEnv, ...DEFAULT_CURL_CANDIDATES] : DEFAULT_CURL_CANDIDATES;
+  return fromEnv
+    ? [fromEnv, ...DEFAULT_CURL_CANDIDATES]
+    : DEFAULT_CURL_CANDIDATES;
 }
 
 const STATUS_MARKER = "\n__pskynet_http_status__:";
@@ -325,7 +346,9 @@ export function buildCurlConfig(req: TransportRequest): string {
   const lines: string[] = [];
   if (req.token !== undefined) {
     validateToken(req.token);
-    lines.push(`header = ${curlConfigValue(`authorization: Bearer ${req.token}`)}`);
+    lines.push(
+      `header = ${curlConfigValue(`authorization: Bearer ${req.token}`)}`,
+    );
   }
   if (req.body !== undefined) {
     lines.push(`header = ${curlConfigValue("content-type: application/json")}`);
@@ -348,10 +371,15 @@ export function buildCurlArgs(
 ): CurlInvocation {
   const base = normalizeBaseUrl(baseUrl);
   if (!base.startsWith("https://")) {
-    throw new TransportError("HTTP/3 requires an https:// server URL (QUIC mandates TLS)");
+    throw new TransportError(
+      "HTTP/3 requires an https:// server URL (QUIC mandates TLS)",
+    );
   }
   validatePath(req.path);
-  const timeoutSec = Math.max(1, Math.ceil((opts.timeoutMs ?? DEFAULT_TIMEOUT_MS) / 1000));
+  const timeoutSec = Math.max(
+    1,
+    Math.ceil((opts.timeoutMs ?? DEFAULT_TIMEOUT_MS) / 1000),
+  );
   const args: string[] = [
     "--http3-only",
     "--silent",
@@ -376,13 +404,21 @@ export function buildCurlArgs(
 }
 
 /** Parse curl stdout produced with the {@link STATUS_MARKER} write-out. */
-export function parseCurlOutput(stdout: string): { status: number; bodyText: string } {
+export function parseCurlOutput(stdout: string): {
+  status: number;
+  bodyText: string;
+} {
   const at = stdout.lastIndexOf(STATUS_MARKER);
-  if (at < 0) throw new TransportError("curl produced no status marker (transport failure)");
+  if (at < 0)
+    throw new TransportError(
+      "curl produced no status marker (transport failure)",
+    );
   const bodyText = stdout.slice(0, at);
   const status = Number(stdout.slice(at + STATUS_MARKER.length).trim());
   if (!Number.isInteger(status) || status < 100 || status > 599) {
-    throw new TransportError(`curl reported an unparseable HTTP status: ${JSON.stringify(stdout.slice(at))}`);
+    throw new TransportError(
+      `curl reported an unparseable HTTP status: ${JSON.stringify(stdout.slice(at))}`,
+    );
   }
   return { status, bodyText };
 }
@@ -420,7 +456,8 @@ export class CurlHttp3Transport implements Transport {
     const argOpts: CurlArgOptions = {};
     if (this.opts.insecure !== undefined) argOpts.insecure = this.opts.insecure;
     if (this.opts.caPath !== undefined) argOpts.caPath = this.opts.caPath;
-    if (this.opts.timeoutMs !== undefined) argOpts.timeoutMs = this.opts.timeoutMs;
+    if (this.opts.timeoutMs !== undefined)
+      argOpts.timeoutMs = this.opts.timeoutMs;
     const { args, stdin } = buildCurlArgs(this.baseUrl, req, argOpts);
     let stdout: string;
     try {

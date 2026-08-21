@@ -62,7 +62,13 @@ let cached: ProtocolVectors | undefined;
 
 export function protocolVectors(): ProtocolVectors {
   if (cached === undefined) {
-    const path = join(appRoot(), "core", "tests", "vectors", "protocol-v1.json");
+    const path = join(
+      appRoot(),
+      "core",
+      "tests",
+      "vectors",
+      "protocol-v1.json",
+    );
     cached = JSON.parse(readFileSync(path, "utf8")) as ProtocolVectors;
   }
   return cached;

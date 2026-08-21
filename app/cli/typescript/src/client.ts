@@ -5,7 +5,11 @@
 
 import { personalSign } from "./eip191.js";
 import { ApiError, apiErrorFromBody } from "./errors.js";
-import { generatedUsername, isLoginChallenge, msgHashPlaintext } from "./protocol.js";
+import {
+  generatedUsername,
+  isLoginChallenge,
+  msgHashPlaintext,
+} from "./protocol.js";
 import {
   createTransport,
   Transport,
@@ -89,7 +93,9 @@ export class PocketSkynetClient {
 
   get walletAddress(): string {
     if (this.opts.privateKey === undefined) {
-      throw new Error("no private key configured (pass privateKey or POCKETSKYNET_KEY)");
+      throw new Error(
+        "no private key configured (pass privateKey or POCKETSKYNET_KEY)",
+      );
     }
     return accountFromPrivateKey(this.opts.privateKey).address;
   }
@@ -162,7 +168,9 @@ export class PocketSkynetClient {
     const account = accountFromPrivateKey(this.opts.privateKey);
     const address = account.address;
 
-    const attempt = async (username: string | undefined): Promise<LoginResponse> => {
+    const attempt = async (
+      username: string | undefined,
+    ): Promise<LoginResponse> => {
       const challenge = await this.requestChallenge(address);
       // Defense in depth: never sign a message that is not a login challenge.
       // The E2EE key-derivation and key-binding messages are also EIP-191
@@ -209,7 +217,9 @@ export class PocketSkynetClient {
   }
 
   async rooms(): Promise<RoomWithMembers[]> {
-    return this.requestJson<RoomWithMembers[]>("GET", "/api/rooms", undefined, { auth: true });
+    return this.requestJson<RoomWithMembers[]>("GET", "/api/rooms", undefined, {
+      auth: true,
+    });
   }
 
   async room(roomId: string): Promise<RoomWithMembers> {
@@ -231,7 +241,10 @@ export class PocketSkynetClient {
    * Send a plaintext message. `msgHash` = SHA-256 of the **trimmed** content
    * (the server trims before storing).
    */
-  async sendMessage(roomId: string, content: string): Promise<MessageWithSender> {
+  async sendMessage(
+    roomId: string,
+    content: string,
+  ): Promise<MessageWithSender> {
     const body: SendMessageBody = {
       content,
       msgHash: msgHashPlaintext(content),
@@ -268,7 +281,8 @@ export function parseJsonBody<T>(bodyText: string): T {
   try {
     return JSON.parse(bodyText) as T;
   } catch {
-    const snippet = bodyText.length > 120 ? `${bodyText.slice(0, 120)}…` : bodyText;
+    const snippet =
+      bodyText.length > 120 ? `${bodyText.slice(0, 120)}…` : bodyText;
     throw new ApiError(0, `server returned non-JSON body: ${snippet}`);
   }
 }
