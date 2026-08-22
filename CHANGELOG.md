@@ -4,6 +4,37 @@ Notable changes to Pocket Skynet, newest first. Versions are the workspace
 version in [`app/Cargo.toml`](app/Cargo.toml); a `v*` tag matching it builds and
 publishes the macOS installer.
 
+## Unreleased
+
+### MPC ceremonies moved into the browser — shares never leave the client
+
+Every MPC-wallet ceremony — key generation, the login-challenge signature,
+every transaction signature — now runs **inside the web client's
+WebAssembly**, in a dedicated Web Worker. Share files and the wallet
+passphrase never leave the browser, on your own server or anyone else's; the
+server stores nothing and only ever verifies an ordinary EIP-191 signature it
+cannot tell from a single-key wallet's. The `/api/tss/*` routes are gone.
+
+Custody got stricter on the client too: the session no longer retains the
+share files or the passphrase after sign-in — **every transaction raises a
+prompt asking you to present a quorum of share files again**, used once for
+that signature and then forgotten — and nothing of the MPC wallet ever
+touches `localStorage`.
+
+The protocol engine is Silence Labs'
+[`sl-dkls23`](https://github.com/silence-laboratories/dkls23), a pure-Rust
+implementation of the peer-reviewed
+[DKLs23](https://eprint.iacr.org/2023/765) threshold-ECDSA protocol. DKLs23
+is OT-based — no Paillier moduli, no safe-prime hunting — so **creating a
+wallet now takes seconds, not minutes**, and it builds for
+`wasm32-unknown-unknown` cleanly. (Note: `sl-dkls23` ships under Silence
+Laboratories' non-commercial license — see `app/docs/CRYPTO.md` §15.3.)
+Share files bump to **format version 3**; version-1 and version-2 files
+(sealed for the retired cggmp21/cggmp24 stacks) are refused with a named
+migration message — create a new MPC wallet and move the funds. The UI now
+calls these wallets what they are to a user — **MPC wallets** — and keeps
+the protocol details in the docs.
+
 ## 1.0.2 — 2026-08-21
 
 ### m-of-n TSS (MPC) wallets

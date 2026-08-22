@@ -50,7 +50,6 @@ pub mod shout;
 pub mod sites;
 /// Public for the [`tss::TssShareHeader`] and sign-bundle types the login
 /// screen and the transaction signers render and consume.
-pub mod tss;
 /// Public for [`uploads::Progress`] and [`uploads::Target`], which the actions
 /// layer and the progress UI both name.
 pub mod uploads;

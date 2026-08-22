@@ -1,112 +1,78 @@
-//! Distributed key generation: CGGMP21 threshold keygen + aux-info generation.
+//! Distributed key generation: DKLs23 threshold keygen.
+//!
+//! Synchronous on purpose: [`crate::relay::run_parties`] drives every
+//! party's future in one loop on the calling thread, so the same function
+//! runs on a native test thread and inside a web worker — no async runtime
+//! anywhere. The whole ceremony is OT and curve arithmetic, milliseconds
+//! of work; the phases exist so a progress UI has something honest to say.
 
-use cggmp21::{key_refresh::PregeneratedPrimes, ExecutionId, KeyShare};
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
+use sl_dkls23::setup::{keygen::SetupMessage, NoSigningKey, NoVerifyingKey};
+use sl_mpc_mate::message::InstanceId;
 
-use crate::{sim_capacity, Curve, SecLevel, Share, TssError};
+use crate::relay::LocalCoordinator;
+use crate::{Share, TssError};
 
 /// Progress phases reported to the caller during DKG.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DkgPhase {
-    GeneratingPrimes,
     RunningProtocol,
     Done,
 }
 
 /// Runs a full `t`-of-`n` DKG and returns the `n` shares, indexed by party.
 ///
-/// `eid_seed` must be unique per keygen ceremony (it seeds the protocol
-/// execution id — [`crate::fresh_eid`]). `on_phase` is invoked as the
-/// ceremony advances; safe-prime generation dominates the wall clock.
-pub async fn run_dkg(
+/// `eid_seed` must be unique per keygen ceremony (it becomes the protocol
+/// instance id — [`crate::fresh_eid`]). `on_phase` is invoked as the
+/// ceremony advances.
+pub fn run_dkg(
     t: u16,
     n: u16,
     eid_seed: [u8; 32],
-    mut on_phase: impl FnMut(DkgPhase) + Send,
+    mut on_phase: impl FnMut(DkgPhase),
 ) -> Result<Vec<Share>, TssError> {
     crate::validate_params(t, n)?;
-
-    // Paillier safe-prime generation dominates DKG wall-clock time; run one
-    // generation per party on blocking threads, in parallel.
-    on_phase(DkgPhase::GeneratingPrimes);
-    let mut prime_tasks = Vec::new();
-    for _ in 0..n {
-        prime_tasks.push(tokio::task::spawn_blocking(|| {
-            PregeneratedPrimes::<SecLevel>::generate(&mut OsRng)
-        }));
-    }
-    let mut primes = Vec::new();
-    for task in prime_tasks {
-        primes.push(
-            task.await
-                .map_err(|e| TssError::Ceremony(format!("prime generation task panicked: {e}")))?,
-        );
-    }
-
     on_phase(DkgPhase::RunningProtocol);
 
-    // The whole ceremony is CPU-bound; move it off the async runtime. The
-    // nested current-thread runtime is how an async simulated protocol runs
-    // on a blocking thread.
-    let capacity = sim_capacity(n);
-    let shares = tokio::task::spawn_blocking(move || -> Result<Vec<Share>, TssError> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .map_err(|e| TssError::Ceremony(format!("building ceremony runtime: {e}")))?;
-        rt.block_on(async move {
-            let eid = ExecutionId::new(&eid_seed);
+    // All parties equal: no hierarchical ranks.
+    let ranks = vec![0u8; usize::from(n)];
+    // Local ceremony, one process: message authenticity between the
+    // parties is the process's own memory safety, so the no-op signer
+    // stands in for per-party network keys.
+    let party_vk: Vec<NoVerifyingKey> = (0..usize::from(n)).map(NoVerifyingKey::new).collect();
 
-            // `.set_threshold(t)` is what makes the shares VSS/threshold
-            // shares rather than additive n-of-n ones — the whole point of
-            // this port over the 2-of-2 reference.
-            let incomplete = round_based::sim::async_env::run_with_capacity(
-                capacity,
-                n,
-                |i, party| async move {
-                    let mut rng = OsRng;
-                    cggmp21::keygen::<Curve>(eid, i, n)
-                        .set_threshold(t)
-                        .start(&mut rng, party)
-                        .await
-                },
-            )
-            .await
-            .into_vec();
-
-            let mut incomplete_shares = Vec::new();
-            for (i, r) in incomplete.into_iter().enumerate() {
-                incomplete_shares
-                    .push(r.map_err(|e| TssError::Ceremony(format!("keygen, party {i}: {e}")))?);
-            }
-
-            let aux = round_based::sim::async_env::run_with_capacity_and_setup(
-                capacity,
-                primes,
-                |i, party, party_primes| async move {
-                    let mut rng = OsRng;
-                    cggmp21::aux_info_gen::<SecLevel>(eid, i, n, party_primes)
-                        .start(&mut rng, party)
-                        .await
-                },
-            )
-            .await
-            .into_vec();
-
-            let mut shares = Vec::new();
-            for (i, (core, aux)) in incomplete_shares.into_iter().zip(aux).enumerate() {
-                let aux =
-                    aux.map_err(|e| TssError::Ceremony(format!("aux info gen, party {i}: {e}")))?;
-                let share = KeyShare::from_parts((core, aux)).map_err(|e| {
-                    TssError::Ceremony(format!("combining key share, party {i}: {e}"))
-                })?;
-                shares.push(share);
-            }
-            Ok(shares)
+    let coordinator = LocalCoordinator::new();
+    let futures: Vec<_> = (0..usize::from(n))
+        .map(|i| {
+            let setup = SetupMessage::new(
+                InstanceId::new(eid_seed),
+                NoSigningKey,
+                i,
+                party_vk.clone(),
+                &ranks,
+                usize::from(t),
+            );
+            let mut seed = [0u8; 32];
+            OsRng.fill_bytes(&mut seed);
+            sl_dkls23::keygen::run(setup, seed, coordinator.connect())
         })
-    })
-    .await
-    .map_err(|e| TssError::Ceremony(format!("DKG task panicked: {e}")))??;
+        .collect();
+
+    let mut shares = Vec::with_capacity(usize::from(n));
+    for (i, result) in crate::relay::run_parties(futures).into_iter().enumerate() {
+        let share = result.map_err(|e| TssError::Ceremony(format!("keygen, party {i}: {e:?}")))?;
+        shares.push(Share::new(share));
+    }
+
+    // Every party must have derived the same shared public key; anything
+    // else is a broken ceremony and must never be sealed into files.
+    let pk = shares[0].public_key();
+    if shares.iter().any(|s| s.public_key() != pk) {
+        return Err(TssError::Ceremony(
+            "parties disagree about the shared public key".into(),
+        ));
+    }
 
     on_phase(DkgPhase::Done);
     Ok(shares)

@@ -1,14 +1,14 @@
 // Does the TSS wallet actually work the way a person meets it?
 //
-// The Rust suites already prove the cryptography end to end:
-// `tss/tests/dkg_sign.rs` runs the real 2-of-3 CGGMP21 ceremony and signs
-// with two different quorums, and `server/tests/tss.rs` drives the whole
-// API — keygen, one-shot collect, login, transaction signing — over HTTP.
-// What neither can see is the WASM client: the create wizard, the
+// The Rust suite already proves the cryptography end to end:
+// `tss/tests/dkg_sign.rs` runs the real 2-of-3 DKLs23 ceremony and signs
+// with two different quorums. What it cannot see is the WASM client, which
+// since the move to in-browser ceremonies IS the whole feature: the create
+// wizard driving the DKG in the tss_worker Web Worker, the
 // download-every-share gate, the file picker's quorum arithmetic, and the
-// sign-in that stitches `/api/tss/sign` into `/api/auth/login`. A bug in
-// any of those ships a wallet nobody can create or reopen while every Rust
-// test stays green.
+// sign-in whose challenge signature is minted by a local ceremony and only
+// then presented to `/api/auth/login`. A bug in any of those ships a
+// wallet nobody can create or reopen while every Rust test stays green.
 //
 // So this walks the whole story through a real browser, hermetically
 // (harness.js boots its own server, torn down in `finally`):
@@ -22,8 +22,9 @@
 //      same account;
 //   5. confirm one share alone never unlocks the button.
 //
-// A 2-of-3 DKG at SecurityLevel128 is real Paillier arithmetic — expect a
-// minute or two of ceremony time; the polls below are generous on purpose.
+// A 2-of-3 DKLs23 DKG is seconds of OT arithmetic even in browser wasm;
+// the polls below stay generous anyway — a timeout margin has never
+// broken a test.
 const { chromium } = require("playwright");
 const fs = require("fs");
 const os = require("os");
@@ -31,7 +32,7 @@ const path = require("path");
 const { bootServer } = require("./harness");
 
 const PASSPHRASE = "browser walkthrough passphrase";
-const KEYGEN_TIMEOUT_MS = 10 * 60 * 1000;
+const KEYGEN_TIMEOUT_MS = 5 * 60 * 1000;
 const SIGNIN_TIMEOUT_MS = 3 * 60 * 1000;
 
 async function openTssTab(page, baseUrl) {
@@ -163,12 +164,90 @@ async function main() {
         `lost-share login reached ${backAs}, expected ${address}`,
       );
 
+    // ---- 5. send: the quorum prompt must come up first, in the clear --
+    // Regression: the prompt used to be raised mid-send, underneath the
+    // SKYNET RELAY overlay's blur — visually a hung send. Now the share
+    // files are asked for BEFORE the relay HUD or any chain round-trip,
+    // exactly like the login, so the prompt must appear instantly and be
+    // fully interactable.
+    //
+    // Driven from the Bank's Send pane rather than the wallet dialog: the
+    // dialog refuses to leave its form while the amount exceeds a *loaded*
+    // balance, and this wallet is minted seconds ago with nothing in it, so
+    // that path can never reach a signature here. The Bank validates the
+    // address and the amount and goes, which is exactly the span under
+    // test. Navigation is a click, not a goto — an MPC session lives in
+    // memory only (nothing touches localStorage), so a reload would sign
+    // this wallet out.
+    // Scoped to the top bar: the narrow layout's nav carries a "Bank"
+    // destination of its own, and an unscoped match would be ambiguous.
+    await page
+      .locator(".fn-topbar__actions")
+      .getByRole("button", { name: "Bank", exact: true })
+      .click();
+    await page.getByRole("tab", { name: "Send", exact: true }).click();
+    await page
+      .getByRole("textbox", { name: "Recipient" })
+      .fill("0x3535353535353535353535353535353535353535");
+    await page.getByRole("textbox", { name: "Amount" }).fill("0.0001");
+    // Two-click ceremony: the first arms, the second sends.
+    await page.getByRole("button", { name: "Review send" }).click();
+    await page.getByRole("button", { name: /^Send 0\.0001/ }).click();
+
+    // The prompt appears with no RPC involved — a short timeout is the
+    // assertion that nothing network-shaped sits in front of it.
+    const quorumPass = page.locator("#tss-quorum-pass");
+    await quorumPass.waitFor({ timeout: 10000 });
+    if (await page.locator(".fn-txhud").count())
+      throw new Error(
+        "the relay HUD is up while the quorum prompt is open — the prompt is buried again",
+      );
+
+    await page
+      .locator('.fn-tss-pick input[type="file"]')
+      .setInputFiles([shareFiles[0], shareFiles[2]]);
+    await page.locator(".fn-tss-quorum-ok").waitFor({ timeout: 15000 });
+    await quorumPass.fill(PASSPHRASE);
+    await page.getByRole("button", { name: "Sign", exact: true }).click();
+
+    // The prompt resolves and the send runs: ceremony, then the chain.
+    // An unfunded wallet is refused *by the chain* — which is the proof we
+    // are after, because the refusal can only be reached through a
+    // successfully signed, well-formed transaction. A hang here, or a
+    // failure that blames the ceremony, is the bug this step exists to
+    // catch.
+    await quorumPass.waitFor({ state: "detached", timeout: 60000 });
+    // Wait for a *terminal* word, not the in-flight one: the pane sets
+    // "Broadcasting…" before the ceremony even starts, so asserting on
+    // whatever the status says right now would pass without a signature
+    // ever being produced. A toast detail (the failure) or a status line
+    // that no longer trails an ellipsis (the success) is the real end.
+    const verdict = await page
+      .waitForFunction(
+        () => {
+          const toast = document.querySelector(".fn-toast__desc");
+          const detail = toast && toast.textContent.trim();
+          if (detail) return detail;
+          const status = document.querySelector(
+            ".fn-bank__pane .fn-muted.fn-nums",
+          );
+          const text = status && status.textContent.trim();
+          return text && !text.endsWith("…") ? text : null;
+        },
+        null,
+        { timeout: 180000 },
+      )
+      .then((h) => h.jsonValue());
+    if (/passphrase|share file|cancelled|ceremony|recovery id/i.test(verdict))
+      throw new Error(`the send failed at the signing step: ${verdict}`);
+
     if (pageErrors.length)
       throw new Error("page errors during the run:\n" + pageErrors.join("\n"));
 
     console.log(
       `OK: created 2-of-3 wallet ${address}, backup-gated all 3 shares, ` +
-        "signed in, then signed back in with shares {1,3} only",
+        "signed in, signed back in with shares {1,3} only, and a send " +
+        `walked the quorum prompt + ceremony (chain said: ${verdict.slice(0, 80)})`,
     );
   } finally {
     if (browser) await browser.close().catch(() => {});

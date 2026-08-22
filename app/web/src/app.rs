@@ -844,6 +844,11 @@ fn root() -> Html {
                 {detail}
             />
             { render_modal(&store, &route, &on_navigate) }
+            // The TSS signing prompt (docs/CRYPTO.md §15.4): a singleton
+            // host outside the modal enum because it is not opened by a
+            // user gesture — any transaction signature from a TSS session
+            // summons it, mid-flow, through `crate::tss::request_quorum`.
+            <dialogs::TssQuorumHost />
             <toast::Toasts />
             // Transfer progress (transfers.rs). A singleton like the layers
             // below, and load-bearing rather than tidy: a 4 GB upload outlives

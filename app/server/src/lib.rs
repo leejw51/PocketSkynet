@@ -66,8 +66,6 @@ pub struct AppState {
     /// start, gone at restart — see `metrics.rs` for why that is the design
     /// rather than a shortcut.
     pub metrics: Arc<crate::metrics::TransferMetrics>,
-    /// The one-at-a-time TSS keygen ceremony (`routes/tss.rs`).
-    pub tss: Arc<crate::routes::tss::TssState>,
 }
 
 impl AppState {
@@ -143,7 +141,6 @@ impl AppState {
             suspensions: Arc::new(RwLock::new(HashSet::new())),
             started: Instant::now(),
             metrics: Arc::new(crate::metrics::TransferMetrics::new()),
-            tss: Arc::new(crate::routes::tss::TssState::default()),
         })
     }
 }
@@ -1424,7 +1421,6 @@ mod test_support {
             suspensions: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             started: Instant::now(),
             metrics: Arc::new(crate::metrics::TransferMetrics::new()),
-            tss: Arc::new(crate::routes::tss::TssState::default()),
         }
     }
 

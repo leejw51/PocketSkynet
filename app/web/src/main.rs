@@ -48,6 +48,8 @@ mod secrets;
 mod session;
 mod state;
 mod store;
+mod tss;
+mod tss_proto;
 mod vault;
 
 fn main() {

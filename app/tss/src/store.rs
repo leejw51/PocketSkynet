@@ -32,7 +32,13 @@ use sha2::Sha256;
 use crate::TssError;
 
 /// Current share-file format version; bump when the layout changes.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// Version 1 sealed cggmp21 (GMP-era) key shares that only the server-side
+/// ceremony could use; version 2 sealed cggmp24 shares born in the browser;
+/// version 3 seals DKLs23 (`sl-dkls23`) shares. No two protocols' shares
+/// are convertible, so older files are refused with a named error rather
+/// than a passphrase failure.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// The `type` tag every share file carries, mirroring the wallet-backup
 /// convention (`pocketskynet-wallet-backup`) so a file manager full of JSON
@@ -84,14 +90,14 @@ pub struct ShareFile {
 
 /// What lives under one file's seal.
 ///
-/// The share itself is kept as raw JSON rather than a typed
-/// `cggmp21::KeyShare`: sealing and unsealing are transport, and only the
-/// signing layer needs (and validates) the real type.
+/// The share itself is kept as an opaque base64 string rather than a typed
+/// `Keyshare`: sealing and unsealing are transport, and only the signing
+/// layer needs (and validates) the real type.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareSecrets {
-    /// The cggmp21 key share, verbatim.
-    pub share: serde_json::Value,
+    /// The DKLs23 key share bytes, base64.
+    pub share: String,
     /// E2EE private key, `0x` + 64 hex (§15.2 — stored, never derived).
     pub enc_priv_hex: String,
     /// The wallet's ceremony signature over the key-binding message.
@@ -103,8 +109,8 @@ pub struct OpenedWallet {
     pub address: WalletAddress,
     pub threshold: u16,
     pub parties: u16,
-    /// Exactly `threshold` `(party_index, share_json)` pairs, ascending.
-    pub signers: Vec<(u16, serde_json::Value)>,
+    /// Exactly `threshold` `(party_index, share_base64)` pairs, ascending.
+    pub signers: Vec<(u16, String)>,
     pub enc_priv_hex: String,
     pub binding_sig: String,
 }
@@ -117,7 +123,7 @@ pub fn seal_shares(
     address: &WalletAddress,
     threshold: u16,
     parties: u16,
-    shares: &[serde_json::Value],
+    shares: &[String],
     enc_priv_hex: &str,
     binding_sig: &str,
     passphrase: &str,
@@ -184,6 +190,17 @@ pub fn open_shares(files: &[ShareFile], passphrase: &str) -> Result<OpenedWallet
     let first = files
         .first()
         .ok_or_else(|| TssError::InvalidSigners("no share files provided".into()))?;
+    if first.file_type == FILE_TYPE && first.version < FORMAT_VERSION {
+        // A share from a retired ceremony stack (v1 server-side cggmp21,
+        // v2 browser cggmp24). Its seal might open fine, but the key share
+        // inside speaks a protocol this build no longer runs — name that
+        // plainly instead of failing later.
+        return Err(TssError::Store(format!(
+            "this share file was created by an older PocketSkynet (version {}); \
+             its wallet cannot sign here — create a new MPC wallet and move the funds",
+            first.version
+        )));
+    }
     if first.file_type != FILE_TYPE || first.version != FORMAT_VERSION {
         return Err(TssError::Store(format!(
             "not a version-{FORMAT_VERSION} {FILE_TYPE} file"
@@ -284,6 +301,24 @@ pub fn open_shares(files: &[ShareFile], passphrase: &str) -> Result<OpenedWallet
     })
 }
 
+/// Encode one key share as the opaque payload [`seal_shares`] takes.
+pub fn encode_share(share: &crate::Share) -> String {
+    base64::engine::general_purpose::STANDARD.encode(share.as_slice())
+}
+
+/// Decode a payload [`open_shares`] returned back into a key share.
+///
+/// Fails as [`TssError::Store`] on anything that is not a valid DKLs23
+/// share — a wrong-protocol payload must be named, not signed with.
+pub fn decode_share(payload: &str) -> Result<crate::Share, TssError> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|_| TssError::Store("share payload is not base64".into()))?;
+    let share = sl_dkls23::keygen::Keyshare::from_bytes(&bytes)
+        .ok_or_else(|| TssError::Store("share payload is not a valid key share".into()))?;
+    Ok(crate::Share::new(share))
+}
+
 fn derive_keys(passphrase: &str, salt: &[u8], iterations: u32) -> ([u8; 32], [u8; 32]) {
     let mut okm = [0u8; 64];
     pbkdf2::pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), salt, iterations, &mut okm);
@@ -316,12 +351,20 @@ fn seal_mac(mac_key: &[u8; 32], f: &ShareFile, iv: &[u8; 16], ct: &[u8]) -> Hmac
     mac
 }
 
-/// Unix seconds now — the `created_at` stamp.
+/// Unix seconds now — the `created_at` stamp. `SystemTime::now` traps on
+/// wasm32-unknown-unknown, so the browser build asks `Date.now()` instead.
 pub fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    #[cfg(target_arch = "wasm32")]
+    {
+        (js_sys::Date::now() / 1000.0) as u64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -334,13 +377,10 @@ mod tests {
         WalletAddress::new(ADDR).unwrap()
     }
 
-    /// Dummy share payloads: the seal is over JSON and does not care — a
-    /// real `cggmp21` share only exists after a multi-minute DKG, and that
-    /// round-trip is the integration test's job.
-    fn dummy_shares(n: usize) -> Vec<serde_json::Value> {
-        (0..n)
-            .map(|i| serde_json::json!({ "core": { "i": i }, "aux": {} }))
-            .collect()
+    /// Dummy share payloads: the seal is over an opaque string and does
+    /// not care — real DKLs23 shares round-trip in the integration test.
+    fn dummy_shares(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("ZHVtbXk-{i}")).collect()
     }
 
     fn sealed(t: u16, n: u16, passphrase: &str) -> Vec<ShareFile> {
@@ -415,6 +455,28 @@ mod tests {
             open_shares(&files, "pass pass"),
             Err(TssError::BadPassphrase)
         ));
+    }
+
+    #[test]
+    fn an_older_version_file_is_refused_with_a_named_migration_error() {
+        // Version 1 sealed cggmp21 (server-ceremony) shares; version 2
+        // sealed cggmp24 (browser) shares. Either seal might open, but the
+        // key share inside speaks a protocol this build no longer runs —
+        // the user must hear "older version, make a new wallet", not
+        // "wrong passphrase".
+        for old in [1, 2] {
+            let mut files = sealed(2, 2, "pass pass");
+            for f in &mut files {
+                f.version = old;
+            }
+            match open_shares(&files, "pass pass") {
+                Err(TssError::Store(msg)) => {
+                    assert!(msg.contains("older"), "should name the migration: {msg}")
+                }
+                Err(other) => panic!("expected a named store error, got {other:?}"),
+                Ok(_) => panic!("a version-{old} file must not open"),
+            }
+        }
     }
 
     #[test]

@@ -1,20 +1,26 @@
 //! t-of-n threshold signing over a 32-byte prehash.
+//!
+//! Synchronous like [`crate::dkg`]: the ceremony is a
+//! [`crate::relay::run_parties`] loop on the calling thread — milliseconds
+//! of OT and curve arithmetic; browser callers still run it in a worker so
+//! the UI never competes with a ceremony.
 
-use cggmp21::key_share::AnyKeyShare;
-use cggmp21::{generic_ec::Scalar, DataToSign, ExecutionId};
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
+use sl_dkls23::setup::{sign::SetupMessage, NoSigningKey, NoVerifyingKey};
+use sl_mpc_mate::message::InstanceId;
 
-use crate::{eth, sim_capacity, Curve, Share, TssError};
+use crate::relay::LocalCoordinator;
+use crate::{eth, Share, TssError};
 
 /// Signs `prehash` with a chosen subset of exactly `t` shares and returns a
 /// recoverable, low-s Ethereum signature.
 ///
-/// `signers` pairs each share with its **party index at keygen** — CGGMP21
-/// needs the mapping to compute the Lagrange coefficients that turn VSS
-/// shares into additive ones. Any subset of size `t` works; which `t` is the
+/// `signers` pairs each share with its **party index at keygen** — the
+/// pairing the sealed files record, revalidated here against the id the
+/// share itself carries. Any subset of size `t` works; which `t` is the
 /// caller's choice. `eid_seed` must be unique per signing ceremony
 /// ([`crate::fresh_eid`]).
-pub async fn sign_prehash(
+pub fn sign_prehash(
     signers: &[(u16, Share)],
     prehash: [u8; 32],
     eid_seed: [u8; 32],
@@ -22,8 +28,8 @@ pub async fn sign_prehash(
     let first = signers
         .first()
         .ok_or_else(|| TssError::InvalidSigners("empty signer set".into()))?;
-    let t = first.1.min_signers();
-    let n = first.1.n();
+    let t = u16::from(first.1.threshold);
+    let n = u16::from(first.1.total_parties);
     if signers.len() != usize::from(t) {
         return Err(TssError::InvalidSigners(format!(
             "this wallet needs exactly {t} of its {n} shares to sign, got {}",
@@ -32,7 +38,8 @@ pub async fn sign_prehash(
     }
 
     // Sort by keygen index for a deterministic signer list, and reject a
-    // subset that repeats a party or names one the wallet does not have.
+    // subset that repeats a party, names one the wallet does not have, or
+    // pairs a share with an index that is not its own.
     let mut signers: Vec<(u16, Share)> = signers.to_vec();
     signers.sort_by_key(|(i, _)| *i);
     let indexes: Vec<u16> = signers.iter().map(|(i, _)| *i).collect();
@@ -46,45 +53,57 @@ pub async fn sign_prehash(
             "party index out of range for a {n}-party wallet"
         )));
     }
+    for (i, share) in &signers {
+        if u16::from(share.party_id) != *i {
+            return Err(TssError::InvalidSigners(format!(
+                "share labeled party {i} was minted for party {}",
+                share.party_id
+            )));
+        }
+        if u16::from(share.threshold) != t || u16::from(share.total_parties) != n {
+            return Err(TssError::InvalidSigners(
+                "shares disagree about the wallet's shape".into(),
+            ));
+        }
+    }
 
-    let data = DataToSign::from_scalar(Scalar::<Curve>::from_be_bytes_mod_order(prehash));
-    let capacity = sim_capacity(t);
-
-    // Signing is CPU-bound (Paillier); run it on a blocking thread.
     let reference = signers[0].1.clone();
-    let sig =
-        tokio::task::spawn_blocking(move || -> Result<cggmp21::Signature<Curve>, TssError> {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .map_err(|e| TssError::Ceremony(format!("building ceremony runtime: {e}")))?;
-            rt.block_on(async move {
-                let eid = ExecutionId::new(&eid_seed);
-                let indexes = &indexes;
-                let signers = &signers;
-                let results = round_based::sim::async_env::run_with_capacity(
-                    capacity,
-                    t,
-                    |i, party| async move {
-                        let mut rng = OsRng;
-                        cggmp21::signing(eid, i, indexes, &signers[usize::from(i)].1)
-                            .sign(&mut rng, party, data)
-                            .await
-                    },
-                )
-                .await
-                .into_vec();
+    // The signing setup names only the participating quorum; each party is
+    // addressed by its position in that list, while the keyshare itself
+    // carries its original keygen id.
+    let party_vk: Vec<NoVerifyingKey> = signers
+        .iter()
+        .map(|(_, share)| NoVerifyingKey::new(usize::from(share.party_id)))
+        .collect();
 
-                let mut out = None;
-                for (i, r) in results.into_iter().enumerate() {
-                    let s =
-                        r.map_err(|e| TssError::Ceremony(format!("signing, party {i}: {e}")))?;
-                    out.get_or_insert(s);
-                }
-                out.ok_or_else(|| TssError::Ceremony("no signature produced".into()))
-            })
+    let coordinator = LocalCoordinator::new();
+    let futures: Vec<_> = signers
+        .iter()
+        .enumerate()
+        .map(|(idx, (_, share))| {
+            // Default chain path "m": sign under the wallet's root key —
+            // the address derivation and this signer must agree.
+            let setup = SetupMessage::new(
+                InstanceId::new(eid_seed),
+                NoSigningKey,
+                idx,
+                party_vk.clone(),
+                share.clone(),
+            )
+            .with_hash(prehash);
+            let mut seed = [0u8; 32];
+            OsRng.fill_bytes(&mut seed);
+            sl_dkls23::sign::run(setup, seed, coordinator.connect())
         })
-        .await
-        .map_err(|e| TssError::Ceremony(format!("signing task panicked: {e}")))??;
+        .collect();
 
-    eth::to_eth_signature(&reference, sig, prehash)
+    let mut out = None;
+    for (i, result) in crate::relay::run_parties(futures).into_iter().enumerate() {
+        let sig = result.map_err(|e| TssError::Ceremony(format!("signing, party {i}: {e:?}")))?;
+        out.get_or_insert(sig);
+    }
+    let (signature, recovery_id) =
+        out.ok_or_else(|| TssError::Ceremony("no signature produced".into()))?;
+
+    eth::to_eth_signature(&reference, signature, recovery_id, prehash)
 }

@@ -624,6 +624,15 @@ async fn run_send(
     };
     let rpc = EvmRpc::new(&net.rpc_url);
 
+    // Whatever the signature will need is asked for before the HUD exists:
+    // for an MPC session this raises the quorum prompt (share files +
+    // passphrase) on a clean screen — the HUD blurs everything under it,
+    // and a prompt raised beneath it reads as a hung send.
+    let signer = match crate::actions::acquire_tx_signer(&keys).await {
+        Ok(s) => s,
+        Err(e) => return fail(t(lang, Key::signing_failed).replace("{error}", &e)),
+    };
+
     // The Skynet relay HUD (burst.rs). Raised here rather than around the
     // whole dialog so it covers exactly the on-chain span: chain check to
     // receipt. Ended on every return path via this guard-ish closure.
@@ -685,13 +694,14 @@ async fn run_send(
 
     // Checked before signing rather than after failing: an external wallet has
     // no key on this device, and "signing failed: no signing key on this
-    // device" is a dead end where a sentence about how to fix it belongs. A
-    // TSS session passes — it signs by server ceremony.
+    // device" is a dead end where a sentence about how to fix it belongs. An
+    // MPC session passes — it signs by an in-browser ceremony over the
+    // quorum of share files presented before the HUD went up.
     if !keys.borrow().can_sign() {
         return fail(t(lang, Key::wallet_no_local_key).to_owned());
     }
     tx_phase(hud, TxPhase::Sign);
-    let signed = match crate::actions::sign_transaction(&keys, &tx).await {
+    let signed = match crate::actions::sign_transaction_with(&signer, &keys, &tx).await {
         Ok(s) => s,
         Err(e) => return fail(t(lang, Key::signing_failed).replace("{error}", &e)),
     };

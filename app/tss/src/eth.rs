@@ -1,19 +1,20 @@
-//! Ethereum-side helpers: address derivation and conversion of a CGGMP21
-//! signature into a recoverable Ethereum signature.
+//! Ethereum-side helpers: address derivation and conversion of a DKLs23
+//! ceremony signature into a recoverable Ethereum signature.
 //!
 //! Deliberately built on `pocketskynet_core`'s primitives (`eip191`,
-//! `WalletAddress`) rather than a second Ethereum library, so a TSS wallet's
-//! address and signature encoding cannot drift from the mnemonic wallet's.
+//! `WalletAddress`) rather than a second Ethereum library, so an MPC
+//! wallet's address and signature encoding cannot drift from the mnemonic
+//! wallet's.
 
-use cggmp21::key_share::AnyKeyShare;
 use k256::ecdsa::{RecoveryId, VerifyingKey};
+use k256::elliptic_curve::group::GroupEncoding;
 use pocketskynet_core::{eip191, WalletAddress};
 
-use crate::{Curve, Share, TssError};
+use crate::{Share, TssError};
 
 /// The shared (aggregate) public key as a k256 verifying key.
 pub fn verifying_key(share: &Share) -> Result<VerifyingKey, TssError> {
-    let bytes = share.shared_public_key().to_bytes(true);
+    let bytes = share.public_key().to_bytes();
     VerifyingKey::from_sec1_bytes(bytes.as_ref())
         .map_err(|e| TssError::Ceremony(format!("invalid shared public key: {e}")))
 }
@@ -59,40 +60,44 @@ impl TssSignature {
     }
 }
 
-/// Converts a CGGMP21 signature into a recoverable Ethereum signature over
-/// `prehash`, normalizing to low-s and recovering the parity bit `v` by
-/// trial recovery against the wallet's public key.
-///
-/// cggmp21's `normalize_s` already yields low-s, and because `v` is recovered
-/// *after* normalization the parity is consistent with the final `s`. Only
-/// v ∈ {0, 1} is tried: r ≥ curve order has probability ≈ 2⁻¹²⁸ and a
-/// signature landing there would fail verification everywhere else anyway.
+/// Converts a DKLs23 ceremony signature into a recoverable Ethereum
+/// signature over `prehash`, normalizing to low-s (flipping the parity bit
+/// with it) and then **verifying** the recovery: the returned `v` is not
+/// trusted from the ceremony but proven by recovering the wallet's public
+/// key. A signature that fails that proof never leaves this function.
 pub fn to_eth_signature(
     share: &Share,
-    sig: cggmp21::Signature<Curve>,
+    sig: k256::ecdsa::Signature,
+    recovery_id: RecoveryId,
     prehash: [u8; 32],
 ) -> Result<TssSignature, TssError> {
-    let sig = sig.normalize_s();
-    let mut rs = [0u8; 64];
-    sig.write_to_slice(&mut rs);
+    // Ethereum requires low-s; flipping s negates the parity bit.
+    let (sig, recovery_id) = match sig.normalize_s() {
+        Some(normalized) => (
+            normalized,
+            RecoveryId::try_from(recovery_id.to_byte() ^ 1)
+                .expect("0 and 1 are valid recovery ids"),
+        ),
+        None => (sig, recovery_id),
+    };
+
+    let expected = verifying_key(share)?;
+    let recovered = VerifyingKey::recover_from_prehash(&prehash, &sig, recovery_id)
+        .map_err(|e| TssError::Ceremony(format!("recovery failed: {e}")))?;
+    if recovered != expected {
+        return Err(TssError::Recovery);
+    }
+
+    let rs = sig.to_bytes();
     let mut r = [0u8; 32];
     let mut s = [0u8; 32];
     r.copy_from_slice(&rs[..32]);
     s.copy_from_slice(&rs[32..]);
-
-    let expected = verifying_key(share)?;
-    let k_sig = k256::ecdsa::Signature::from_slice(&rs)
-        .map_err(|e| TssError::Ceremony(format!("invalid (r,s) signature: {e}")))?;
-
-    for v in 0u8..=1 {
-        let rec_id = RecoveryId::try_from(v).expect("0 and 1 are valid recovery ids");
-        if let Ok(recovered) = VerifyingKey::recover_from_prehash(&prehash, &k_sig, rec_id) {
-            if recovered == expected {
-                return Ok(TssSignature { r, s, v });
-            }
-        }
-    }
-    Err(TssError::Recovery)
+    Ok(TssSignature {
+        r,
+        s,
+        v: recovery_id.to_byte(),
+    })
 }
 
 #[cfg(test)]

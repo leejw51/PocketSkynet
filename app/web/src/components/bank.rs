@@ -184,12 +184,18 @@ pub(crate) async fn send_contract_tx_with(
     gas_fallback: u128,
     on_phase: Option<Callback<super::burst::TxPhase>>,
 ) -> Result<TxDone, String> {
+    // Whatever the signature will need is asked for *first*: for an MPC
+    // session this raises the quorum prompt (share files + passphrase) on a
+    // clean screen — the relay HUD blurs everything under it, so raising it
+    // before the prompt buries the one dialog the send is waiting on.
+    let signer = crate::actions::acquire_tx_signer(&keys).await?;
     let hud = super::burst::tx_start();
     let out = send_contract_tx_inner(
         lang,
         net,
         me,
         keys,
+        &signer,
         to,
         value,
         data,
@@ -208,6 +214,7 @@ async fn send_contract_tx_inner(
     net: &Network,
     me: &WalletAddress,
     keys: std::rc::Rc<std::cell::RefCell<crate::crypto::SessionKeys>>,
+    signer: &crate::actions::TxSigner,
     to: Option<WalletAddress>,
     value: u128,
     data: Vec<u8>,
@@ -256,12 +263,13 @@ async fn send_contract_tx_inner(
     // A browser-wallet session holds no key here and no ceremony to reach
     // one, so this would fail with a bare "no signing key on this device".
     // Say what can be done about it instead — and say it before anything is
-    // broadcast. A TSS session passes: it signs by server ceremony.
+    // broadcast. An MPC session passes: it signs by an in-browser ceremony
+    // over the quorum of share files collected before the HUD went up.
     if !keys.borrow().can_sign() {
         return Err(t(lang, Key::wallet_no_local_key).to_owned());
     }
     tx_phase(hud, TxPhase::Sign);
-    let signed = crate::actions::sign_transaction(&keys, &tx).await?;
+    let signed = crate::actions::sign_transaction_with(signer, &keys, &tx).await?;
     tx_phase(hud, TxPhase::Broadcast);
     let tx_hash = rpc
         .send_raw_transaction(&signed.raw_hex())

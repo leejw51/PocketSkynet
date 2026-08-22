@@ -5,29 +5,43 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# Native-only by design (CRYPTO.md §15.3): cggmp21's Paillier arithmetic sits
-# on rug/gmp-mpfr-sys, a C GMP build that cannot target wasm32-unknown-unknown.
-# The web workspace must never depend on this crate.
+# Builds for BOTH native and wasm32-unknown-unknown (CRYPTO.md §15.3): every
+# ceremony runs inside the web client, so shares never leave the browser.
+# Native builds exist for the test suite and the vector generator only —
+# the server must never link this crate again.
 
 [dependencies]
 pocketskynet-core.workspace = true
 
-# The audited threshold-ECDSA stack, same versions as the reviewed reference
-# wallet this port derives from.
-cggmp21 = { version = "0.6", features = ["curve-secp256k1"] }
-round-based = { version = "0.4", features = ["derive", "sim", "sim-async"] }
+# Silence Labs' DKLs23 threshold-ECDSA implementation. OT-based — no
+# Paillier, no safe primes — so a full DKG is milliseconds where CGGMP24
+# was minutes, and it is pure Rust all the way down, which is what lets
+# this crate target wasm32. `default-features = false` drops the optional
+# tokio runtime (feature `multi-thread`): ceremonies here are driven by a
+# plain futures executor over an in-process relay (`relay.rs`), the same
+# code path on a native test thread and inside a web worker.
+#
+# Everything is pinned with `=`: sl-dkls23 1.0.0-beta names its siblings
+# as `1.0.0-beta`, which cargo would happily float to sl-mpc-mate 1.1.x —
+# a release that removed the `coord`/`message` modules sl-dkls23 is built
+# on. A float compiles nothing.
+#
+# NOTE (license): sl-dkls23 and its sl-* siblings ship under the Silence
+# Laboratories Non-Commercial Use License — fine for this educational
+# project, but any commercial deployment needs a commercial license from
+# Silence Laboratories.
+sl-dkls23 = { version = "=1.0.0-beta", default-features = false }
+sl-mpc-mate = "=1.0.0-beta"
+sl-oblivious = "=1.0.0-beta"
 
-# Not used directly: `rug` (via fast-paillier/paillier-zk) pulls this in, and
-# naming it here only to add `c-no-tests` is what turns the feature on for the
-# whole graph — cargo unifies features, and a transitive dependency has no other
-# way to be told. Without it the build runs GMP's own C test suite, where Apple
-# clang 21 segfaults linking `t-get_si` and takes the release build with it.
-# Those are upstream GMP's tests of a released GMP tarball, not ours.
-gmp-mpfr-sys = { version = "1.7", features = ["c-no-tests"] }
+# Drives the ceremonies: all parties' futures polled to completion on the
+# calling thread — no async runtime, no threads, no clock.
+futures-util = { version = "0.3", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["executor", "alloc"] }
+
 rand_core = { version = "0.6", features = ["getrandom"] }
 
 k256.workspace = true
-sha3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -41,7 +55,10 @@ hmac.workspace = true
 sha2.workspace = true
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 
-tokio = { version = "1", features = ["rt"] }
-
-[dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser has no /dev/urandom; the `js` feature routes getrandom at
+# crypto.getRandomValues. Mirrors the same override in `core`.
+getrandom = { workspace = true, features = ["js"] }
+# `SystemTime::now` traps on wasm32-unknown-unknown; share files stamp
+# `createdAt` from `Date.now()` there instead.
+js-sys = "0.3"
