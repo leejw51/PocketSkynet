@@ -4,7 +4,7 @@ Notable changes to Pocket Skynet, newest first. Versions are the workspace
 version in [`app/Cargo.toml`](app/Cargo.toml); a `v*` tag matching it builds and
 publishes the macOS installer.
 
-## Unreleased
+## 1.0.3 — 2026-08-22
 
 ### MPC ceremonies moved into the browser — shares never leave the client
 
@@ -34,6 +34,19 @@ Share files bump to **format version 3**; version-1 and version-2 files
 migration message — create a new MPC wallet and move the funds. The UI now
 calls these wallets what they are to a user — **MPC wallets** — and keeps
 the protocol details in the docs.
+
+### The macOS release build works again
+
+1.0.2 never produced an installer. The release workflow's `tauri-cli` came
+from binstall, whose lookup missed the aarch64 asset and quietly installed
+the **x86_64** build; Rosetta then propagated that architecture into every
+subprocess, so GMP configured and compiled itself for x86_64 and the arm64
+link failed on every `___gmpz_*` symbol. The workflow now fetches the pinned
+`cargo-tauri-aarch64-apple-darwin` asset directly and fails at install time,
+via `lipo -archs`, if the binary is ever the wrong architecture. The vendored
+GMP also **no longer builds GMP's own C test suite** (`c-no-tests`), which was
+the first casualty of the same Rosetta mix-up — those are upstream GMP's tests
+of a released tarball, not ours.
 
 ## 1.0.2 — 2026-08-21
 
