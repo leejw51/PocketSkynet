@@ -13,22 +13,31 @@ license.workspace = true
 [dependencies]
 pocketskynet-core.workspace = true
 
-# The CGGMP24 successor of the audited `cggmp21` crate (same LFDT-Lockness
-# lineage, MIT OR Apache-2.0). Its default `backend-num-bigint` feature is
-# pure Rust, which is what lets this crate target wasm32 — the old crate's
-# rug/GMP Paillier arithmetic could not. Everything is pinned with `=`:
-# the 0.7.0-alpha train does not hold generic-ec versions in lockstep
-# across its own crates (alpha.4 of the siblings moved to generic-ec 0.5
-# while cggmp24 alpha.3 is built against 0.4), so a float would mix two
-# `generic_ec_core`s and fail to compile.
-cggmp24 = { version = "=0.7.0-alpha.3", features = ["curve-secp256k1"] }
-cggmp24-keygen = "=0.7.0-alpha.3"
-paillier-zk = "=0.7.0-alpha.3"
+# Silence Labs' DKLs23 threshold-ECDSA implementation. OT-based — no
+# Paillier, no safe primes — so a full DKG is milliseconds where CGGMP24
+# was minutes, and it is pure Rust all the way down, which is what lets
+# this crate target wasm32. `default-features = false` drops the optional
+# tokio runtime (feature `multi-thread`): ceremonies here are driven by a
+# plain futures executor over an in-process relay (`relay.rs`), the same
+# code path on a native test thread and inside a web worker.
+#
+# Everything is pinned with `=`: sl-dkls23 1.0.0-beta names its siblings
+# as `1.0.0-beta`, which cargo would happily float to sl-mpc-mate 1.1.x —
+# a release that removed the `coord`/`message` modules sl-dkls23 is built
+# on. A float compiles nothing.
+#
+# NOTE (license): sl-dkls23 and its sl-* siblings ship under the Silence
+# Laboratories Non-Commercial Use License — fine for this educational
+# project, but any commercial deployment needs a commercial license from
+# Silence Laboratories.
+sl-dkls23 = { version = "=1.0.0-beta", default-features = false }
+sl-mpc-mate = "=1.0.0-beta"
+sl-oblivious = "=1.0.0-beta"
 
-# `sim` is the synchronous state-machine driver: all parties advance in one
-# loop on the calling thread, no async runtime — the same code path on a
-# native test thread and inside a web worker.
-round-based = { version = "0.4", features = ["derive", "sim"] }
+# Drives the ceremonies: all parties' futures polled to completion on the
+# calling thread — no async runtime, no threads, no clock.
+futures-util = { version = "0.3", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["executor", "alloc"] }
 
 rand_core = { version = "0.6", features = ["getrandom"] }
 

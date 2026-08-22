@@ -119,20 +119,18 @@ impl Method {
     }
 }
 
-/// The creation ceremony's three visible acts, for the animated checklist.
+/// The creation ceremony's two visible acts, for the animated checklist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TssStep {
-    Primes,
     Protocol,
     Sealing,
 }
 
 impl TssStep {
-    const ALL: [TssStep; 3] = [TssStep::Primes, TssStep::Protocol, TssStep::Sealing];
+    const ALL: [TssStep; 2] = [TssStep::Protocol, TssStep::Sealing];
 
     fn label(self) -> Key {
         match self {
-            TssStep::Primes => Key::tss_phase_primes,
             TssStep::Protocol => Key::tss_phase_protocol,
             TssStep::Sealing => Key::tss_phase_binding,
         }
@@ -314,10 +312,6 @@ pub fn login(p: &LoginProps) -> Html {
     let tss_new_pass2 = use_state(String::new);
     let tss_keygen_busy = use_state(|| false);
     let tss_step = use_state(|| Option::<TssStep>::None);
-    // Safe-prime progress inside the Primes step: (done, total) party
-    // sets, because in the browser they generate one after another and a
-    // minutes-long bar with no movement reads as a hang.
-    let tss_primes = use_state(|| Option::<(u16, u16)>::None);
     let tss_created = use_state(|| Option::<crate::tss::TssCreated>::None);
     // One flag per share file: has this one been downloaded yet? The same
     // gate as the mnemonic backup — signing in unlocks only when every
@@ -521,7 +515,6 @@ pub fn login(p: &LoginProps) -> Html {
         let tss_new_pass2 = tss_new_pass2.clone();
         let tss_keygen_busy = tss_keygen_busy.clone();
         let tss_step = tss_step.clone();
-        let tss_primes = tss_primes.clone();
         let tss_created = tss_created.clone();
         let tss_downloaded = tss_downloaded.clone();
         let set_error = set_error.clone();
@@ -541,27 +534,20 @@ pub fn login(p: &LoginProps) -> Html {
             let (t_needed, n_total) = (*tss_threshold, *tss_parties);
 
             tss_keygen_busy.set(true);
-            tss_step.set(Some(TssStep::Primes));
-            tss_primes.set(Some((0, n_total)));
+            tss_step.set(Some(TssStep::Protocol));
             tss_created.set(None);
             set_error.emit(None);
 
             let tss_new_pass2 = tss_new_pass2.clone();
             let tss_keygen_busy = tss_keygen_busy.clone();
             let tss_step = tss_step.clone();
-            let tss_primes = tss_primes.clone();
             let tss_created = tss_created.clone();
             let tss_downloaded = tss_downloaded.clone();
             let set_error = set_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let outcome = {
                     let tss_step = tss_step.clone();
-                    let tss_primes = tss_primes.clone();
                     crate::tss::keygen(t_needed, n_total, &pass, move |phase| match phase {
-                        crate::tss_proto::TssPhase::Primes { done, total } => {
-                            tss_step.set(Some(TssStep::Primes));
-                            tss_primes.set(Some((done, total)));
-                        }
                         crate::tss_proto::TssPhase::Protocol => {
                             tss_step.set(Some(TssStep::Protocol));
                         }
@@ -579,14 +565,12 @@ pub fn login(p: &LoginProps) -> Html {
                         // backup panel signs in with it directly.
                         tss_new_pass2.set(String::new());
                         tss_step.set(None);
-                        tss_primes.set(None);
                         tss_keygen_busy.set(false);
                     }
                     Err(e) => {
                         set_error
                             .emit(Some(t(lang, Key::tss_keygen_failed).replace("{error}", &e)));
                         tss_step.set(None);
-                        tss_primes.set(None);
                         tss_keygen_busy.set(false);
                     }
                 }
@@ -1903,7 +1887,7 @@ pub fn login(p: &LoginProps) -> Html {
                                         <span class="fn-tss-forging__ring"></span>
                                         <img src={crate::asset::img(store.skin, "tss-forge")} alt="" />
                                     </div>
-                                    { tss_step_list(lang, *tss_step, *tss_primes) }
+                                    { tss_step_list(lang, *tss_step) }
                                     <div class="fn-tss-energybar" aria-hidden="true"><span></span></div>
                                     <p class="fn-field__help">{ t(lang, Key::tss_creating_hint) }</p>
                                 } else {
@@ -2252,10 +2236,10 @@ fn tss_shard_slots(files: &[TssLoadedFile]) -> Html {
 }
 
 /// The create ceremony's animated act list: every act with its state —
-/// done (✓), active (pulsing), or still ahead — so a minute of Paillier
-/// arithmetic reads as progress rather than a stuck spinner.
-fn tss_step_list(lang: Lang, current: Option<TssStep>, primes: Option<(u16, u16)>) -> Html {
-    let current = current.unwrap_or(TssStep::Primes);
+/// done (✓), active (pulsing), or still ahead — so the ceremony reads as
+/// progress rather than an unexplained pause.
+fn tss_step_list(lang: Lang, current: Option<TssStep>) -> Html {
+    let current = current.unwrap_or(TssStep::Protocol);
     html! {
         <ol class="fn-tss-steps" aria-live="polite">
             { for TssStep::ALL.into_iter().map(|step| {
@@ -2264,15 +2248,7 @@ fn tss_step_list(lang: Lang, current: Option<TssStep>, primes: Option<(u16, u16)
                     std::cmp::Ordering::Equal => "active",
                     std::cmp::Ordering::Greater => "pending",
                 };
-                // In the browser the prime sets generate one after another,
-                // so the minutes-long first act shows its count — movement
-                // is what separates "slow" from "stuck".
-                let label = match (step, state, primes) {
-                    (TssStep::Primes, "active", Some((done, total))) => {
-                        format!("{} ({done}/{total})", t(lang, step.label()))
-                    }
-                    _ => t(lang, step.label()).to_owned(),
-                };
+                let label = t(lang, step.label()).to_owned();
                 html! {
                     <li class="fn-tss-step" data-state={state}>
                         <span class="fn-tss-step__dot">

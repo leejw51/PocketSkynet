@@ -26,20 +26,12 @@ pub const MIN_PASSPHRASE: usize = 8;
 /// as soon as the terminal event arrives.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TssRequest {
-    /// Generate one party's safe-prime set — the DKG's dominant cost,
-    /// farmed out to `n` of these workers **in parallel** so wallet
-    /// creation costs one set's wall clock, not the sum of `n`.
-    GeneratePrimes,
     /// Mint a fresh t-of-n wallet: DKG, the E2EE identity and its binding
-    /// signature, then `n` sealed share files. `pregenerated` carries the
-    /// `n` prime sets from the parallel `GeneratePrimes` fan-out (JSON, one
-    /// per party); an empty vec makes this worker generate them itself,
-    /// sequentially.
+    /// signature, then `n` sealed share files.
     Keygen {
         threshold: u16,
         parties: u16,
         passphrase: String,
-        pregenerated: Vec<String>,
     },
     /// EIP-191 `personal_sign` by ceremony, plus the E2EE identity the same
     /// quorum unseals — everything a login needs from one passphrase entry.
@@ -59,12 +51,7 @@ pub enum TssRequest {
 /// Keygen progress, forwarded to the creation wizard's step list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TssPhase {
-    /// Safe-prime generation — the dominant cost; `done` of `total` party
-    /// sets finished so a minutes-long step can show movement.
-    Primes {
-        done: u16,
-        total: u16,
-    },
+    /// The key-generation ceremony itself — seconds, not minutes.
     Protocol,
     /// Minting the E2EE identity, ceremony-signing its binding, sealing.
     Sealing,
@@ -121,8 +108,6 @@ impl TssHashSignature {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TssEvent {
     Phase(TssPhase),
-    /// One serialized safe-prime set — `GeneratePrimes`' terminal event.
-    Primes(String),
     Created(TssCreated),
     SignedMessage(TssSignBundle),
     SignedHash(TssHashSignature),
@@ -130,7 +115,7 @@ pub enum TssEvent {
 }
 
 /// The worker: one request in, progress + one terminal event out. All the
-/// CPU-heavy Paillier arithmetic happens inside `received`, which is fine —
+/// ceremony arithmetic happens inside `received`, which is fine —
 /// blocking is what a dedicated worker is *for*.
 pub struct TssWorker;
 
@@ -153,15 +138,11 @@ impl Worker for TssWorker {
 /// Executes one request, emitting progress and the terminal event.
 pub fn run(req: TssRequest, emit: &mut dyn FnMut(TssEvent)) {
     let terminal = match req {
-        TssRequest::GeneratePrimes => serde_json::to_string(&dkg::generate_prime_set())
-            .map(TssEvent::Primes)
-            .unwrap_or_else(|e| TssEvent::Failed(format!("encoding prime set: {e}"))),
         TssRequest::Keygen {
             threshold,
             parties,
             passphrase,
-            pregenerated,
-        } => keygen(threshold, parties, &passphrase, &pregenerated, emit)
+        } => keygen(threshold, parties, &passphrase, emit)
             .map(TssEvent::Created)
             .unwrap_or_else(TssEvent::Failed),
         TssRequest::SignMessage {
@@ -189,7 +170,6 @@ fn keygen(
     t: u16,
     n: u16,
     passphrase: &str,
-    pregenerated: &[String],
     emit: &mut dyn FnMut(TssEvent),
 ) -> Result<TssCreated, String> {
     pocketskynet_tss::validate_params(t, n).map_err(|e| e.to_string())?;
@@ -200,9 +180,8 @@ fn keygen(
     }
 
     let eid = pocketskynet_tss::fresh_eid().map_err(|e| e.to_string())?;
-    let mut on_phase = |phase: dkg::DkgPhase| {
+    let on_phase = |phase: dkg::DkgPhase| {
         let phase = match phase {
-            dkg::DkgPhase::GeneratingPrimes { done, total } => TssPhase::Primes { done, total },
             dkg::DkgPhase::RunningProtocol => TssPhase::Protocol,
             // The binding ceremony and the sealing below still have to run;
             // success is announced only by the terminal `Created` event.
@@ -210,16 +189,7 @@ fn keygen(
         };
         emit(TssEvent::Phase(phase));
     };
-    let shares = if pregenerated.is_empty() {
-        dkg::run_dkg(t, n, eid, on_phase).map_err(|e| e.to_string())?
-    } else {
-        let primes: Vec<dkg::Primes> = pregenerated
-            .iter()
-            .map(|p| serde_json::from_str(p))
-            .collect::<Result<_, _>>()
-            .map_err(|e| format!("decoding pregenerated primes: {e}"))?;
-        dkg::run_dkg_with_primes(t, n, eid, primes, &mut on_phase).map_err(|e| e.to_string())?
-    };
+    let shares = dkg::run_dkg(t, n, eid, on_phase).map_err(|e| e.to_string())?;
 
     let address = eth::eth_address(&shares[0]).map_err(|e| e.to_string())?;
 
@@ -249,11 +219,7 @@ fn keygen(
     )
     .map_err(|e| format!("binding self-check failed: {e}"))?;
 
-    let raw_shares: Vec<serde_json::Value> = shares
-        .iter()
-        .map(serde_json::to_value)
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("encoding shares: {e}"))?;
+    let raw_shares: Vec<String> = shares.iter().map(store::encode_share).collect();
     let files = store::seal_shares(
         &address,
         t,
@@ -294,11 +260,11 @@ fn open(
         .signers
         .iter()
         .map(|(i, raw)| {
-            let share: Share = serde_json::from_value(raw.clone())
+            let share = store::decode_share(raw)
                 .map_err(|_| format!("share {i} is not a valid key share"))?;
             Ok((*i, share))
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<(u16, Share)>, String>>()?;
     Ok((opened, signers))
 }
 

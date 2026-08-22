@@ -1,10 +1,9 @@
 //! End-to-end m-of-n: DKG → seal/unseal the wallet → threshold-sign with two
 //! *different* 2-of-3 subsets → recover the wallet address from both.
 //!
-//! This runs the real CGGMP21 protocol at SecurityLevel128, including
-//! Paillier safe-prime generation, so it takes minutes. It is the proof
-//! behind PROTOCOL.md's TSS section: a ceremony signature is an ordinary
-//! Ethereum signature.
+//! This runs the real DKLs23 protocol (sl-dkls23) — OT-based, so the whole
+//! file finishes in seconds. It is the proof behind PROTOCOL.md's MPC
+//! section: a ceremony signature is an ordinary Ethereum signature.
 
 use pocketskynet_core::{eip191, WalletAddress};
 use pocketskynet_tss::{dkg, eth, sign, store, TssError};
@@ -27,10 +26,7 @@ fn two_of_three_dkg_signs_with_any_quorum_and_never_below_it() {
 
     // 2. Seal into the n user-held share files and open a quorum back
     // through the passphrase — the custody round trip with *real* shares.
-    let raw: Vec<serde_json::Value> = shares
-        .iter()
-        .map(|s| serde_json::to_value(s).unwrap())
-        .collect();
+    let raw: Vec<String> = shares.iter().map(store::encode_share).collect();
     let files = store::seal_shares(
         &address,
         t,
@@ -50,7 +46,7 @@ fn two_of_three_dkg_signs_with_any_quorum_and_never_below_it() {
         opened
             .signers
             .into_iter()
-            .map(|(i, v)| (i, serde_json::from_value(v).expect("a real key share")))
+            .map(|(i, v)| (i, store::decode_share(&v).expect("a real key share")))
             .collect()
     };
 

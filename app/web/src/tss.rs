@@ -53,10 +53,11 @@ impl TssShareHeader {
     /// `pocketskynet_tss::MAX_PARTIES`.
     pub const MAX_PARTIES: u16 = 5;
 
-    /// The share-file format this build understands — version 2, the
-    /// browser-ceremony (cggmp24) format. Version-1 files belonged to the
-    /// retired server-side stack and are refused with a named message.
-    pub const VERSION: u32 = 2;
+    /// The share-file format this build understands — version 3, the
+    /// browser-ceremony DKLs23 format. Version-1 (server-side cggmp21) and
+    /// version-2 (browser cggmp24) files belonged to retired stacks and
+    /// are refused with a named message.
+    pub const VERSION: u32 = 3;
 
     /// Parse a candidate file's header, `None` if it is not a share file.
     ///
@@ -241,47 +242,20 @@ async fn run_in_worker(
 }
 
 /// Mint a fresh t-of-n wallet in the browser: DKG, the E2EE identity and
-/// its binding, `n` sealed share files. Minutes of safe-prime hunting —
-/// hence the workers and the progress callback.
-///
-/// The `n` prime sets are independent, so they are farmed out to `n`
-/// **parallel** workers first (creation costs one set's wall clock, not
-/// the sum), then one ceremony worker runs the interactive protocol over
-/// the collected sets.
+/// its binding, `n` sealed share files. The whole ceremony is seconds of
+/// work, but it still runs in the dedicated worker so the UI thread never
+/// competes with it.
 pub async fn keygen(
     threshold: u16,
     parties: u16,
     passphrase: &str,
     mut on_phase: impl FnMut(TssPhase),
 ) -> Result<TssCreated, String> {
-    use futures::stream::{FuturesUnordered, StreamExt as _};
-
-    on_phase(TssPhase::Primes {
-        done: 0,
-        total: parties,
-    });
-    let mut fanout: FuturesUnordered<_> = (0..parties)
-        .map(|_| run_in_worker(TssRequest::GeneratePrimes, |_| {}))
-        .collect();
-    let mut pregenerated = Vec::with_capacity(usize::from(parties));
-    while let Some(event) = fanout.next().await {
-        match event? {
-            TssEvent::Primes(set) => pregenerated.push(set),
-            TssEvent::Failed(e) => return Err(e),
-            _ => return Err("unexpected prime-generation result".into()),
-        }
-        on_phase(TssPhase::Primes {
-            done: pregenerated.len() as u16,
-            total: parties,
-        });
-    }
-
     let event = run_in_worker(
         TssRequest::Keygen {
             threshold,
             parties,
             passphrase: passphrase.to_owned(),
-            pregenerated,
         },
         &mut on_phase,
     )
@@ -432,7 +406,7 @@ mod tests {
     fn share(threshold: u16, parties: u16, party_index: u16) -> Value {
         json!({
             "type": "pocketskynet-tss-share",
-            "version": 2,
+            "version": 3,
             "address": "0x00112233445566778899aabbccddeeff00112233",
             "threshold": threshold,
             "parties": parties,
@@ -469,12 +443,15 @@ mod tests {
     fn foreign_json_is_not_a_share_file() {
         assert!(TssShareHeader::of(&Value::Null).is_none());
         assert!(TssShareHeader::of(&json!({"type": "something-else"})).is_none());
-        // Version 1 files sealed cggmp21 shares the retired server-side
-        // ceremony understood; this build's ceremonies cannot use them, so
-        // the picker must not present one as loadable.
-        let mut version_1 = share(2, 3, 0);
-        version_1["version"] = json!(1);
-        assert!(TssShareHeader::of(&version_1).is_none());
+        // Version 1 files sealed cggmp21 (server-side) shares and version
+        // 2 sealed cggmp24 (browser) shares; this build's ceremonies
+        // cannot use either, so the picker must not present one as
+        // loadable.
+        for old in [1, 2] {
+            let mut stale = share(2, 3, 0);
+            stale["version"] = json!(old);
+            assert!(TssShareHeader::of(&stale).is_none());
+        }
     }
 
     #[test]

@@ -3616,6 +3616,6 @@ Earlier releases (≤ 1.0.2) ran ceremonies server-side behind
 `/api/tss/keygen`, `/api/tss/keygen/status`, `/api/tss/keygen/collect`,
 `/api/tss/sign` and `/api/tss/sign-hash`, with the client presenting its
 share files per request. Those routes are gone, and version-1 share files
-(their cggmp21 key-share format) cannot be used by the in-browser
-ceremonies: holders of a version-1 wallet create a fresh TSS wallet and
-move the funds.
+(their cggmp21 key-share format) — like the interim version-2 (cggmp24)
+files — cannot be used by the current in-browser (DKLs23) ceremonies:
+holders of an older wallet create a fresh MPC wallet and move the funds.

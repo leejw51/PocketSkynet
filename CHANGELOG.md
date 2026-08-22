@@ -6,30 +6,34 @@ publishes the macOS installer.
 
 ## Unreleased
 
-### TSS ceremonies moved into the browser — shares never leave the client
+### MPC ceremonies moved into the browser — shares never leave the client
 
-Every TSS ceremony — key generation, the login-challenge signature, every
-transaction signature — now runs **inside the web client's WebAssembly**, in a
-dedicated Web Worker. Share files and the wallet passphrase never leave the
-browser, on your own server or anyone else's; the server only ever verifies an
-ordinary EIP-191 signature it cannot tell from a single-key wallet's. The
-`/api/tss/*` routes are gone.
+Every MPC-wallet ceremony — key generation, the login-challenge signature,
+every transaction signature — now runs **inside the web client's
+WebAssembly**, in a dedicated Web Worker. Share files and the wallet
+passphrase never leave the browser, on your own server or anyone else's; the
+server stores nothing and only ever verifies an ordinary EIP-191 signature it
+cannot tell from a single-key wallet's. The `/api/tss/*` routes are gone.
 
 Custody got stricter on the client too: the session no longer retains the
 share files or the passphrase after sign-in — **every transaction raises a
 prompt asking you to present a quorum of share files again**, used once for
-that signature and then forgotten — and nothing TSS ever touches
-`localStorage`.
+that signature and then forgotten — and nothing of the MPC wallet ever
+touches `localStorage`.
 
-The enabler is [`cggmp24`](https://github.com/LFDT-Lockness/cggmp21) (MIT OR
-Apache-2.0), the LFDT-Lockness successor of the audited `cggmp21` this project
-shipped with: its pure-Rust bignum backend builds for
-`wasm32-unknown-unknown`, which GMP-backed `cggmp21` never could. Share files
-bump to **format version 2**; version-1 files (sealed for the retired
-server-side ceremonies) are refused with a named migration message — create a
-new TSS wallet and move the funds. Wallet creation now costs minutes of
-in-browser safe-prime generation (the wizard narrates each step); signing
-stays a few seconds.
+The protocol engine is Silence Labs'
+[`sl-dkls23`](https://github.com/silence-laboratories/dkls23), a pure-Rust
+implementation of the peer-reviewed
+[DKLs23](https://eprint.iacr.org/2023/765) threshold-ECDSA protocol. DKLs23
+is OT-based — no Paillier moduli, no safe-prime hunting — so **creating a
+wallet now takes seconds, not minutes**, and it builds for
+`wasm32-unknown-unknown` cleanly. (Note: `sl-dkls23` ships under Silence
+Laboratories' non-commercial license — see `app/docs/CRYPTO.md` §15.3.)
+Share files bump to **format version 3**; version-1 and version-2 files
+(sealed for the retired cggmp21/cggmp24 stacks) are refused with a named
+migration message — create a new MPC wallet and move the funds. The UI now
+calls these wallets what they are to a user — **MPC wallets** — and keeps
+the protocol details in the docs.
 
 ## 1.0.2 — 2026-08-21
 

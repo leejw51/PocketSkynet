@@ -164,43 +164,24 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
-# The TSS ceremony stack must be optimized for speed even in a size-first
-# build: safe-prime hunting is minutes of pure bignum arithmetic in the
+# The MPC ceremony stack must be optimized for speed even in a size-first
+# build: the DKLs23 ceremonies are tight OT and curve arithmetic in the
 # ceremony worker, and `opt-level = "s"` measurably multiplies that wall
 # clock. These crates live almost entirely in the worker binary, so the
 # main bundle's size barely moves.
 [profile.release.package.crypto-bigint]
 opt-level = 3
-[profile.release.package.num-bigint]
+[profile.release.package.sl-dkls23]
 opt-level = 3
-[profile.release.package.glass_pumpkin]
+[profile.release.package.sl-oblivious]
 opt-level = 3
-[profile.release.package.fast-paillier]
-opt-level = 3
-[profile.release.package.paillier-zk]
-opt-level = 3
-[profile.release.package.cggmp24]
-opt-level = 3
-[profile.release.package.cggmp24-keygen]
-opt-level = 3
-[profile.release.package.generic-ec]
-opt-level = 3
-[profile.release.package.generic-ec-core]
-opt-level = 3
-[profile.release.package.generic-ec-curves]
+[profile.release.package.sl-mpc-mate]
 opt-level = 3
 [profile.release.package.k256]
 opt-level = 3
 
-# cggmp24's Paillier math is unusably slow unoptimized (mirrors the root
-# workspace's rationale): a debug-profile `trunk serve` would turn the DKG
-# from minutes into hours. Workspace code itself stays at opt-level 0.
+# Ceremony crypto is painfully slow unoptimized (mirrors the root
+# workspace's rationale): keep a debug-profile `trunk serve`'s ceremonies
+# at native-ish speed. Workspace code itself stays at opt-level 0.
 [profile.dev.package."*"]
 opt-level = 2
-
-# See the root workspace's Cargo.toml for the story: every crates.io release
-# of `core2` (required by cggmp24's safe-prime generator) is yanked, so the
-# requirement is pointed at the exact commit published as 0.4.0. The two
-# workspaces must agree on this patch.
-[patch.crates-io]
-core2 = { git = "https://github.com/bbqsrc/core2", rev = "545e84b" }

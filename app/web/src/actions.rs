@@ -1238,7 +1238,7 @@ pub async fn sign_in_with_tss(
         .first()
         .and_then(crate::tss::TssShareHeader::of)
         .and_then(|h| WalletAddress::new(&h.address).ok())
-        .ok_or_else(|| "Not a TSS share file".to_owned())?;
+        .ok_or_else(|| "Not an MPC share file".to_owned())?;
 
     let challenge = client
         .auth_challenge(&address)

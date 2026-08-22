@@ -11,16 +11,17 @@ plaintext messages or symmetric keys.
   WebSocket/SSE, all on one SQLite file.
 - **Wallet** — send native CRO/TCRO and USDC on Cronos (mainnet 25 /
   testnet 338); transactions are signed in the browser, the server never
-  sees a key. Or create an **m-of-n TSS wallet**: the key never exists in
+  sees a key. Or create an **m-of-n MPC wallet**: the key never exists in
   one piece — you hold n passphrase-sealed share files, any m of them sign
-  by a CGGMP24 threshold ceremony **running entirely in your browser's
+  by a threshold ceremony **running entirely in your browser's
   WebAssembly** (share files and passphrase never leave the client, on any
-  server), and losing up to n−m of them loses nothing. Built on
-  [`cggmp24`](https://github.com/LFDT-Lockness/cggmp21) (Linux Foundation
-  Decentralized Trust) — the pure-Rust successor of the same team's
-  independently audited `cggmp21` — implementing the peer-reviewed
-  [CGGMP](https://eprint.iacr.org/2021/060) protocol
-  ([`PROTOCOL.md`](PROTOCOL.md) §20).
+  server), and losing up to n−m of them loses nothing. Built on Silence
+  Labs' [`sl-dkls23`](https://github.com/silence-laboratories/dkls23),
+  a pure-Rust implementation of the peer-reviewed
+  [DKLs23](https://eprint.iacr.org/2023/765) threshold-ECDSA protocol —
+  no Paillier, no safe primes, so a full key generation is seconds, not
+  minutes ([`PROTOCOL.md`](PROTOCOL.md) §20). Note sl-dkls23's
+  non-commercial license (see `app/docs/CRYPTO.md` §15).
 - **AI assistant** — Grok, OpenAI, Anthropic and Gemini behind one dialog:
   draft, reply-in-context, image generation, and video generation. Bring your
   own keys; they stay in your browser. Generated media is stored on your own

@@ -1,33 +1,35 @@
-//! m-of-n threshold (TSS/MPC) wallet — CGGMP24 DKG, threshold-ECDSA signing
-//! with Ethereum signature recovery, and passphrase-sealed share persistence.
+//! m-of-n threshold (MPC) wallet — DKLs23 DKG, threshold-ECDSA signing
+//! with Ethereum signature recovery, and passphrase-sealed share
+//! persistence.
 //!
 //! The design record is `docs/CRYPTO.md §15`. Every ceremony runs in one
-//! process over `round_based`'s synchronous simulated network — and since
-//! this crate builds for wasm32, that process is the **user's browser**:
-//! keygen mints `n` passphrase-sealed share files (`store`) client-side,
-//! signing opens any `t` of them client-side, and no share, passphrase or
-//! key material ever reaches a server — the server's part of a TSS login is
-//! verifying an ordinary ECDSA signature it cannot tell from a single-key
-//! one. Losing up to `n − t` files loses nothing.
+//! process over an in-process relay ([`relay`]) — and since this crate
+//! builds for wasm32, that process is the **user's browser**: keygen mints
+//! `n` passphrase-sealed share files (`store`) client-side, signing opens
+//! any `t` of them client-side, and no share, passphrase or key material
+//! ever reaches a server — the server's part of an MPC login is verifying
+//! an ordinary ECDSA signature it cannot tell from a single-key one.
+//! Losing up to `n − t` files loses nothing.
+//!
+//! The protocol engine is Silence Labs' DKLs23 (`sl-dkls23`): OT-based
+//! threshold ECDSA, no Paillier moduli, no safe-prime hunting — a full DKG
+//! is milliseconds where the previous CGGMP24 engine took minutes.
 //!
 //! Native builds serve the test suite and the vector generator; the server
 //! must never link this crate.
 
 pub mod dkg;
 pub mod eth;
+pub mod relay;
 pub mod sign;
 pub mod store;
 
-/// The curve every EVM chain uses.
-pub type Curve = cggmp24::supported_curves::Secp256k1;
-/// 128-bit security level (the production default of cggmp24).
-pub type SecLevel = cggmp24::security_level::SecurityLevel128;
-/// A complete key share (DKG output + aux info) for one party.
-pub type Share = cggmp24::KeyShare<Curve, SecLevel>;
+/// A complete key share for one party. `Arc` because the signing setup
+/// message shares it without copying key material.
+pub type Share = std::sync::Arc<sl_dkls23::keygen::Keyshare>;
 
-/// Most parties a wallet may have. The ceremony cost is O(n²) messages and
-/// n safe-prime generations — which now run single-threaded in a browser —
-/// so this is a UX bound, not a protocol one.
+/// Most parties a wallet may have. A UX bound (that many share files to
+/// download and safekeep), not a protocol one.
 pub const MAX_PARTIES: u16 = 5;
 
 #[derive(Debug, thiserror::Error)]
@@ -54,9 +56,9 @@ pub enum TssError {
     #[error("wrong passphrase or corrupt wallet file")]
     BadPassphrase,
     /// A wallet for this address already exists and `force` was not given.
-    #[error("a TSS wallet for this address already exists")]
+    #[error("an MPC wallet for this address already exists")]
     WalletExists,
-    #[error("no TSS wallet for this address")]
+    #[error("no MPC wallet for this address")]
     WalletNotFound,
     /// The entropy source failed — never expected, never unwrapped.
     #[error("system entropy unavailable")]
@@ -74,8 +76,10 @@ pub fn validate_params(t: u16, n: u16) -> Result<(), TssError> {
 
 /// A fresh random execution id for one protocol run.
 ///
-/// CGGMP24 requires the execution id to be unique per ceremony; reusing one
-/// across ceremonies voids the protocol's security proofs.
+/// It becomes the ceremony's DKLs23 `InstanceId`, which must be unique per
+/// ceremony — reusing one across ceremonies voids the protocol's security
+/// arguments. (Each party additionally draws its own private RNG seed
+/// inside the ceremony functions.)
 pub fn fresh_eid() -> Result<[u8; 32], TssError> {
     pocketskynet_core::random::bytes::<32>().map_err(|_| TssError::Entropy)
 }
@@ -104,8 +108,8 @@ mod tests {
 
     #[test]
     fn execution_ids_are_unique_per_ceremony() {
-        // The protocol's security argument needs fresh eids; two draws
-        // colliding would mean the entropy source is broken.
+        // The protocol's security argument needs fresh instance ids; two
+        // draws colliding would mean the entropy source is broken.
         assert_ne!(fresh_eid().unwrap(), fresh_eid().unwrap());
     }
 }

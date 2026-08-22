@@ -1,7 +1,7 @@
 //! The TSS indistinguishability vector (PROTOCOL.md "TSS wallets";
 //! docs/CRYPTO.md §15.1; issue #85's deliverable).
 //!
-//! `vectors/tss-v1.json` records one real 2-of-3 CGGMP21 ceremony (parties
+//! `vectors/tss-v1.json` records one real 2-of-3 DKLs23 ceremony (parties
 //! {0, 2} signing). This suite verifies it **through this crate's ordinary
 //! single-key code paths only** — `eip191::recover_address`, low-s parsing,
 //! `LegacyTransaction::sign_with_signature` — none of which know MPC exists.

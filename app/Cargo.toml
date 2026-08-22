@@ -47,18 +47,9 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
-# cggmp24's Paillier math (the `tss` crate) is unusably slow in unoptimized
-# builds; keep dependencies optimized even in the dev profile so the TSS
-# tests run in seconds-to-minutes rather than hours. Workspace crates
-# themselves stay at opt-level 0 for fast incremental builds.
+# Ceremony crypto (the `tss` crate's DKLs23 OT arithmetic) is slow in
+# unoptimized builds; keep dependencies optimized even in the dev profile
+# so the MPC tests run in seconds. Workspace crates themselves stay at
+# opt-level 0 for fast incremental builds.
 [profile.dev.package."*"]
 opt-level = 2
-
-# glass_pumpkin (cggmp24's safe-prime generator) requires `core2 ^0.4`, whose
-# every crates.io release has been yanked by its author ("No longer supported.
-# Use `core` directly"). A yanked version cannot be *resolved* into a fresh
-# lockfile, so point the requirement at the exact commit that was published as
-# 0.4.0. The same patch lives in web/Cargo.toml — the two workspaces must
-# agree. Drop both when glass_pumpkin sheds the dependency upstream.
-[patch.crates-io]
-core2 = { git = "https://github.com/bbqsrc/core2", rev = "545e84b" }

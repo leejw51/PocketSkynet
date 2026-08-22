@@ -1,7 +1,6 @@
-// Diagnostic (not part of the suite): drive a 2-of-2 TSS keygen and narrate
+// Diagnostic (not part of the suite): drive a 2-of-2 MPC keygen and narrate
 // everything observable — console, page errors, failed requests, and the
-// wizard's step list — so a silent worker failure and a merely-slow prime
-// hunt stop looking identical.
+// wizard's step list — so a silent worker failure has a face.
 const { chromium } = require("playwright");
 const { bootServer } = require("./harness");
 

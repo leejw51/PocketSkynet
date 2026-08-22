@@ -1315,7 +1315,7 @@ server has **no** TSS code to bind.
 ### 15.1 What a TSS wallet is here
 
 A wallet whose secp256k1 private key **never exists in one piece**. Key
-generation is a CGGMP21 distributed key generation (DKG) among `n` parties;
+generation is a DKLs23 distributed key generation (DKG) among `n` parties;
 signing is a threshold-ECDSA ceremony among any `t` of them (`2 ≤ t ≤ n`).
 The output of a ceremony is an ordinary low-s, recoverable ECDSA signature
 over the same digests the single-key wallet signs:
@@ -1329,10 +1329,14 @@ That indistinguishability is a hard requirement and is proven by test vectors
 (PROTOCOL.md, "TSS signatures") plus the integration suite in
 `app/tss/tests/`.
 
-Implementation: the audited [`cggmp21`](https://github.com/LFDT-Lockness/cggmp21)
-crate (LFDT/Hyperledger governance), `SecurityLevel128`, curve secp256k1 —
-the same stack as the reviewed reference wallet this port derives from. The
-mnemonic wallet (§1) is unchanged and the two coexist; TSS replaces nothing.
+Implementation: Silence Labs'
+[`sl-dkls23`](https://github.com/silence-laboratories/dkls23) crate, a
+pure-Rust implementation of the peer-reviewed
+[DKLs23](https://eprint.iacr.org/2023/765) protocol
+(Doerner–Kondi–Lee–shelat), curve secp256k1. The UI never names any of
+this — to a user these are simply **MPC wallets**; the protocol facts live
+here. The mnemonic wallet (§1) is unchanged and the two coexist; MPC
+replaces nothing.
 
 ### 15.2 The E2EE derivation decision (the issue's blocker)
 
@@ -1383,46 +1387,57 @@ inside the PocketSkynet server, with the client presenting its share files
 per request. That design carried a stated cost: the user's server *saw*
 the presented shares and the passphrase for the duration of each request.
 
-The finding has since changed at the source. `cggmp24` — the same
-LFDT-Lockness lineage's implementation of the revised CGGMP24 paper,
-MIT OR Apache-2.0 — defaults to a **pure-Rust num-bigint backend**, and
-`cargo check --target wasm32-unknown-unknown` plus the full DKG/sign suite
-confirm it builds and runs where `cggmp21` could not. (The 0.7.0-alpha
-train needs its sibling crates pinned with `=` and a git patch for the
-yanked `core2` dependency; both are recorded in the workspace manifests.)
+The finding has since changed twice. First `cggmp24` (pure-Rust bignum
+backend) proved browser ceremonies possible at all — at the price of
+minutes of in-browser safe-prime generation per wallet. The engine is now
+**`sl-dkls23`**: DKLs23 is OT-based threshold ECDSA with no Paillier
+moduli and therefore **no safe primes anywhere**, and the crate is pure
+Rust, so `cargo check --target wasm32-unknown-unknown` plus the full
+DKG/sign suite pass unmodified. Version pinning is still load-bearing:
+`sl-dkls23 1.0.0-beta` names its `sl-mpc-mate`/`sl-oblivious` siblings
+loosely enough that cargo would float `sl-mpc-mate` to 1.1.x — a release
+that removed the very `coord`/`message` modules the protocol is built on —
+so all three are pinned with `=` in the workspace manifests. The optional
+tokio runtime (feature `multi-thread`) is disabled: ceremonies are driven
+by a plain futures executor over the `tss` crate's own in-process relay
+(`app/tss/src/relay.rs` — the crate's bundled test relay needs `tokio` and
+`Instant::now()`, both unavailable on wasm32).
 
-Therefore **every ceremony now runs inside the web client's WebAssembly**:
-`app/web/src/bin/tss_worker.rs` is a dedicated Web Worker holding all the
-Paillier arithmetic off the main thread, and `round_based::sim` drives all
-`n` (or `t`) parties synchronously in one such worker. The DKG's dominant
-cost — one safe-prime set per party — is independent per party, so keygen
-first fans those out to `n` parallel workers and hands the collected sets
-to the ceremony worker. The `tss` crate
-builds for wasm32 and natively (tests, vectors); the server does not link
-it and has no `/api/tss/*` routes. The web client is the only ceremony
-host, in every deployment mode.
+Therefore **every ceremony runs inside the web client's WebAssembly**:
+`app/web/src/bin/tss_worker.rs` is a dedicated Web Worker holding the
+ceremony arithmetic off the main thread, and all `n` (or `t`) parties'
+futures are polled to completion in one such worker over the in-process
+relay. The `tss` crate builds for wasm32 and natively (tests, vectors);
+the server does not link it and has no `/api/tss/*` routes. The web client
+is the only ceremony host, in every deployment mode.
 
 What that buys, stated plainly: share files and the wallet passphrase
 never leave the browser — not to the user's own server, not to anyone
-else's. The server's only involvement with a TSS wallet is verifying an
+else's. The server's only involvement with an MPC wallet is verifying an
 ordinary EIP-191 signature at login, which §15.1 guarantees it cannot
 distinguish from a single-key one.
 
-The price is wall-clock time in the slowest place: even parallelized and
-with the bignum crates pinned to speed-first optimization (the web
-workspace's size-first release profile is overridden for them), a prime
-set costs minutes of browser wasm, so creating a wallet takes on the
-order of five to ten minutes (the UI narrates the count as sets land); a
-signing ceremony is seconds. Both were server-side seconds-to-a-minute in
-v1. Signing pace is what login and sends actually feel, and it stays
-acceptable; creation is once per wallet and says so on screen.
+And the old price is gone with the safe primes: a full 2-of-3 DKG is
+about a second of native time and a few seconds of browser wasm; a
+signing ceremony is sub-second native, a couple of seconds in the
+browser. Creating a wallet no longer needs a progress narrator — the
+wizard's step list exists for honesty, not for minutes.
+
+**License.** `sl-dkls23`, `sl-mpc-mate` and `sl-oblivious` ship under the
+**Silence Laboratories Non-Commercial Use License** — not MIT/Apache. That
+is compatible with this educational project, but it is a real constraint:
+any commercial deployment of a build containing these crates needs a
+commercial license from Silence Laboratories first. This is the one
+dependency in the workspace with such a restriction, and it is deliberate
+and named here so nobody discovers it in a due-diligence pass.
 
 ### 15.4 Share custody, stated
 
 Custody is the **user's**, now with no transit exception. Key generation
 ends with the browser holding `n` sealed **share files** — one per party,
-`pocketskynet-tss-share` JSON, format version 2 — which the user downloads
-and stores separately. Nothing TSS is persisted anywhere by the app:
+`pocketskynet-tss-share` JSON, format version 3 — which the user downloads
+and stores separately. Nothing of the MPC wallet is persisted anywhere by
+the app:
 
 - the server stores nothing and receives nothing (there are no TSS
   endpoints to receive anything);
@@ -1464,16 +1479,18 @@ facts a login screen needs to name a file before any passphrase work.
 count is untrusted cleartext, and an unbounded value would be a browser-
 freezing denial of service priced by one crafted file.
 
-**Format versions.** Version 1 files sealed `cggmp21` key shares that only
-the retired server-side ceremony could use; key shares are not convertible
-between the two stacks, so `open_shares` refuses a v1 file with a named
-migration error ("older PocketSkynet … create a new TSS wallet and move
-the funds") rather than a passphrase failure. Version 2 files seal
-`cggmp24` shares and are what the browser mints and opens.
+**Format versions.** Version 1 files sealed `cggmp21` key shares (the
+retired server-side stack); version 2 sealed `cggmp24` shares (the first
+browser stack). Key shares are not convertible between protocol stacks, so
+`open_shares` refuses either with a named migration error ("older
+PocketSkynet … create a new MPC wallet and move the funds") rather than a
+passphrase failure. Version 3 files seal DKLs23 shares — the raw
+`sl-dkls23` keyshare bytes, base64 — and are what the browser mints and
+opens.
 
-Share refresh/rotation (`cggmp24`'s key-refresh protocol) — reissuing all
-`n` files at the same address so found *old* shares expire — remains the
-stated v2 path, tracked in issue #85.
+Share refresh/rotation (`sl-dkls23`'s key-refresh protocol) — reissuing
+all `n` files at the same address so found *old* shares expire — remains
+the stated follow-up path, tracked in issue #85.
 
 ### 15.5 Signing UX and failure modes
 
@@ -1484,9 +1501,9 @@ quorum of mixed wallets (named by the header check before the passphrase
 is even asked), and a ceremony error (surfaced verbatim; nothing was
 broadcast). A ceremony is atomic from the app's view: the worker either
 posts back a signature or an error, and closing the page kills the worker
-with nothing persisted anywhere. DKG is the one long operation; it runs in
-the worker with a phase callback (per-prime-set progress, then protocol,
-then sealing) so minutes of arithmetic read as movement, not a hang.
+with nothing persisted anywhere. DKG runs in the worker with a phase
+callback (protocol, then sealing) so the few seconds of ceremony read as
+movement, not a pause.
 
 Every transaction signature begins with the quorum prompt: the send flows
 (bank, swap, deploy, the messenger's wallet dialog, the AI banker) all
