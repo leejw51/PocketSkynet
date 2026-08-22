@@ -67,6 +67,25 @@ impl Api {
         c
     }
 
+    /// Same identity on a **fresh connection pool**.
+    ///
+    /// For the body-limit tests, and only those. When the server refuses an
+    /// oversized body by resetting the socket (see
+    /// [`try_post_raw`](Self::try_post_raw)), the RST poisons the pooled
+    /// connection this client would reuse next — and hyper will not retry a
+    /// POST, because a POST is not idempotent, so the *following* request
+    /// dies on write with `EPIPE` no matter how healthy the server is. A
+    /// real client reaches for a new connection there; so does this.
+    ///
+    /// The claim such a test makes is about the server still serving, which
+    /// is exactly what this asserts. Nothing else should need it: for every
+    /// other test a dead connection is a bug in whatever it was probing.
+    pub fn reconnected(&self) -> Self {
+        let mut c = self.clone();
+        c.http = client(None);
+        c
+    }
+
     pub async fn get(&self, path: &str) -> Resp {
         self.send(Method::GET, path, None).await
     }

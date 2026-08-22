@@ -307,8 +307,15 @@ async fn an_oversized_body_does_not_break_the_connection_for_later_requests() {
         .await;
 
     // The actual claim, and the whole reason this test exists: whatever
-    // happened to *that* connection, the next request still gets through.
-    send_message(&alice.api, &room, "still working").await;
+    // happened to *that* connection, the server is still serving.
+    //
+    // On a fresh connection, because the refusal above may have been an RST
+    // (see `try_post_raw`), and an RST poisons the pooled connection this
+    // client would otherwise reuse — hyper will not retry a POST over it, so
+    // the request would die on write with `EPIPE` against a perfectly
+    // healthy server. That is a property of connection pools, not of this
+    // server, and asserting it here only bought a flaky CI run.
+    send_message(&alice.api.reconnected(), &room, "still working").await;
 }
 
 #[tokio::test]
