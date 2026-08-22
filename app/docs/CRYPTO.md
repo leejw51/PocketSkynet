@@ -1307,9 +1307,10 @@ Verify before decrypting, exactly as §6.2:
 
 ## 15. Threshold (TSS/MPC) wallets
 
-Design decision record for issue #85. Written before the implementation, as
-that issue requires; the normative statements here bind the code under
-`app/tss/` and `app/server/src/routes/tss.rs`.
+Design decision record for issue #85, revised when ceremonies moved into
+the browser (§15.3). The normative statements here bind the code under
+`app/tss/`, `app/web/src/tss*.rs` and `app/web/src/bin/tss_worker.rs`; the
+server has **no** TSS code to bind.
 
 ### 15.1 What a TSS wallet is here
 
@@ -1372,30 +1373,65 @@ Consequences, stated plainly:
   implementation to hand) and deterministic threshold ECDSA (research-grade;
   the issue itself rules it out for v1).
 
-### 15.3 Where ceremonies run, and why (the wasm32 finding)
+### 15.3 Where ceremonies run, and why (the wasm32 finding, revisited)
 
 The issue demanded the wasm32 question be verified before choosing a crate.
-Verified: `cggmp21`'s Paillier arithmetic sits on `rug`/`gmp-mpfr-sys` — a C
-GMP build that does not compile for `wasm32-unknown-unknown` (checked by an
-actual `cargo check --target wasm32-unknown-unknown`; `cggmp21-keygen` alone
-is no_std-friendly, but aux-info generation and signing are not). A browser
-cannot host a share holder with this stack.
+The v1 finding stands for the original crate: `cggmp21`'s Paillier
+arithmetic sits on `rug`/`gmp-mpfr-sys` — a C GMP build that does not
+compile for `wasm32-unknown-unknown` — which is why v1 ran every ceremony
+inside the PocketSkynet server, with the client presenting its share files
+per request. That design carried a stated cost: the user's server *saw*
+the presented shares and the passphrase for the duration of each request.
 
-Therefore **every ceremony runs natively, inside the PocketSkynet server
-process**, over `round-based`'s in-process simulated network, exactly as the
-reference wallet does. The web client drives ceremonies over
-`/api/tss/*` and receives only public outputs (address, signatures) plus —
-against the passphrase — the E2EE keypair. The `tss` crate is a native-only
-workspace member; the web workspace never links it.
+The finding has since changed at the source. `cggmp24` — the same
+LFDT-Lockness lineage's implementation of the revised CGGMP24 paper,
+MIT OR Apache-2.0 — defaults to a **pure-Rust num-bigint backend**, and
+`cargo check --target wasm32-unknown-unknown` plus the full DKG/sign suite
+confirm it builds and runs where `cggmp21` could not. (The 0.7.0-alpha
+train needs its sibling crates pinned with `=` and a git patch for the
+yanked `core2` dependency; both are recorded in the workspace manifests.)
+
+Therefore **every ceremony now runs inside the web client's WebAssembly**:
+`app/web/src/bin/tss_worker.rs` is a dedicated Web Worker holding all the
+Paillier arithmetic off the main thread, and `round_based::sim` drives all
+`n` (or `t`) parties synchronously in one such worker. The DKG's dominant
+cost — one safe-prime set per party — is independent per party, so keygen
+first fans those out to `n` parallel workers and hands the collected sets
+to the ceremony worker. The `tss` crate
+builds for wasm32 and natively (tests, vectors); the server does not link
+it and has no `/api/tss/*` routes. The web client is the only ceremony
+host, in every deployment mode.
+
+What that buys, stated plainly: share files and the wallet passphrase
+never leave the browser — not to the user's own server, not to anyone
+else's. The server's only involvement with a TSS wallet is verifying an
+ordinary EIP-191 signature at login, which §15.1 guarantees it cannot
+distinguish from a single-key one.
+
+The price is wall-clock time in the slowest place: even parallelized and
+with the bignum crates pinned to speed-first optimization (the web
+workspace's size-first release profile is overridden for them), a prime
+set costs minutes of browser wasm, so creating a wallet takes on the
+order of five to ten minutes (the UI narrates the count as sets land); a
+signing ceremony is seconds. Both were server-side seconds-to-a-minute in
+v1. Signing pace is what login and sends actually feel, and it stays
+acceptable; creation is once per wallet and says so on screen.
 
 ### 15.4 Share custody, stated
 
-Custody is the **user's**. Key generation ends with the server handing back
-`n` sealed **share files** — one per party, `pocketskynet-tss-share` JSON —
-which the user downloads and stores separately. **The server persists
-nothing**: the finished ceremony's files wait in memory for exactly one
-`collect` call (gated by a random `keygenId` only the creator holds), and
-every later signing request presents any `t` of the files in its body.
+Custody is the **user's**, now with no transit exception. Key generation
+ends with the browser holding `n` sealed **share files** — one per party,
+`pocketskynet-tss-share` JSON, format version 2 — which the user downloads
+and stores separately. Nothing TSS is persisted anywhere by the app:
+
+- the server stores nothing and receives nothing (there are no TSS
+  endpoints to receive anything);
+- the session (`SessionKeys`) retains neither the share files nor the
+  passphrase after sign-in — **every signature asks the user to present a
+  quorum again**, through the app-wide prompt
+  (`web/src/components/dialogs/tss_quorum.rs`);
+- `localStorage` (and the opt-in device vault) never hold TSS material of
+  any kind — not files, not the passphrase, not flags about them.
 
 Losing up to `n − t` files loses nothing: any `t` of them are the wallet,
 for signing and (via the sealed E2EE keypair each carries, §15.2) for
@@ -1403,7 +1439,8 @@ messages. Fewer than `t` can do nothing but leak the E2EE key *if* the
 passphrase also falls. Losing more than `n − t` loses the wallet — there is
 no recovery and nobody to ask, and the UI says so at creation time.
 
-Each file is individually sealed under one user-chosen passphrase:
+Each file is individually sealed under one user-chosen passphrase, exactly
+as in v1 (the seal never left the `tss` crate and is wasm-clean):
 
 ```
 kdf   = PBKDF2-HMAC-SHA256, 600_000 iterations, random 16-byte salt
@@ -1423,35 +1460,39 @@ The plaintext under a file's seal is `{ share, encPrivHex, bindingSig }`;
 its cleartext header is `type`, `version`, `address`, `threshold`,
 `parties`, `partyIndex`, `createdAt` and the KDF parameters — the public
 facts a login screen needs to name a file before any passphrase work.
-`kdfIterations` is honored only up to a hard ceiling (1,000,000) when
-opening: the count is attacker-controlled cleartext reaching an
-unauthenticated endpoint, and an unbounded value would be a CPU
-denial-of-service priced by the request body.
+`kdfIterations` is honored only up to a hard ceiling (1,000,000): the
+count is untrusted cleartext, and an unbounded value would be a browser-
+freezing denial of service priced by one crafted file.
 
-What this means, without euphemism:
+**Format versions.** Version 1 files sealed `cggmp21` key shares that only
+the retired server-side ceremony could use; key shares are not convertible
+between the two stacks, so `open_shares` refuses a v1 file with a named
+migration error ("older PocketSkynet … create a new TSS wallet and move
+the funds") rather than a passphrase failure. Version 2 files seal
+`cggmp24` shares and are what the browser mints and opens.
 
-- The user's own server still *sees* the presented shares and passphrase
-  for the duration of each request (it must — it runs the ceremony and
-  cannot build for the browser, §15.3). It holds neither at rest. On
-  someone else's server that transient trust is still real; this design is
-  for self-hosting, where the operator and the user are the same person.
-- The passphrase is the second factor on every file: a found share costs an
-  attacker a PBKDF2 search before it is anything at all.
-- Share refresh/rotation (`cggmp21`'s key-refresh protocol) — reissuing all
-  `n` files at the same address so found *old* shares expire — is the
-  stated v2 path, tracked in issue #85; v1 does not pretend to provide it.
+Share refresh/rotation (`cggmp24`'s key-refresh protocol) — reissuing all
+`n` files at the same address so found *old* shares expire — remains the
+stated v2 path, tracked in issue #85.
 
 ### 15.5 Signing UX and failure modes
 
-Because all parties are in-process, "counterparty offline" cannot happen in
-v1; the failure modes that remain are honest ones: wrong passphrase (a typed
-401-equivalent before any ceremony starts), and a ceremony error (surfaced
-verbatim, nothing broadcast). A ceremony is atomic from the client's view —
-it either returns a signature or an error; an abandoned HTTP request leaves
-no partial protocol state because the simulated network lives and dies with
-the request. DKG (~30–60 s of safe-prime generation) is the one long
-operation: it runs as a background task with a polled status endpoint, and
-the UI shows its phases.
+All parties still live in one process — the worker — so "counterparty
+offline" cannot happen. The failure modes are honest ones: a wrong
+passphrase (named locally, before any ceremony, by the seal's MAC), a
+quorum of mixed wallets (named by the header check before the passphrase
+is even asked), and a ceremony error (surfaced verbatim; nothing was
+broadcast). A ceremony is atomic from the app's view: the worker either
+posts back a signature or an error, and closing the page kills the worker
+with nothing persisted anywhere. DKG is the one long operation; it runs in
+the worker with a phase callback (per-prime-set progress, then protocol,
+then sealing) so minutes of arithmetic read as movement, not a hang.
+
+Every transaction signature begins with the quorum prompt: the send flows
+(bank, swap, deploy, the messenger's wallet dialog, the AI banker) all
+funnel through `actions::sign_transaction`, which for a TSS session raises
+the prompt, runs the ceremony over the presented files, and forgets them.
+Cancelling the prompt cancels the send before anything is signed or sent.
 
 ### 15.6 Login flow
 
@@ -1460,12 +1501,12 @@ identity and the server's auth stack does not know the wallet is TSS:
 
 1. the client reads the wallet address off the picked share files'
    cleartext headers and asks `POST /api/auth/challenge`;
-2. client → `POST /api/tss/sign` (any `t` share files, passphrase,
-   challenge message) — the server-side ceremony returns a standard 65-byte
-   `r‖s‖v` signature **and** the E2EE identity the same quorum unsealed
-   (`encryptionKey`, `publicKey`, `bindingSig`) in one round trip;
-3. client → `POST /api/auth/login` with that signature plus the
-   `publicKey`/`publicKeySig` pair;
-4. the session's E2EE identity is the sealed keypair (§15.2), not a derived
-   one; `SessionKeys` keeps the share files in memory and signs
-   transactions through `/api/tss/sign-hash` by presenting them again.
+2. the **in-browser ceremony** (worker request `SignMessage`) signs the
+   challenge bytes and unseals the E2EE identity from the same quorum —
+   one passphrase entry, no network;
+3. client → `POST /api/auth/login` with that standard 65-byte `r‖s‖v`
+   signature plus the `publicKey`/`publicKeySig` pair;
+4. the session's E2EE identity is the sealed keypair (§15.2), not a
+   derived one. `SessionKeys` keeps **only** that identity and the wallet
+   address — the share files and passphrase are dropped at step 2's end,
+   and every transaction signature re-presents a quorum (§15.5).

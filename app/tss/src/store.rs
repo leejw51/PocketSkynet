@@ -32,7 +32,12 @@ use sha2::Sha256;
 use crate::TssError;
 
 /// Current share-file format version; bump when the layout changes.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// Version 1 sealed cggmp21 (GMP-era) key shares that only the server-side
+/// ceremony could use; version 2 seals cggmp24 shares born in the browser.
+/// The two protocols' shares are not convertible, so v1 files are refused
+/// with a named error rather than a passphrase failure.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The `type` tag every share file carries, mirroring the wallet-backup
 /// convention (`pocketskynet-wallet-backup`) so a file manager full of JSON
@@ -184,6 +189,16 @@ pub fn open_shares(files: &[ShareFile], passphrase: &str) -> Result<OpenedWallet
     let first = files
         .first()
         .ok_or_else(|| TssError::InvalidSigners("no share files provided".into()))?;
+    if first.file_type == FILE_TYPE && first.version == 1 {
+        // A share from the retired server-side cggmp21 stack. Its seal would
+        // open fine, but the key share inside speaks a protocol this build
+        // no longer runs — name that plainly instead of failing later.
+        return Err(TssError::Store(
+            "this share file was created by an older PocketSkynet (version 1); \
+             its wallet cannot sign here — create a new TSS wallet and move the funds"
+                .into(),
+        ));
+    }
     if first.file_type != FILE_TYPE || first.version != FORMAT_VERSION {
         return Err(TssError::Store(format!(
             "not a version-{FORMAT_VERSION} {FILE_TYPE} file"
@@ -316,12 +331,20 @@ fn seal_mac(mac_key: &[u8; 32], f: &ShareFile, iv: &[u8; 16], ct: &[u8]) -> Hmac
     mac
 }
 
-/// Unix seconds now — the `created_at` stamp.
+/// Unix seconds now — the `created_at` stamp. `SystemTime::now` traps on
+/// wasm32-unknown-unknown, so the browser build asks `Date.now()` instead.
 pub fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    #[cfg(target_arch = "wasm32")]
+    {
+        (js_sys::Date::now() / 1000.0) as u64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -415,6 +438,25 @@ mod tests {
             open_shares(&files, "pass pass"),
             Err(TssError::BadPassphrase)
         ));
+    }
+
+    #[test]
+    fn a_version_1_file_is_refused_with_a_named_migration_error() {
+        // Version 1 sealed cggmp21 (server-ceremony) shares. The seal would
+        // open, but the key share inside speaks a protocol this build no
+        // longer runs — the user must hear "older version, make a new
+        // wallet", not "wrong passphrase".
+        let mut files = sealed(2, 2, "pass pass");
+        for f in &mut files {
+            f.version = 1;
+        }
+        match open_shares(&files, "pass pass") {
+            Err(TssError::Store(msg)) => {
+                assert!(msg.contains("older"), "should name the migration: {msg}")
+            }
+            Err(other) => panic!("expected a named store error, got {other:?}"),
+            Ok(_) => panic!("a version-1 file must not open"),
+        }
     }
 
     #[test]

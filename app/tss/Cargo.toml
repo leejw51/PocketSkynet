@@ -5,29 +5,34 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# Native-only by design (CRYPTO.md §15.3): cggmp21's Paillier arithmetic sits
-# on rug/gmp-mpfr-sys, a C GMP build that cannot target wasm32-unknown-unknown.
-# The web workspace must never depend on this crate.
+# Builds for BOTH native and wasm32-unknown-unknown (CRYPTO.md §15.3): every
+# ceremony runs inside the web client, so shares never leave the browser.
+# Native builds exist for the test suite and the vector generator only —
+# the server must never link this crate again.
 
 [dependencies]
 pocketskynet-core.workspace = true
 
-# The audited threshold-ECDSA stack, same versions as the reviewed reference
-# wallet this port derives from.
-cggmp21 = { version = "0.6", features = ["curve-secp256k1"] }
-round-based = { version = "0.4", features = ["derive", "sim", "sim-async"] }
+# The CGGMP24 successor of the audited `cggmp21` crate (same LFDT-Lockness
+# lineage, MIT OR Apache-2.0). Its default `backend-num-bigint` feature is
+# pure Rust, which is what lets this crate target wasm32 — the old crate's
+# rug/GMP Paillier arithmetic could not. Everything is pinned with `=`:
+# the 0.7.0-alpha train does not hold generic-ec versions in lockstep
+# across its own crates (alpha.4 of the siblings moved to generic-ec 0.5
+# while cggmp24 alpha.3 is built against 0.4), so a float would mix two
+# `generic_ec_core`s and fail to compile.
+cggmp24 = { version = "=0.7.0-alpha.3", features = ["curve-secp256k1"] }
+cggmp24-keygen = "=0.7.0-alpha.3"
+paillier-zk = "=0.7.0-alpha.3"
 
-# Not used directly: `rug` (via fast-paillier/paillier-zk) pulls this in, and
-# naming it here only to add `c-no-tests` is what turns the feature on for the
-# whole graph — cargo unifies features, and a transitive dependency has no other
-# way to be told. Without it the build runs GMP's own C test suite, where Apple
-# clang 21 segfaults linking `t-get_si` and takes the release build with it.
-# Those are upstream GMP's tests of a released GMP tarball, not ours.
-gmp-mpfr-sys = { version = "1.7", features = ["c-no-tests"] }
+# `sim` is the synchronous state-machine driver: all parties advance in one
+# loop on the calling thread, no async runtime — the same code path on a
+# native test thread and inside a web worker.
+round-based = { version = "0.4", features = ["derive", "sim"] }
+
 rand_core = { version = "0.6", features = ["getrandom"] }
 
 k256.workspace = true
-sha3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -41,7 +46,10 @@ hmac.workspace = true
 sha2.workspace = true
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 
-tokio = { version = "1", features = ["rt"] }
-
-[dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser has no /dev/urandom; the `js` feature routes getrandom at
+# crypto.getRandomValues. Mirrors the same override in `core`.
+getrandom = { workspace = true, features = ["js"] }
+# `SystemTime::now` traps on wasm32-unknown-unknown; share files stamp
+# `createdAt` from `Date.now()` there instead.
+js-sys = "0.3"

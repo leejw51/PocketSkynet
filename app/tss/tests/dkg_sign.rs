@@ -9,16 +9,14 @@
 use pocketskynet_core::{eip191, WalletAddress};
 use pocketskynet_tss::{dkg, eth, sign, store, TssError};
 
-#[tokio::test(flavor = "multi_thread")]
-async fn two_of_three_dkg_signs_with_any_quorum_and_never_below_it() {
+#[test]
+fn two_of_three_dkg_signs_with_any_quorum_and_never_below_it() {
     let (t, n) = (2u16, 3u16);
 
     // 1. DKG.
     let mut eid = [0u8; 32];
     eid[..4].copy_from_slice(b"test");
-    let shares = dkg::run_dkg(t, n, eid, |p| println!("dkg phase: {p:?}"))
-        .await
-        .expect("dkg");
+    let shares = dkg::run_dkg(t, n, eid, |p| println!("dkg phase: {p:?}")).expect("dkg");
     assert_eq!(shares.len(), usize::from(n));
 
     // Every party must agree on the address.
@@ -60,18 +58,16 @@ async fn two_of_three_dkg_signs_with_any_quorum_and_never_below_it() {
     let message = "hello cronos, threshold edition";
     let prehash = eip191::eip191_digest(message);
     let subset_01 = reload(&[0, 1]);
-    let sig = sign::sign_prehash(&subset_01, prehash, seed(b"sig1"))
-        .await
-        .expect("sign with parties 0,1");
+    let sig =
+        sign::sign_prehash(&subset_01, prehash, seed(b"sig1")).expect("sign with parties 0,1");
     assert_signature_is_ordinary(&sig, message, &address);
 
     // 4. A different quorum — parties {0, 2}, i.e. file 1 lost — signs for
     // the same address. This is the m-of-n property the 2-of-2 reference
     // could not show.
     let subset_02 = reload(&[0, 2]);
-    let sig2 = sign::sign_prehash(&subset_02, prehash, seed(b"sig2"))
-        .await
-        .expect("sign with parties 0,2");
+    let sig2 =
+        sign::sign_prehash(&subset_02, prehash, seed(b"sig2")).expect("sign with parties 0,2");
     assert_signature_is_ordinary(&sig2, message, &address);
 
     // Ceremony nonces are random, so the two quorums' signatures differ even
@@ -82,14 +78,14 @@ async fn two_of_three_dkg_signs_with_any_quorum_and_never_below_it() {
     // 5. Below the threshold, the signer API refuses.
     let below: Vec<(u16, pocketskynet_tss::Share)> = subset_01[..1].to_vec();
     assert!(matches!(
-        sign::sign_prehash(&below, prehash, seed(b"sig3")).await,
+        sign::sign_prehash(&below, prehash, seed(b"sig3")),
         Err(TssError::InvalidSigners(_))
     ));
 
     // And a subset that repeats a party is rejected, not silently accepted.
     let doubled = vec![subset_01[0].clone(), subset_01[0].clone()];
     assert!(matches!(
-        sign::sign_prehash(&doubled, prehash, seed(b"sig4")).await,
+        sign::sign_prehash(&doubled, prehash, seed(b"sig4")),
         Err(TssError::InvalidSigners(_))
     ));
 }

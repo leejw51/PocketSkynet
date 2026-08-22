@@ -41,6 +41,7 @@ use crate::i18n::{t, Key, Lang};
 use crate::route::Route;
 use crate::session::{self, Auth, ConnectionMode, LoginLayout, Session, Skin, Theme};
 use crate::state::{use_store, Action};
+use crate::tss::{tss_quorum, tss_quorum_check, TssLoadedFile, TssQuorumCheck};
 use crate::vault::{self, Credential, StoredWallet};
 
 use super::boot::BootSequence;
@@ -116,16 +117,6 @@ impl Method {
             Self::Tss => t(lang, Key::tss_wallet_tab),
         }
     }
-}
-
-/// One share file picked on the TSS login side: its file name for display,
-/// its raw JSON (sent verbatim to the ceremony), and — when it really is a
-/// share file — its parsed cleartext header.
-#[derive(Clone, PartialEq)]
-struct TssLoadedFile {
-    name: String,
-    value: serde_json::Value,
-    header: Option<crate::api::tss::TssShareHeader>,
 }
 
 /// The creation ceremony's three visible acts, for the animated checklist.
@@ -323,7 +314,11 @@ pub fn login(p: &LoginProps) -> Html {
     let tss_new_pass2 = use_state(String::new);
     let tss_keygen_busy = use_state(|| false);
     let tss_step = use_state(|| Option::<TssStep>::None);
-    let tss_created = use_state(|| Option::<crate::api::tss::TssCollected>::None);
+    // Safe-prime progress inside the Primes step: (done, total) party
+    // sets, because in the browser they generate one after another and a
+    // minutes-long bar with no movement reads as a hang.
+    let tss_primes = use_state(|| Option::<(u16, u16)>::None);
+    let tss_created = use_state(|| Option::<crate::tss::TssCreated>::None);
     // One flag per share file: has this one been downloaded yet? The same
     // gate as the mnemonic backup — signing in unlocks only when every
     // share has left this page.
@@ -465,28 +460,9 @@ pub fn login(p: &LoginProps) -> Html {
 
     // --- the TSS tab (docs/CRYPTO.md §15) ----------------------------------
 
-    // The client the TSS calls go through. Keygen must work *before* a
-    // sign-in is submitted, so this follows the picker without committing
-    // it — nothing is persisted by merely looking at the tab. `None` in
-    // local mode: there is no server to run a ceremony.
-    let tss_client = {
-        let conn_choice = conn_choice.clone();
-        let server_url = server_url.clone();
-        move || -> Option<Client> {
-            match *conn_choice {
-                ConnChoice::SameOrigin => Some(Client::new("")),
-                ConnChoice::Custom => {
-                    Some(Client::new(&session::normalize_server_base(&server_url)))
-                }
-                ConnChoice::Local => None,
-            }
-        }
-    };
-
-    // Read the picked share files. Reading is async (FileReader under the
-    // hood) and each file lands as it parses; files that are not share
-    // files are kept and *named* rather than dropped — a silently shrinking
-    // selection reads as the picker losing files.
+    // Read the picked share files. Reading is async (`File::text` under
+    // the hood); the shared pool logic (`crate::tss::read_share_files`)
+    // keeps not-a-share files visible and replaces re-picked shares.
     let on_tss_files = {
         let tss_files = tss_files.clone();
         let error = error.clone();
@@ -505,37 +481,8 @@ pub fn login(p: &LoginProps) -> Html {
             // the last writer erased every other file in the selection.
             let tss_files = tss_files.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let mut files = (*tss_files).clone();
-                for file in picked {
-                    let name = file.name();
-                    // A file whose bytes cannot even be read still lands in
-                    // the list (header `None`, so it is named as not-a-share)
-                    // — the same promise the parse path keeps.
-                    let text = wasm_bindgen_futures::JsFuture::from(file.text())
-                        .await
-                        .ok()
-                        .and_then(|t| t.as_string());
-                    let value: serde_json::Value = text
-                        .and_then(|t| serde_json::from_str(&t).ok())
-                        .unwrap_or(serde_json::Value::Null);
-                    let header = crate::api::tss::TssShareHeader::of(&value);
-                    // Re-picking the same share replaces it, so a person
-                    // can correct a wrong pick without hunting for Clear.
-                    if let Some(h) = &header {
-                        files.retain(|f| {
-                            f.header
-                                .as_ref()
-                                .map(|o| (o.address.clone(), o.party_index))
-                                != Some((h.address.clone(), h.party_index))
-                        });
-                    }
-                    files.push(TssLoadedFile {
-                        name,
-                        value,
-                        header,
-                    });
-                }
-                tss_files.set(files);
+                let pool = crate::tss::read_share_files((*tss_files).clone(), picked).await;
+                tss_files.set(pool);
             });
             // Allow re-selecting the same file next time.
             input.set_value("");
@@ -562,18 +509,19 @@ pub fn login(p: &LoginProps) -> Html {
         })
     };
 
-    // Create: run the DKG on the server, narrate its acts, then collect
-    // the sealed share files for the backup step. The ceremony keeps
-    // running server-side even if this page closes — polling is
-    // observation, not participation.
+    // Create: run the DKG **in this browser** — the ceremony lives in the
+    // TSS worker (docs/CRYPTO.md §15.3), its progress lands here through a
+    // callback, and the sealed share files never exist anywhere else. No
+    // server is involved; closing the page abandons the ceremony and
+    // nothing is left behind.
     let on_tss_create = {
-        let tss_client = tss_client.clone();
         let tss_parties = tss_parties.clone();
         let tss_threshold = tss_threshold.clone();
         let tss_new_pass = tss_new_pass.clone();
         let tss_new_pass2 = tss_new_pass2.clone();
         let tss_keygen_busy = tss_keygen_busy.clone();
         let tss_step = tss_step.clone();
+        let tss_primes = tss_primes.clone();
         let tss_created = tss_created.clone();
         let tss_downloaded = tss_downloaded.clone();
         let set_error = set_error.clone();
@@ -582,7 +530,7 @@ pub fn login(p: &LoginProps) -> Html {
                 return;
             }
             let pass = (*tss_new_pass).clone();
-            if pass.chars().count() < 8 {
+            if pass.chars().count() < crate::tss::MIN_PASSPHRASE {
                 set_error.emit(Some(t(lang, Key::tss_passphrase_short).into()));
                 return;
             }
@@ -590,82 +538,56 @@ pub fn login(p: &LoginProps) -> Html {
                 set_error.emit(Some(t(lang, Key::tss_passphrase_mismatch).into()));
                 return;
             }
-            let Some(client) = tss_client() else {
-                set_error.emit(Some(t(lang, Key::tss_local_unavailable).into()));
-                return;
-            };
             let (t_needed, n_total) = (*tss_threshold, *tss_parties);
 
             tss_keygen_busy.set(true);
             tss_step.set(Some(TssStep::Primes));
+            tss_primes.set(Some((0, n_total)));
             tss_created.set(None);
             set_error.emit(None);
 
             let tss_new_pass2 = tss_new_pass2.clone();
             let tss_keygen_busy = tss_keygen_busy.clone();
             let tss_step = tss_step.clone();
+            let tss_primes = tss_primes.clone();
             let tss_created = tss_created.clone();
             let tss_downloaded = tss_downloaded.clone();
             let set_error = set_error.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let fail = |e: String| {
-                    set_error.emit(Some(t(lang, Key::tss_keygen_failed).replace("{error}", &e)));
-                    tss_step.set(None);
-                    tss_keygen_busy.set(false);
+                let outcome = {
+                    let tss_step = tss_step.clone();
+                    let tss_primes = tss_primes.clone();
+                    crate::tss::keygen(t_needed, n_total, &pass, move |phase| match phase {
+                        crate::tss_proto::TssPhase::Primes { done, total } => {
+                            tss_step.set(Some(TssStep::Primes));
+                            tss_primes.set(Some((done, total)));
+                        }
+                        crate::tss_proto::TssPhase::Protocol => {
+                            tss_step.set(Some(TssStep::Protocol));
+                        }
+                        crate::tss_proto::TssPhase::Sealing => {
+                            tss_step.set(Some(TssStep::Sealing));
+                        }
+                    })
+                    .await
                 };
-                let keygen_id = match client.tss_keygen(t_needed, n_total, &pass).await {
-                    Ok(id) => id,
-                    Err(e) => return fail(e.user_message()),
-                };
-                let mut misses = 0u32;
-                loop {
-                    gloo_timers::future::TimeoutFuture::new(1_500).await;
-                    let status = match client.tss_keygen_status().await {
-                        Ok(s) => {
-                            misses = 0;
-                            s
-                        }
-                        // One dropped poll is not a failed ceremony — the
-                        // server is still working; keep watching. Twenty in
-                        // a row (~30 s) is a server that is gone, and this
-                        // loop must not spin forever behind a busy flag.
-                        Err(e) => {
-                            misses += 1;
-                            if misses >= 20 {
-                                return fail(e.user_message());
-                            }
-                            continue;
-                        }
-                    };
-                    match status.state.as_str() {
-                        "generating_primes" => tss_step.set(Some(TssStep::Primes)),
-                        "running_protocol" => tss_step.set(Some(TssStep::Protocol)),
-                        "binding" => tss_step.set(Some(TssStep::Sealing)),
-                        "done" => {
-                            let collected = match client.tss_keygen_collect(&keygen_id).await {
-                                Ok(c) => c,
-                                Err(e) => return fail(e.user_message()),
-                            };
-                            tss_downloaded.set(vec![false; collected.shares.len()]);
-                            tss_created.set(Some(collected));
-                            // The passphrase stays in `tss_new_pass`: the
-                            // backup panel signs in with it directly.
-                            tss_new_pass2.set(String::new());
-                            tss_step.set(None);
-                            tss_keygen_busy.set(false);
-                            return;
-                        }
-                        "error" => {
-                            return fail(status.error.unwrap_or_else(|| "unknown".into()));
-                        }
-                        // The server answers but no longer knows this
-                        // ceremony: keygen state is memory-only, so a
-                        // restart lands here — and these shares can never
-                        // arrive. Say so instead of polling forever.
-                        "idle" => {
-                            return fail(t(lang, Key::tss_keygen_lost).to_owned());
-                        }
-                        _ => {}
+                match outcome {
+                    Ok(created) => {
+                        tss_downloaded.set(vec![false; created.shares.len()]);
+                        tss_created.set(Some(created));
+                        // The passphrase stays in `tss_new_pass`: the
+                        // backup panel signs in with it directly.
+                        tss_new_pass2.set(String::new());
+                        tss_step.set(None);
+                        tss_primes.set(None);
+                        tss_keygen_busy.set(false);
+                    }
+                    Err(e) => {
+                        set_error
+                            .emit(Some(t(lang, Key::tss_keygen_failed).replace("{error}", &e)));
+                        tss_step.set(None);
+                        tss_primes.set(None);
+                        tss_keygen_busy.set(false);
                     }
                 }
             });
@@ -1981,7 +1903,7 @@ pub fn login(p: &LoginProps) -> Html {
                                         <span class="fn-tss-forging__ring"></span>
                                         <img src={crate::asset::img(store.skin, "tss-forge")} alt="" />
                                     </div>
-                                    { tss_step_list(lang, *tss_step) }
+                                    { tss_step_list(lang, *tss_step, *tss_primes) }
                                     <div class="fn-tss-energybar" aria-hidden="true"><span></span></div>
                                     <p class="fn-field__help">{ t(lang, Key::tss_creating_hint) }</p>
                                 } else {
@@ -2306,7 +2228,7 @@ fn tss_shard_glyph(size: u16) -> Html {
 /// inventory metaphor is doing real work — it shows *which* shares these
 /// are, how many exist, and how close the quorum is, without a sentence.
 fn tss_shard_slots(files: &[TssLoadedFile]) -> Html {
-    let headers: Vec<&crate::api::tss::TssShareHeader> =
+    let headers: Vec<&crate::tss::TssShareHeader> =
         files.iter().filter_map(|f| f.header.as_ref()).collect();
     let Some(first) = headers.first() else {
         return Html::default();
@@ -2332,7 +2254,7 @@ fn tss_shard_slots(files: &[TssLoadedFile]) -> Html {
 /// The create ceremony's animated act list: every act with its state —
 /// done (✓), active (pulsing), or still ahead — so a minute of Paillier
 /// arithmetic reads as progress rather than a stuck spinner.
-fn tss_step_list(lang: Lang, current: Option<TssStep>) -> Html {
+fn tss_step_list(lang: Lang, current: Option<TssStep>, primes: Option<(u16, u16)>) -> Html {
     let current = current.unwrap_or(TssStep::Primes);
     html! {
         <ol class="fn-tss-steps" aria-live="polite">
@@ -2342,6 +2264,15 @@ fn tss_step_list(lang: Lang, current: Option<TssStep>) -> Html {
                     std::cmp::Ordering::Equal => "active",
                     std::cmp::Ordering::Greater => "pending",
                 };
+                // In the browser the prime sets generate one after another,
+                // so the minutes-long first act shows its count — movement
+                // is what separates "slow" from "stuck".
+                let label = match (step, state, primes) {
+                    (TssStep::Primes, "active", Some((done, total))) => {
+                        format!("{} ({done}/{total})", t(lang, step.label()))
+                    }
+                    _ => t(lang, step.label()).to_owned(),
+                };
                 html! {
                     <li class="fn-tss-step" data-state={state}>
                         <span class="fn-tss-step__dot">
@@ -2349,7 +2280,7 @@ fn tss_step_list(lang: Lang, current: Option<TssStep>) -> Html {
                                 { icons::check(12) }
                             }
                         </span>
-                        <span>{ t(lang, step.label()) }</span>
+                        <span>{ label }</span>
                     </li>
                 }
             }) }
@@ -2403,7 +2334,7 @@ fn tss_quorum_status(lang: Lang, skin: Skin, files: &[TssLoadedFile]) -> Html {
 /// the same reason: there is no recovery and nobody to ask.
 fn tss_backup_panel(
     lang: Lang,
-    created: &crate::api::tss::TssCollected,
+    created: &crate::tss::TssCreated,
     downloaded: &[bool],
     on_download: Callback<usize>,
     on_signin: Callback<MouseEvent>,
@@ -2464,70 +2395,6 @@ fn tss_backup_panel(
             />
         </div>
     }
-}
-
-/// One verdict on the picked files, computed one way for every consumer.
-/// The status line renders it and the submit gate acts on it; deriving the
-/// two answers separately is how a screen ends up saying "ready to sign
-/// in" over a button that refuses.
-enum TssQuorumCheck {
-    /// No parsed share file yet.
-    Empty,
-    /// The headers disagree — files from different wallets mixed together.
-    Mismatch,
-    /// One wallet, but this many more *distinct* parties are needed.
-    NeedMore(usize),
-    /// A signable quorum.
-    Ready {
-        address: String,
-        have: usize,
-        need: usize,
-    },
-}
-
-fn tss_quorum_check(files: &[TssLoadedFile]) -> TssQuorumCheck {
-    let headers: Vec<&crate::api::tss::TssShareHeader> =
-        files.iter().filter_map(|f| f.header.as_ref()).collect();
-    let Some(first) = headers.first() else {
-        return TssQuorumCheck::Empty;
-    };
-    if headers.iter().any(|h| {
-        h.address != first.address || h.threshold != first.threshold || h.parties != first.parties
-    }) {
-        return TssQuorumCheck::Mismatch;
-    }
-    let mut parties: Vec<u16> = headers.iter().map(|h| h.party_index).collect();
-    parties.sort_unstable();
-    parties.dedup();
-    let have = parties.len();
-    let need = usize::from(first.threshold);
-    if have < need {
-        TssQuorumCheck::NeedMore(need - have)
-    } else {
-        TssQuorumCheck::Ready {
-            address: first.address.clone(),
-            have,
-            need,
-        }
-    }
-}
-
-/// The picked files' consensus: `Some((address, share JSONs))` when every
-/// parsed share belongs to one wallet and at least its threshold of
-/// *distinct* parties is present. Anything else — mixed wallets, too few
-/// shares, no valid share at all — is `None`, and the panel's status line
-/// says which.
-fn tss_quorum(files: &[TssLoadedFile]) -> Option<(WalletAddress, Vec<serde_json::Value>)> {
-    let TssQuorumCheck::Ready { address, .. } = tss_quorum_check(files) else {
-        return None;
-    };
-    let address = WalletAddress::new(&address).ok()?;
-    let values = files
-        .iter()
-        .filter(|f| f.header.is_some())
-        .map(|f| f.value.clone())
-        .collect();
-    Some((address, values))
 }
 
 /// `0x1234…abcd` for the TSS share cards — the shape is the interesting

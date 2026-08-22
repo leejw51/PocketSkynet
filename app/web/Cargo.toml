@@ -12,6 +12,14 @@ license = "MIT"
 
 [dependencies]
 pocketskynet-core = { path = "../core" }
+# The TSS ceremonies themselves (docs/CRYPTO.md §15.3): keygen and signing
+# run *in this wasm module* — inside `src/bin/tss_worker.rs`, off the main
+# thread — so share files and the passphrase never leave the browser.
+pocketskynet-tss = { path = "../tss" }
+# The bridge that runs those ceremonies in a Web Worker: safe-prime
+# generation blocks for minutes and would freeze (and get killed as) an
+# unresponsive page on the main thread.
+gloo-worker = "0.6"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -155,3 +163,44 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# The TSS ceremony stack must be optimized for speed even in a size-first
+# build: safe-prime hunting is minutes of pure bignum arithmetic in the
+# ceremony worker, and `opt-level = "s"` measurably multiplies that wall
+# clock. These crates live almost entirely in the worker binary, so the
+# main bundle's size barely moves.
+[profile.release.package.crypto-bigint]
+opt-level = 3
+[profile.release.package.num-bigint]
+opt-level = 3
+[profile.release.package.glass_pumpkin]
+opt-level = 3
+[profile.release.package.fast-paillier]
+opt-level = 3
+[profile.release.package.paillier-zk]
+opt-level = 3
+[profile.release.package.cggmp24]
+opt-level = 3
+[profile.release.package.cggmp24-keygen]
+opt-level = 3
+[profile.release.package.generic-ec]
+opt-level = 3
+[profile.release.package.generic-ec-core]
+opt-level = 3
+[profile.release.package.generic-ec-curves]
+opt-level = 3
+[profile.release.package.k256]
+opt-level = 3
+
+# cggmp24's Paillier math is unusably slow unoptimized (mirrors the root
+# workspace's rationale): a debug-profile `trunk serve` would turn the DKG
+# from minutes into hours. Workspace code itself stays at opt-level 0.
+[profile.dev.package."*"]
+opt-level = 2
+
+# See the root workspace's Cargo.toml for the story: every crates.io release
+# of `core2` (required by cggmp24's safe-prime generator) is yanked, so the
+# requirement is pointed at the exact commit published as 0.4.0. The two
+# workspaces must agree on this patch.
+[patch.crates-io]
+core2 = { git = "https://github.com/bbqsrc/core2", rev = "545e84b" }

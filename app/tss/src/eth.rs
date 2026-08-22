@@ -1,11 +1,11 @@
-//! Ethereum-side helpers: address derivation and conversion of a CGGMP21
+//! Ethereum-side helpers: address derivation and conversion of a CGGMP24
 //! signature into a recoverable Ethereum signature.
 //!
 //! Deliberately built on `pocketskynet_core`'s primitives (`eip191`,
 //! `WalletAddress`) rather than a second Ethereum library, so a TSS wallet's
 //! address and signature encoding cannot drift from the mnemonic wallet's.
 
-use cggmp21::key_share::AnyKeyShare;
+use cggmp24::key_share::AnyKeyShare;
 use k256::ecdsa::{RecoveryId, VerifyingKey};
 use pocketskynet_core::{eip191, WalletAddress};
 
@@ -59,17 +59,17 @@ impl TssSignature {
     }
 }
 
-/// Converts a CGGMP21 signature into a recoverable Ethereum signature over
+/// Converts a CGGMP24 signature into a recoverable Ethereum signature over
 /// `prehash`, normalizing to low-s and recovering the parity bit `v` by
 /// trial recovery against the wallet's public key.
 ///
-/// cggmp21's `normalize_s` already yields low-s, and because `v` is recovered
+/// cggmp24's `normalize_s` already yields low-s, and because `v` is recovered
 /// *after* normalization the parity is consistent with the final `s`. Only
 /// v ∈ {0, 1} is tried: r ≥ curve order has probability ≈ 2⁻¹²⁸ and a
 /// signature landing there would fail verification everywhere else anyway.
 pub fn to_eth_signature(
     share: &Share,
-    sig: cggmp21::Signature<Curve>,
+    sig: cggmp24::Signature<Curve>,
     prehash: [u8; 32],
 ) -> Result<TssSignature, TssError> {
     let sig = sig.normalize_s();

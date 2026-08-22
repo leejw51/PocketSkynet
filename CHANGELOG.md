@@ -4,6 +4,33 @@ Notable changes to Pocket Skynet, newest first. Versions are the workspace
 version in [`app/Cargo.toml`](app/Cargo.toml); a `v*` tag matching it builds and
 publishes the macOS installer.
 
+## Unreleased
+
+### TSS ceremonies moved into the browser — shares never leave the client
+
+Every TSS ceremony — key generation, the login-challenge signature, every
+transaction signature — now runs **inside the web client's WebAssembly**, in a
+dedicated Web Worker. Share files and the wallet passphrase never leave the
+browser, on your own server or anyone else's; the server only ever verifies an
+ordinary EIP-191 signature it cannot tell from a single-key wallet's. The
+`/api/tss/*` routes are gone.
+
+Custody got stricter on the client too: the session no longer retains the
+share files or the passphrase after sign-in — **every transaction raises a
+prompt asking you to present a quorum of share files again**, used once for
+that signature and then forgotten — and nothing TSS ever touches
+`localStorage`.
+
+The enabler is [`cggmp24`](https://github.com/LFDT-Lockness/cggmp21) (MIT OR
+Apache-2.0), the LFDT-Lockness successor of the audited `cggmp21` this project
+shipped with: its pure-Rust bignum backend builds for
+`wasm32-unknown-unknown`, which GMP-backed `cggmp21` never could. Share files
+bump to **format version 2**; version-1 files (sealed for the retired
+server-side ceremonies) are refused with a named migration message — create a
+new TSS wallet and move the funds. Wallet creation now costs minutes of
+in-browser safe-prime generation (the wizard narrates each step); signing
+stays a few seconds.
+
 ## 1.0.2 — 2026-08-21
 
 ### m-of-n TSS (MPC) wallets

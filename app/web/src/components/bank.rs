@@ -256,7 +256,8 @@ async fn send_contract_tx_inner(
     // A browser-wallet session holds no key here and no ceremony to reach
     // one, so this would fail with a bare "no signing key on this device".
     // Say what can be done about it instead — and say it before anything is
-    // broadcast. A TSS session passes: it signs by server ceremony.
+    // broadcast. A TSS session passes: it signs by an in-browser ceremony,
+    // prompting for a quorum of share files inside sign_transaction.
     if !keys.borrow().can_sign() {
         return Err(t(lang, Key::wallet_no_local_key).to_owned());
     }

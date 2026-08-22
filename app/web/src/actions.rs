@@ -1176,8 +1176,9 @@ pub async fn sign_in_with_wallet(
 }
 
 /// Sign a transaction with whatever signer this session holds: the local key
-/// synchronously, or — for a TSS session — a threshold ceremony on the
-/// server over the transaction's `sighash`, assembled locally with
+/// synchronously, or — for a TSS session — a threshold ceremony **in the
+/// browser** over the transaction's `sighash`, run against a quorum of
+/// share files the user presents right here, and assembled locally with
 /// `LegacyTransaction::sign_with_signature`. The raw bytes that come out are
 /// indistinguishable either way, which is the point (docs/CRYPTO.md §15.1).
 ///
@@ -1189,33 +1190,27 @@ pub async fn sign_transaction(
 ) -> Result<SignedTransaction, String> {
     // Cloned out before the await: a `RefCell` borrow must not live across a
     // suspension point another component could re-enter through.
-    let tss = keys.borrow().tss_signing();
-    match tss {
+    let tss_address = keys.borrow().tss_address();
+    match tss_address {
         None => keys
             .borrow()
             .sign_transaction(tx)
             .map_err(|e| e.to_string()),
-        Some((passphrase, shares)) => {
-            let client = Client::new(&crate::session::server_base());
-            // A ceremony is a multi-second server round trip and gloo has
-            // no request timeout, so an unreachable or hung server would
-            // pin the send dialog at its Sign phase forever. Two minutes is
-            // several ceremonies' worth of headroom.
-            let sighash = tx.sighash();
-            let sign = client.tss_sign_hash(&shares, &passphrase, &sighash);
-            let timeout = gloo_timers::future::TimeoutFuture::new(120_000);
-            futures::pin_mut!(sign);
-            let sig = match futures::future::select(sign, timeout).await {
-                futures::future::Either::Left((res, _)) => res.map_err(|e| e.user_message())?,
-                futures::future::Either::Right(_) => {
-                    return Err("the signing ceremony timed out".into());
-                }
+        Some(address) => {
+            // A TSS session retains no shares (docs/CRYPTO.md §15.4): raise
+            // the app-wide prompt and wait for the user to present a quorum
+            // of share files plus the passphrase — for this one signature.
+            // The ceremony then runs in the browser's TSS worker; no server
+            // is involved and nothing is stored.
+            let Some(quorum) = crate::tss::request_quorum(address).await else {
+                return Err("Signing cancelled — no share files were presented".into());
             };
+            let sighash = tx.sighash();
+            let sig = crate::tss::sign_hash(&quorum.shares, &quorum.passphrase, &sighash).await?;
             if sig.v > 1 {
                 return Err(format!("invalid recovery id {}", sig.v));
             }
-            let rs = sig.rs_bytes()?;
-            Ok(tx.sign_with_signature(&rs, sig.v))
+            Ok(tx.sign_with_signature(&sig.rs_bytes(), sig.v))
         }
     }
 }
@@ -1225,8 +1220,9 @@ pub async fn sign_transaction(
 /// The credential is a **quorum of share files** (docs/CRYPTO.md §15): any
 /// `t` of the `n` files minted at creation, plus the passphrase that seals
 /// them. The wallet address is read from the files' cleartext headers; the
-/// challenge is then ceremony-signed by presenting the files to the user's
-/// own server, which holds nothing between requests.
+/// challenge is then ceremony-signed **in this browser** — the files and
+/// the passphrase go to the TSS worker, never to the server, which only
+/// ever sees the finished, ordinary-looking ECDSA signature.
 ///
 /// There is no derivation step and no salt: a TSS wallet's E2EE keypair is
 /// sealed inside every share file, not derived, because a ceremony
@@ -1240,7 +1236,7 @@ pub async fn sign_in_with_tss(
 ) -> Result<Session, String> {
     let address = shares
         .first()
-        .and_then(crate::api::tss::TssShareHeader::of)
+        .and_then(crate::tss::TssShareHeader::of)
         .and_then(|h| WalletAddress::new(&h.address).ok())
         .ok_or_else(|| "Not a TSS share file".to_owned())?;
 
@@ -1249,14 +1245,11 @@ pub async fn sign_in_with_tss(
         .await
         .map_err(|e| e.user_message())?;
 
-    // The server's bytes, verbatim, signed by ceremony — which also unseals
-    // and returns the E2EE identity, so one wrong passphrase fails one call.
-    let bundle = client
-        .tss_sign(&shares, &passphrase, &challenge.message)
-        .await
-        .map_err(|e| e.user_message())?;
+    // The server's bytes, verbatim, signed by a local ceremony — which also
+    // unseals the E2EE identity, so one wrong passphrase fails one step.
+    let bundle = crate::tss::sign_message(&shares, &passphrase, &challenge.message).await?;
     if bundle.address != address.as_str() {
-        return Err("The server signed for a different wallet".into());
+        return Err("These share files signed for a different wallet".into());
     }
 
     let login = client
@@ -1273,14 +1266,11 @@ pub async fn sign_in_with_tss(
 
     let authed = client.with_token(Some(&login.token));
 
-    let keys = SessionKeys::from_tss(
-        address,
-        passphrase,
-        shares,
-        &bundle.encryption_key,
-        bundle.binding_sig,
-    )
-    .map_err(|e| format!("Couldn't load your encryption key: {e}"))?;
+    // The shares and passphrase end here: the session keeps neither
+    // (every later signature asks for a fresh quorum), and nothing TSS
+    // ever touches localStorage.
+    let keys = SessionKeys::from_tss(address, &bundle.encryption_key, bundle.binding_sig)
+        .map_err(|e| format!("Couldn't load your encryption key: {e}"))?;
 
     // Same re-publish rule as `sign_in`: a login that omitted the key would
     // have un-bound it server-side.

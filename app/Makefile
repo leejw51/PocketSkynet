@@ -379,11 +379,13 @@ test-chunksize: build ## Hermetic Playwright check that uploads chunk at 0.5 MB
 	cd tests/browser && node chunksize.js
 
 # Hermetic like the chunk-size check, and a browser test for the same
-# reason: the Rust suites prove the TSS cryptography and the API, but only
-# a real browser can prove the WASM client — the create wizard, the
-# download-every-share gate, the file picker's quorum arithmetic, and the
-# lost-share login. Runs a real 2-of-3 CGGMP21 ceremony, so it takes a
-# couple of minutes; that is the feature, not overhead.
+# reason: the Rust suite proves the TSS cryptography, but the ceremonies
+# themselves now live in the WASM client (docs/CRYPTO.md §15.3), so only a
+# real browser can prove the feature — the create wizard driving the DKG
+# in its Web Worker, the download-every-share gate, the file picker's
+# quorum arithmetic, and the lost-share login. Runs a real 2-of-3 CGGMP24
+# ceremony in browser wasm, so it takes several minutes; that is the
+# feature, not overhead.
 test-tss: build ## Hermetic Playwright walkthrough of the m-of-n TSS wallet
 	@echo "==> TSS wallet browser test (playwright)"
 	@command -v node >/dev/null \

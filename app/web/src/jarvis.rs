@@ -312,7 +312,8 @@ pub struct Caps {
     /// this session. Both halves are required and neither is remembered.
     pub vault: bool,
     /// The session can sign transactions — a wallet key on this device, or
-    /// a TSS quorum that signs by server ceremony (`SessionKeys::can_sign`).
+    /// a TSS wallet whose in-browser ceremony prompts the owner for a
+    /// quorum of share files per signature (`SessionKeys::can_sign`).
     pub chain: bool,
     /// A provider that can draw is configured.
     pub image: bool,

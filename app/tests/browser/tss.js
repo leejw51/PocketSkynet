@@ -1,14 +1,14 @@
 // Does the TSS wallet actually work the way a person meets it?
 //
-// The Rust suites already prove the cryptography end to end:
-// `tss/tests/dkg_sign.rs` runs the real 2-of-3 CGGMP21 ceremony and signs
-// with two different quorums, and `server/tests/tss.rs` drives the whole
-// API — keygen, one-shot collect, login, transaction signing — over HTTP.
-// What neither can see is the WASM client: the create wizard, the
+// The Rust suite already proves the cryptography end to end:
+// `tss/tests/dkg_sign.rs` runs the real 2-of-3 CGGMP24 ceremony and signs
+// with two different quorums. What it cannot see is the WASM client, which
+// since the move to in-browser ceremonies IS the whole feature: the create
+// wizard driving the DKG in the tss_worker Web Worker, the
 // download-every-share gate, the file picker's quorum arithmetic, and the
-// sign-in that stitches `/api/tss/sign` into `/api/auth/login`. A bug in
-// any of those ships a wallet nobody can create or reopen while every Rust
-// test stays green.
+// sign-in whose challenge signature is minted by a local ceremony and only
+// then presented to `/api/auth/login`. A bug in any of those ships a
+// wallet nobody can create or reopen while every Rust test stays green.
 //
 // So this walks the whole story through a real browser, hermetically
 // (harness.js boots its own server, torn down in `finally`):
@@ -22,8 +22,9 @@
 //      same account;
 //   5. confirm one share alone never unlocks the button.
 //
-// A 2-of-3 DKG at SecurityLevel128 is real Paillier arithmetic — expect a
-// minute or two of ceremony time; the polls below are generous on purpose.
+// A 2-of-3 DKG at SecurityLevel128 is real Paillier arithmetic, now on the
+// browser's pure-Rust wasm build — expect several minutes of ceremony
+// time; the polls below are generous on purpose.
 const { chromium } = require("playwright");
 const fs = require("fs");
 const os = require("os");
@@ -31,7 +32,7 @@ const path = require("path");
 const { bootServer } = require("./harness");
 
 const PASSPHRASE = "browser walkthrough passphrase";
-const KEYGEN_TIMEOUT_MS = 10 * 60 * 1000;
+const KEYGEN_TIMEOUT_MS = 30 * 60 * 1000;
 const SIGNIN_TIMEOUT_MS = 3 * 60 * 1000;
 
 async function openTssTab(page, baseUrl) {

@@ -686,7 +686,8 @@ async fn run_send(
     // Checked before signing rather than after failing: an external wallet has
     // no key on this device, and "signing failed: no signing key on this
     // device" is a dead end where a sentence about how to fix it belongs. A
-    // TSS session passes — it signs by server ceremony.
+    // TSS session passes — it signs by an in-browser ceremony over a
+    // freshly presented quorum of share files.
     if !keys.borrow().can_sign() {
         return fail(t(lang, Key::wallet_no_local_key).to_owned());
     }

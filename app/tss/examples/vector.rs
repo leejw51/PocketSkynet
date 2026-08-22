@@ -14,13 +14,10 @@
 use pocketskynet_core::{eip191, LegacyTransaction, WalletAddress};
 use pocketskynet_tss::{dkg, eth, sign};
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let (t, n) = (2u16, 3u16);
     let eid = pocketskynet_tss::fresh_eid().unwrap();
-    let shares = dkg::run_dkg(t, n, eid, |p| eprintln!("dkg: {p:?}"))
-        .await
-        .unwrap();
+    let shares = dkg::run_dkg(t, n, eid, |p| eprintln!("dkg: {p:?}")).unwrap();
     let address = eth::eth_address(&shares[0]).unwrap();
 
     // 1. EIP-191 message vector, signed by parties {0, 2}.
@@ -30,9 +27,8 @@ async fn main() {
         .iter()
         .map(|&i| (i as u16, shares[i].clone()))
         .collect();
-    let sig = sign::sign_prehash(&signers, prehash, pocketskynet_tss::fresh_eid().unwrap())
-        .await
-        .unwrap();
+    let sig =
+        sign::sign_prehash(&signers, prehash, pocketskynet_tss::fresh_eid().unwrap()).unwrap();
     assert_eq!(
         eip191::recover_address(message, &sig.to_hex()).unwrap(),
         address
@@ -49,9 +45,8 @@ async fn main() {
         chain_id: 338,
     };
     let sighash = tx.sighash();
-    let tx_sig = sign::sign_prehash(&signers, sighash, pocketskynet_tss::fresh_eid().unwrap())
-        .await
-        .unwrap();
+    let tx_sig =
+        sign::sign_prehash(&signers, sighash, pocketskynet_tss::fresh_eid().unwrap()).unwrap();
     let signed = tx.sign_with_signature(&tx_sig.rs_bytes(), tx_sig.v);
 
     println!(

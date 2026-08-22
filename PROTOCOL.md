@@ -493,8 +493,10 @@ Vectors: `app/core/tests/vectors/tss-v1.json`, verified by
 `app/core/tests/tss_vectors.rs`. Design record: `app/docs/CRYPTO.md` §15.
 
 A TSS wallet is a wallet whose secp256k1 key never exists in one piece:
-key generation is a CGGMP21 DKG among `n` parties, signing is a threshold
-ceremony among any `t` of them. **On the wire it is invisible.** A ceremony
+key generation is a CGGMP24 DKG among `n` parties, signing is a threshold
+ceremony among any `t` of them — both run entirely inside the web client's
+WebAssembly, so a server never sees a share. **On the wire it is
+invisible.** A ceremony
 produces an ordinary low-s recoverable ECDSA signature over exactly the
 digests of §4 (EIP-191) and §16 (EIP-155 sighash), and everything in this
 document applies to it unchanged:

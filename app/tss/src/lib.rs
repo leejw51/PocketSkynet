@@ -1,16 +1,17 @@
-//! m-of-n threshold (TSS/MPC) wallet — CGGMP21 DKG, threshold-ECDSA signing
+//! m-of-n threshold (TSS/MPC) wallet — CGGMP24 DKG, threshold-ECDSA signing
 //! with Ethereum signature recovery, and passphrase-sealed share persistence.
 //!
-//! The design record is `docs/CRYPTO.md §15`; the port derives from the
-//! reviewed reference wallet built on the audited `cggmp21` crate. Every
-//! ceremony runs in this process over `round_based`'s simulated network,
-//! but custody is the **user's**: keygen hands back `n` passphrase-sealed
-//! share files (`store`), the server persists nothing, and each request
-//! that signs presents any `t` of the files (§15.4). Losing up to `n − t`
-//! files loses nothing.
+//! The design record is `docs/CRYPTO.md §15`. Every ceremony runs in one
+//! process over `round_based`'s synchronous simulated network — and since
+//! this crate builds for wasm32, that process is the **user's browser**:
+//! keygen mints `n` passphrase-sealed share files (`store`) client-side,
+//! signing opens any `t` of them client-side, and no share, passphrase or
+//! key material ever reaches a server — the server's part of a TSS login is
+//! verifying an ordinary ECDSA signature it cannot tell from a single-key
+//! one. Losing up to `n − t` files loses nothing.
 //!
-//! Native-only: this crate cannot build for wasm32 (§15.3) and must never be
-//! a dependency of the web workspace.
+//! Native builds serve the test suite and the vector generator; the server
+//! must never link this crate.
 
 pub mod dkg;
 pub mod eth;
@@ -18,14 +19,15 @@ pub mod sign;
 pub mod store;
 
 /// The curve every EVM chain uses.
-pub type Curve = cggmp21::supported_curves::Secp256k1;
-/// 128-bit security level (the production default of cggmp21).
-pub type SecLevel = cggmp21::security_level::SecurityLevel128;
+pub type Curve = cggmp24::supported_curves::Secp256k1;
+/// 128-bit security level (the production default of cggmp24).
+pub type SecLevel = cggmp24::security_level::SecurityLevel128;
 /// A complete key share (DKG output + aux info) for one party.
-pub type Share = cggmp21::KeyShare<Curve, SecLevel>;
+pub type Share = cggmp24::KeyShare<Curve, SecLevel>;
 
 /// Most parties a wallet may have. The ceremony cost is O(n²) messages and
-/// n safe-prime generations, so this is a UX bound, not a protocol one.
+/// n safe-prime generations — which now run single-threaded in a browser —
+/// so this is a UX bound, not a protocol one.
 pub const MAX_PARTIES: u16 = 5;
 
 #[derive(Debug, thiserror::Error)]
@@ -56,13 +58,13 @@ pub enum TssError {
     WalletExists,
     #[error("no TSS wallet for this address")]
     WalletNotFound,
-    /// The OS entropy source failed — never expected, never unwrapped.
+    /// The entropy source failed — never expected, never unwrapped.
     #[error("system entropy unavailable")]
     Entropy,
 }
 
 /// Validate `t`-of-`n` parameters. One place, so the DKG, the store and the
-/// API layer cannot disagree about what a legal wallet shape is.
+/// client cannot disagree about what a legal wallet shape is.
 pub fn validate_params(t: u16, n: u16) -> Result<(), TssError> {
     if t < 2 || t > n || n > MAX_PARTIES {
         return Err(TssError::InvalidParams { t, n });
@@ -72,18 +74,10 @@ pub fn validate_params(t: u16, n: u16) -> Result<(), TssError> {
 
 /// A fresh random execution id for one protocol run.
 ///
-/// CGGMP21 requires the execution id to be unique per ceremony; reusing one
+/// CGGMP24 requires the execution id to be unique per ceremony; reusing one
 /// across ceremonies voids the protocol's security proofs.
 pub fn fresh_eid() -> Result<[u8; 32], TssError> {
     pocketskynet_core::random::bytes::<32>().map_err(|_| TssError::Entropy)
-}
-
-/// Message capacity for the simulated network. The reference wallet used a
-/// flat 2000 for two parties; message volume grows roughly quadratically, so
-/// scale with the party count rather than discovering the ceiling in a
-/// 5-party ceremony.
-pub(crate) fn sim_capacity(parties: u16) -> usize {
-    2000 * usize::from(parties)
 }
 
 #[cfg(test)]
@@ -113,12 +107,5 @@ mod tests {
         // The protocol's security argument needs fresh eids; two draws
         // colliding would mean the entropy source is broken.
         assert_ne!(fresh_eid().unwrap(), fresh_eid().unwrap());
-    }
-
-    #[test]
-    fn sim_capacity_grows_with_the_party_count() {
-        assert!(sim_capacity(5) > sim_capacity(2));
-        // And never below what the audited 2-party reference shipped with.
-        assert!(sim_capacity(2) >= 2000);
     }
 }

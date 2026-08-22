@@ -1,20 +1,25 @@
 //! t-of-n threshold signing over a 32-byte prehash.
+//!
+//! Synchronous like [`crate::dkg`]: the ceremony is a `round_based::sim`
+//! loop on the calling thread — a second or two of Paillier arithmetic, so
+//! browser callers run it in a worker.
 
-use cggmp21::key_share::AnyKeyShare;
-use cggmp21::{generic_ec::Scalar, DataToSign, ExecutionId};
+use cggmp24::key_share::AnyKeyShare;
+use cggmp24::signing::PrehashedDataToSign;
+use cggmp24::{generic_ec::Scalar, ExecutionId};
 use rand_core::OsRng;
 
-use crate::{eth, sim_capacity, Curve, Share, TssError};
+use crate::{eth, Curve, Share, TssError};
 
 /// Signs `prehash` with a chosen subset of exactly `t` shares and returns a
 /// recoverable, low-s Ethereum signature.
 ///
-/// `signers` pairs each share with its **party index at keygen** — CGGMP21
+/// `signers` pairs each share with its **party index at keygen** — CGGMP24
 /// needs the mapping to compute the Lagrange coefficients that turn VSS
 /// shares into additive ones. Any subset of size `t` works; which `t` is the
 /// caller's choice. `eid_seed` must be unique per signing ceremony
 /// ([`crate::fresh_eid`]).
-pub async fn sign_prehash(
+pub fn sign_prehash(
     signers: &[(u16, Share)],
     prehash: [u8; 32],
     eid_seed: [u8; 32],
@@ -47,44 +52,34 @@ pub async fn sign_prehash(
         )));
     }
 
-    let data = DataToSign::from_scalar(Scalar::<Curve>::from_be_bytes_mod_order(prehash));
-    let capacity = sim_capacity(t);
+    // The digest was computed by this crate's callers (EIP-191, EIP-155
+    // sighash), so the preimage is known to *us* — but the type-safe
+    // `DataToSign` door wants the preimage bytes themselves, and threading
+    // them down here would tie this signer to two specific message formats.
+    // `PrehashedDataToSign` is explicitly supported by `sign` and the
+    // protocol is secure with it (its caveat is about APIs that must prove
+    // preimage knowledge, which ECDSA signing does not).
+    let data = PrehashedDataToSign::from_scalar(Scalar::<Curve>::from_be_bytes_mod_order(prehash));
 
-    // Signing is CPU-bound (Paillier); run it on a blocking thread.
+    let eid = ExecutionId::new(&eid_seed);
     let reference = signers[0].1.clone();
-    let sig =
-        tokio::task::spawn_blocking(move || -> Result<cggmp21::Signature<Curve>, TssError> {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .map_err(|e| TssError::Ceremony(format!("building ceremony runtime: {e}")))?;
-            rt.block_on(async move {
-                let eid = ExecutionId::new(&eid_seed);
-                let indexes = &indexes;
-                let signers = &signers;
-                let results = round_based::sim::async_env::run_with_capacity(
-                    capacity,
-                    t,
-                    |i, party| async move {
-                        let mut rng = OsRng;
-                        cggmp21::signing(eid, i, indexes, &signers[usize::from(i)].1)
-                            .sign(&mut rng, party, data)
-                            .await
-                    },
-                )
-                .await
-                .into_vec();
+    let indexes_ref = &indexes;
+    let signers_ref = &signers;
+    let results = round_based::sim::run(t, |i, party| async move {
+        let mut rng = OsRng;
+        cggmp24::signing(eid, i, indexes_ref, &signers_ref[usize::from(i)].1)
+            .sign(&mut rng, party, &data)
+            .await
+    })
+    .map_err(|e| TssError::Ceremony(format!("signing simulation: {e}")))?
+    .0;
 
-                let mut out = None;
-                for (i, r) in results.into_iter().enumerate() {
-                    let s =
-                        r.map_err(|e| TssError::Ceremony(format!("signing, party {i}: {e}")))?;
-                    out.get_or_insert(s);
-                }
-                out.ok_or_else(|| TssError::Ceremony("no signature produced".into()))
-            })
-        })
-        .await
-        .map_err(|e| TssError::Ceremony(format!("signing task panicked: {e}")))??;
+    let mut out = None;
+    for (i, r) in results.into_iter().enumerate() {
+        let s = r.map_err(|e| TssError::Ceremony(format!("signing, party {i}: {e}")))?;
+        out.get_or_insert(s);
+    }
+    let sig = out.ok_or_else(|| TssError::Ceremony("no signature produced".into()))?;
 
     eth::to_eth_signature(&reference, sig, prehash)
 }

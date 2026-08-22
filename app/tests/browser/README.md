@@ -16,7 +16,7 @@ meets it — create a 2-of-3 wallet in the wizard, download every share
 through the backup gate, sign in, sign out, and sign back in with only
 shares 1 and 3 (the lost-share case) — because the Rust suites prove the
 cryptography and the API but cannot see the WASM client's wizard, gate, or
-quorum arithmetic. It runs a real CGGMP21 ceremony, so give it a couple of
+quorum arithmetic. It runs a real CGGMP24 ceremony inside the browser's wasm, so give it several
 minutes.
 
 `upload.js`, `resume.js`, `movie.js`, `storm.js` are not — they drive a

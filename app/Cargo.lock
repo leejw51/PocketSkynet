@@ -320,12 +320,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "az"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be5eb007b7cacc6c660343e96f650fedf4b5a77512399eb952ca6642cf8d13f7"
-
-[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -473,20 +467,6 @@ name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
 
 [[package]]
 name = "byteorder"
@@ -635,12 +615,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
-name = "cggmp21"
-version = "0.6.3"
+name = "cggmp24"
+version = "0.7.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3309aeafc6311b8823faa1ee73e2e776b7fd5a0b3531ee72ec7f1acf40136ffc"
+checksum = "c9a4f50f2c7c98676f10857cda178b6eea8468a8f95edba0745c8c1e288ebd25"
 dependencies = [
- "cggmp21-keygen",
+ "cggmp24-keygen",
  "digest",
  "futures",
  "generic-ec",
@@ -660,13 +640,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "cggmp21-keygen"
-version = "0.5.0"
+name = "cggmp24-keygen"
+version = "0.7.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaa8c850290c494f951abe0350e56c31e4f5664863490197490ff48cb825447d"
+checksum = "6733c6c00e0df4c3e1d966ab676370b4b35c09f9e8c628339bf15f7c0405ac92"
 dependencies = [
  "digest",
  "displaydoc",
+ "futures-util",
  "generic-ec",
  "generic-ec-zkp",
  "hex",
@@ -847,6 +828,14 @@ dependencies = [
  "bitflags 2.13.1",
  "core-foundation",
  "libc",
+]
+
+[[package]]
+name = "core2"
+version = "0.4.0"
+source = "git+https://github.com/bbqsrc/core2?rev=545e84b#545e84bcb0f235b12e21351e0c69767958efe2a7"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -1419,15 +1408,18 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fast-paillier"
-version = "0.1.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1108d991b54d8e3aa3eb155c07863306cbceafb713ab1ebcef085e19f3cb84c"
+checksum = "72f31977dae80ca360f5224c4073b0797851a11f4ea1635bdc86d08a3be87b3a"
 dependencies = [
- "bytemuck",
+ "glass_pumpkin",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "rand 0.8.7",
  "rand_core 0.6.4",
- "rug",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1913,6 +1905,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "glass_pumpkin"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41923edfeadce2964192d185f7f9f9e5d8737e6f5b8ee2580b0f02f717e81bd0"
+dependencies = [
+ "core2",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "once_cell",
+ "rand_core 0.6.4",
+]
+
+[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1964,16 +1970,6 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
-
-[[package]]
-name = "gmp-mpfr-sys"
-version = "1.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7db155b537cb791b133341f99f68371d86ee7fa4c79aacfbc376d72d23c70531"
-dependencies = [
- "libc",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "gobject-sys"
@@ -3047,6 +3043,7 @@ checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
 dependencies = [
  "num-integer",
  "num-traits",
+ "rand 0.8.7",
 ]
 
 [[package]]
@@ -3325,16 +3322,15 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "paillier-zk"
-version = "0.4.3"
+version = "0.7.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9963224009a2fd339cffd8f6c5c35fc9a91732b89acd4b0ed34c30afe70a193"
+checksum = "4fe385c5fa85c5be02463dece5aa1d0c515f3a22d3141f07b66f3a19c2c92182"
 dependencies = [
  "digest",
  "fast-paillier",
  "generic-ec",
  "rand_core 0.6.4",
  "rand_hash",
- "rug",
  "serde",
  "serde_with 3.21.0",
  "thiserror 1.0.69",
@@ -3603,7 +3599,6 @@ dependencies = [
  "jsonwebtoken",
  "mdns-sd",
  "pocketskynet-core",
- "pocketskynet-tss",
  "qrcode",
  "quinn",
  "rand 0.8.7",
@@ -3637,11 +3632,14 @@ dependencies = [
  "aes",
  "base64 0.22.1",
  "cbc",
- "cggmp21",
- "gmp-mpfr-sys",
+ "cggmp24",
+ "cggmp24-keygen",
+ "getrandom 0.2.17",
  "hex",
  "hmac",
+ "js-sys",
  "k256",
+ "paillier-zk",
  "pbkdf2",
  "pocketskynet-core",
  "rand_core 0.6.4",
@@ -3649,9 +3647,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "sha3",
  "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]
@@ -4153,8 +4149,6 @@ dependencies = [
  "phantom-type 0.3.1",
  "round-based-derive",
  "thiserror 2.0.19",
- "tokio",
- "tokio-stream",
  "tracing",
 ]
 
@@ -4167,19 +4161,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "rug"
-version = "1.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07a8857882aec59d27254b02481c709327c13de6fad1da60bfc4f9783eaaa61e"
-dependencies = [
- "az",
- "gmp-mpfr-sys",
- "libc",
- "libm",
- "serde",
 ]
 
 [[package]]

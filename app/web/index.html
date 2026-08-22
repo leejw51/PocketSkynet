@@ -42,7 +42,16 @@
          bundle is the largest thing on the wire and the first thing that has to
          parse before anything renders, so shrinking it buys both transfer time
          and startup time. Trunk fetches wasm-opt itself; debug builds skip it. -->
-    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <link data-trunk rel="rust" data-bin="pocketskynet-web" data-wasm-opt="z" />
+    <!-- The TSS ceremony worker (src/bin/tss_worker.rs): a second wasm
+         module for the minutes of Paillier arithmetic a threshold wallet's
+         keygen and signing cost — off the main thread, still entirely in
+         the browser (docs/CRYPTO.md §15.3). data-loader-shim emits the
+         stable `tss_worker_loader.js` that `src/tss.rs` spawns. -->
+    <!-- wasm-opt runs at -O3 here, not -Oz: this module is all bignum
+         arithmetic, its size is a fraction of the main bundle's, and -Oz
+         costs real minutes of safe-prime hunting. -->
+    <link data-trunk rel="rust" data-bin="tss_worker" data-type="worker" data-loader-shim data-wasm-opt="3" />
 
     <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png" />
     <!-- The home-screen icon on iOS, and the same artwork the native iOS app
