@@ -1,7 +1,7 @@
 [package]
 name = "pocketskynet-web"
 description = "PocketSkynet web client: Yew + WebAssembly, styled with Topcoat"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
