@@ -1,11 +1,13 @@
 //! The app-wide TSS signing prompt (docs/CRYPTO.md §15.4).
 //!
-//! A TSS session deliberately retains no share files and no passphrase, so
-//! every transaction signature starts here: `actions::sign_transaction`
-//! calls `crate::tss::request_quorum`, this host takes the pending request,
-//! and the user presents `t` share files plus the passphrase — used once,
-//! in the browser's ceremony worker, then dropped. Nothing is remembered
-//! between signatures and nothing ever touches `localStorage`.
+//! An MPC session deliberately retains no share files and no passphrase, so
+//! every transaction signature starts here: `actions::acquire_tx_signer`
+//! calls `crate::tss::request_quorum` **before the relay HUD is raised**
+//! (the HUD blurs everything under it — a prompt raised beneath it reads
+//! as a hung send), this host takes the pending request, and the user
+//! presents `t` share files plus the passphrase — used once, in the
+//! browser's ceremony worker, then dropped. Nothing is remembered between
+//! signatures and nothing ever touches `localStorage`.
 
 use pocketskynet_core::WalletAddress;
 use web_sys::HtmlInputElement;

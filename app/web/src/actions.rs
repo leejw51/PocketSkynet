@@ -1175,36 +1175,61 @@ pub async fn sign_in_with_wallet(
     })
 }
 
-/// Sign a transaction with whatever signer this session holds: the local key
-/// synchronously, or — for a TSS session — a threshold ceremony **in the
-/// browser** over the transaction's `sighash`, run against a quorum of
-/// share files the user presents right here, and assembled locally with
+/// What will sign the transaction being prepared: the session's own key, or
+/// — for an MPC session — a quorum of share files the user has *already*
+/// presented. Collected by [`acquire_tx_signer`] **before** the relay HUD
+/// goes up and the chain is read, so the quorum prompt is never buried
+/// under the HUD's overlay (the send would look stuck at "SIGNING
+/// PAYLOAD" with an unreadable dialog behind it). Lives for one send and
+/// is dropped with it.
+pub enum TxSigner {
+    /// The session key signs synchronously.
+    Session,
+    /// An in-browser ceremony over this freshly presented quorum signs.
+    Quorum(crate::tss::TssQuorum),
+}
+
+/// Ask for whatever the coming signature needs, before anything else of the
+/// send starts. For a session with its own key this is free; for an MPC
+/// session it raises the app-wide quorum prompt (docs/CRYPTO.md §15.4) —
+/// share files plus passphrase, presented for this one signature — exactly
+/// like the sign-in flow, and on a clean screen.
+pub async fn acquire_tx_signer(keys: &Rc<RefCell<SessionKeys>>) -> Result<TxSigner, String> {
+    // Cloned out before the await: a `RefCell` borrow must not live across a
+    // suspension point another component could re-enter through.
+    let tss_address = keys.borrow().tss_address();
+    match tss_address {
+        None => Ok(TxSigner::Session),
+        Some(address) => {
+            let Some(quorum) = crate::tss::request_quorum(address).await else {
+                return Err("Signing cancelled — no share files were presented".into());
+            };
+            Ok(TxSigner::Quorum(quorum))
+        }
+    }
+}
+
+/// Sign a transaction with an already-acquired [`TxSigner`]: the local key
+/// synchronously, or — for an MPC session — a threshold ceremony **in the
+/// browser** over the transaction's `sighash`, assembled locally with
 /// `LegacyTransaction::sign_with_signature`. The raw bytes that come out are
 /// indistinguishable either way, which is the point (docs/CRYPTO.md §15.1).
 ///
 /// Callers gate on [`SessionKeys::can_sign`] first so an external-wallet
 /// session still gets its explanatory refusal.
-pub async fn sign_transaction(
+pub async fn sign_transaction_with(
+    signer: &TxSigner,
     keys: &Rc<RefCell<SessionKeys>>,
     tx: &LegacyTransaction,
 ) -> Result<SignedTransaction, String> {
-    // Cloned out before the await: a `RefCell` borrow must not live across a
-    // suspension point another component could re-enter through.
-    let tss_address = keys.borrow().tss_address();
-    match tss_address {
-        None => keys
+    match signer {
+        TxSigner::Session => keys
             .borrow()
             .sign_transaction(tx)
             .map_err(|e| e.to_string()),
-        Some(address) => {
-            // A TSS session retains no shares (docs/CRYPTO.md §15.4): raise
-            // the app-wide prompt and wait for the user to present a quorum
-            // of share files plus the passphrase — for this one signature.
-            // The ceremony then runs in the browser's TSS worker; no server
-            // is involved and nothing is stored.
-            let Some(quorum) = crate::tss::request_quorum(address).await else {
-                return Err("Signing cancelled — no share files were presented".into());
-            };
+        TxSigner::Quorum(quorum) => {
+            // The ceremony runs in the browser's MPC worker; no server is
+            // involved and nothing is stored.
             let sighash = tx.sighash();
             let sig = crate::tss::sign_hash(&quorum.shares, &quorum.passphrase, &sighash).await?;
             if sig.v > 1 {

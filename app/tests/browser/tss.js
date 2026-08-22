@@ -164,12 +164,58 @@ async function main() {
         `lost-share login reached ${backAs}, expected ${address}`,
       );
 
+    // ---- 5. send: the quorum prompt must come up first, in the clear --
+    // Regression: the prompt used to be raised mid-send, underneath the
+    // SKYNET RELAY overlay's blur — visually a hung send. Now the share
+    // files are asked for BEFORE the relay HUD or any chain round-trip,
+    // exactly like the login, so the prompt must appear instantly and be
+    // fully interactable.
+    await page.locator(".fn-topbar__wallet").click();
+    await page.getByRole("tab", { name: "Send" }).click();
+    await page
+      .locator("#send-to")
+      .fill("0x3535353535353535353535353535353535353535");
+    await page.locator("#send-amount").fill("0.0001");
+    await page.getByRole("button", { name: "Review send" }).click();
+    await page.getByRole("button", { name: /^Send 0\.0001/ }).click();
+
+    // The prompt appears with no RPC involved — a short timeout is the
+    // assertion that nothing network-shaped sits in front of it.
+    const quorumPass = page.locator("#tss-quorum-pass");
+    await quorumPass.waitFor({ timeout: 10000 });
+    if (await page.locator(".fn-txhud").count())
+      throw new Error(
+        "the relay HUD is up while the quorum prompt is open — the prompt is buried again",
+      );
+
+    await page
+      .locator('.fn-tss-pick input[type="file"]')
+      .setInputFiles([shareFiles[0], shareFiles[2]]);
+    await page.locator(".fn-tss-quorum-ok").waitFor({ timeout: 15000 });
+    await quorumPass.fill(PASSPHRASE);
+    await page.getByRole("button", { name: "Sign", exact: true }).click();
+
+    // The prompt resolves and the send runs: ceremony, then the chain.
+    // The hermetic wallet has no funds, so the receipt's verdict will be a
+    // chain-side refusal (or an unreachable-RPC note offline) — either
+    // proves the pipeline moved past signing. A hang here, or a verdict
+    // that blames signing, is the bug this step exists to catch.
+    await page.locator("#tss-quorum-pass").waitFor({
+      state: "detached",
+      timeout: 30000,
+    });
+    await page.locator(".fn-wallet__receipt").waitFor({ timeout: 180000 });
+    const verdict = await page.locator(".fn-wallet__verdict").innerText();
+    if (/signing failed|cancelled/i.test(verdict))
+      throw new Error(`send failed at the signing step: ${verdict}`);
+
     if (pageErrors.length)
       throw new Error("page errors during the run:\n" + pageErrors.join("\n"));
 
     console.log(
       `OK: created 2-of-3 wallet ${address}, backup-gated all 3 shares, ` +
-        "signed in, then signed back in with shares {1,3} only",
+        "signed in, signed back in with shares {1,3} only, and a send " +
+        `walked the quorum prompt + ceremony (receipt: ${verdict.slice(0, 80)})`,
     );
   } finally {
     if (browser) await browser.close().catch(() => {});

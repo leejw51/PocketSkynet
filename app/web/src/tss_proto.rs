@@ -310,3 +310,110 @@ fn sign_hash(
         v: sig.v,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PASSPHRASE: &str = "worker protocol test passphrase";
+
+    /// Drive one request through the worker's own `run`, collecting every
+    /// event — the exact code path the browser ceremonies take, minus the
+    /// postMessage transport.
+    fn drive(req: TssRequest) -> Vec<TssEvent> {
+        let mut events = Vec::new();
+        run(req, &mut |e| events.push(e));
+        events
+    }
+
+    fn create_wallet() -> TssCreated {
+        let events = drive(TssRequest::Keygen {
+            threshold: 2,
+            parties: 3,
+            passphrase: PASSPHRASE.into(),
+        });
+        // Progress first, then exactly one terminal event.
+        assert!(
+            matches!(events.first(), Some(TssEvent::Phase(TssPhase::Protocol))),
+            "keygen must announce the protocol phase first"
+        );
+        match events.last() {
+            Some(TssEvent::Created(c)) => c.clone(),
+            other => panic!("keygen must end in Created, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_send_signature_runs_end_to_end_through_the_worker_protocol() {
+        // The whole send path the wallet dialog drives, in one process:
+        // mint a 2-of-3 wallet, then sign a transaction sighash with a
+        // strict subset of the sealed files — parties {0, 2}, the
+        // lost-share quorum.
+        let created = create_wallet();
+        assert_eq!(created.shares.len(), 3);
+        let quorum = vec![created.shares[0].clone(), created.shares[2].clone()];
+
+        let sighash = [0x5a; 32];
+        let events = drive(TssRequest::SignHash {
+            shares: quorum.clone(),
+            passphrase: PASSPHRASE.into(),
+            hash: sighash,
+        });
+        let sig = match events.last() {
+            Some(TssEvent::SignedHash(s)) => *s,
+            other => panic!("sign-hash must end in SignedHash, got {other:?}"),
+        };
+        // The recovery id feeds `LegacyTransaction::sign_with_signature`
+        // directly; anything but a parity bit would assemble a
+        // chain-rejected transaction.
+        assert!(
+            sig.v <= 1,
+            "recovery id must be a parity bit, got {}",
+            sig.v
+        );
+        assert_ne!(sig.r, [0u8; 32]);
+        assert_ne!(sig.s, [0u8; 32]);
+        assert_eq!(sig.rs_bytes()[..32], sig.r);
+        assert_eq!(sig.rs_bytes()[32..], sig.s);
+
+        // The login path over the same quorum: an EIP-191 ceremony whose
+        // signature must verify through the MPC-blind verifier the server
+        // runs — the indistinguishability requirement itself.
+        let message = "sign-in challenge stand-in";
+        let events = drive(TssRequest::SignMessage {
+            shares: quorum,
+            passphrase: PASSPHRASE.into(),
+            message: message.into(),
+        });
+        let bundle = match events.last() {
+            Some(TssEvent::SignedMessage(b)) => b.clone(),
+            other => panic!("sign-message must end in SignedMessage, got {other:?}"),
+        };
+        assert_eq!(bundle.address, created.address);
+        let address = pocketskynet_core::WalletAddress::new(&created.address).unwrap();
+        assert!(eip191::verify_signature(
+            message,
+            &bundle.signature,
+            &address
+        ));
+    }
+
+    #[test]
+    fn the_wrong_passphrase_fails_the_seal_not_the_ceremony() {
+        let created = create_wallet();
+        let events = drive(TssRequest::SignHash {
+            shares: vec![created.shares[0].clone(), created.shares[1].clone()],
+            passphrase: "not the passphrase".into(),
+            hash: [1; 32],
+        });
+        match events.last() {
+            Some(TssEvent::Failed(msg)) => {
+                assert!(
+                    msg.contains("passphrase"),
+                    "the failure must name the passphrase, got: {msg}"
+                );
+            }
+            other => panic!("a wrong passphrase must fail, got {other:?}"),
+        }
+    }
+}
