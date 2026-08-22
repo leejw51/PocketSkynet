@@ -83,6 +83,22 @@ impl TssShareHeader {
     }
 }
 
+/// The share-file version of a file this build cannot use: `Some(v)` when
+/// the file really is one of ours but sealed by a retired ceremony stack
+/// (v1 cggmp21, v2 cggmp24), `None` for anything else.
+///
+/// Such a file stays **out** of the quorum — its key share speaks a
+/// protocol these ceremonies do not run, so counting it toward the
+/// threshold would arm a sign-in that can only fail deep in the worker.
+/// But "not an MPC share file" is the wrong thing to tell someone holding
+/// their own wallet's backup, so the picker names it for what it is: the
+/// same migration verdict `store::open_shares` gives, said early.
+pub fn legacy_share_version(file: &Value) -> Option<u32> {
+    let is_share = file.get("type").and_then(Value::as_str) == Some("pocketskynet-tss-share");
+    let version = file.get("version").and_then(Value::as_u64)? as u32;
+    (is_share && version < TssShareHeader::VERSION).then_some(version)
+}
+
 // ------------------------------------------------------- picked-file pool --
 
 /// One share file picked in a file input: its file name for display, its
@@ -452,6 +468,29 @@ mod tests {
             stale["version"] = json!(old);
             assert!(TssShareHeader::of(&stale).is_none());
         }
+    }
+
+    #[test]
+    fn an_older_share_file_is_named_as_one_rather_than_as_junk() {
+        // It must not count toward a quorum — its key share speaks a
+        // retired protocol — but the holder of a v1/v2 wallet backup is
+        // owed the migration verdict, not "this isn't a share file".
+        for old in [1, 2] {
+            let mut stale = share(2, 3, 0);
+            stale["version"] = json!(old);
+            assert!(
+                TssShareHeader::of(&stale).is_none(),
+                "stays out of the quorum"
+            );
+            assert_eq!(legacy_share_version(&stale), Some(old));
+        }
+        // The current version is not legacy, and neither is a stranger.
+        assert_eq!(legacy_share_version(&share(2, 3, 0)), None);
+        assert_eq!(
+            legacy_share_version(&json!({"type": "something-else"})),
+            None
+        );
+        assert_eq!(legacy_share_version(&Value::Null), None);
     }
 
     #[test]

@@ -229,7 +229,11 @@ pub fn tss_quorum_host() -> Html {
                                     <span class="fn-tss-file__shape">{ h.shape() }</span>
                                 } else {
                                     <span class="fn-tss-file__bad">
-                                        { t(lang, Key::tss_files_invalid) }
+                                        { t(lang, match tss::legacy_share_version(&f.value) {
+                                                Some(_) => Key::tss_files_legacy,
+                                                None => Key::tss_files_invalid,
+                                            })
+                                            .replace("{name}", &f.name) }
                                     </span>
                                 }
                             </li>

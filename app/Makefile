@@ -383,11 +383,11 @@ test-chunksize: build ## Hermetic Playwright check that uploads chunk at 0.5 MB
 # themselves now live in the WASM client (docs/CRYPTO.md §15.3), so only a
 # real browser can prove the feature — the create wizard driving the DKG
 # in its Web Worker, the download-every-share gate, the file picker's
-# quorum arithmetic, and the lost-share login. Runs a real 2-of-3 CGGMP24
-# ceremony in browser wasm, so it takes several minutes; that is the
-# feature, not overhead.
-test-tss: build ## Hermetic Playwright walkthrough of the m-of-n TSS wallet
-	@echo "==> TSS wallet browser test (playwright)"
+# quorum arithmetic, the lost-share login, and a send whose quorum prompt
+# must arrive before the relay HUD. Runs real 2-of-3 DKLs23 ceremonies in
+# browser wasm — seconds each, no safe primes.
+test-tss: build ## Hermetic Playwright walkthrough of the m-of-n MPC wallet
+	@echo "==> MPC wallet browser test (playwright)"
 	@command -v node >/dev/null \
 		|| { echo "ERROR: node not found. Install Node.js"; exit 1; }
 	cd tests/browser && npm install --no-audit --no-fund

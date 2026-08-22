@@ -1845,7 +1845,10 @@ pub fn login(p: &LoginProps) -> Html {
                                                     </span>
                                                 } else {
                                                     { icons::close(14) }
-                                                    <span>{ t(lang, Key::tss_files_invalid).replace("{name}", &f.name) }</span>
+                                                    <span>{ t(lang, match crate::tss::legacy_share_version(&f.value) {
+                                                        Some(_) => Key::tss_files_legacy,
+                                                        None => Key::tss_files_invalid,
+                                                    }).replace("{name}", &f.name) }</span>
                                                 }
                                             </li>
                                         }) }
